@@ -231,10 +231,12 @@ namespace PathUtil
 
     /**
      * @brief Converts a normalized asset path to a relative, export-sanitized path for file formats.
-     *      * Combines relative path conversion and export sanitization (removes/escapes illegal characters,
+     *
+     * Combines relative path conversion and export sanitization (removes/escapes illegal characters,
      * replaces spaces with underscores, allows only a-z, A-Z, 0-9, '_', '-', '.' and '/').
      * Useful for OBJ/MTL export, etc.
-     *      * @param normalizedPath Normalized (absolute, forward-slash) asset path.
+     *
+     * @param normalizedPath Normalized (absolute, forward-slash) asset path.
      * @param exportBase    Base directory to relativize against (e.g., the .mtl or .obj parent).
      * @return std::string  A relative, export-sanitized string safe for file formats.
      *      * @see toRelative

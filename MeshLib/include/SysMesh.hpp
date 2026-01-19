@@ -34,12 +34,6 @@ public:
     SysMesh(SysMesh&& other) noexcept;
     SysMesh& operator=(SysMesh&& other) noexcept;
 
-    // SysMesh(const SysMesh&)            = delete;
-    // SysMesh& operator=(const SysMesh&) = delete;
-
-    // SysMesh(SysMesh&& other) noexcept;
-    // SysMesh& operator=(SysMesh&& other) noexcept;
-
     ~SysMesh();
 
     /// Empties the mesh, removing all geometry.

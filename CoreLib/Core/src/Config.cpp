@@ -44,7 +44,6 @@ namespace config
         factory.registerItem("InsetTool", factory.createItemType<InsetTool>);
         factory.registerItem("BevelTool", factory.createItemType<BevelTool>);
         factory.registerItem("MockTool", factory.createItemType<MockTool>);
-        // factory.registerItem("DuplicateTool", factory.createItemType<DuplicateTool>);
     }
 
     void registerCommands(ItemFactory<Command>& factory)

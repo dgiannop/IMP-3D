@@ -54,6 +54,3 @@ public:
                                     const un::ray&  ray) const override;
 };
 
-// Later, your Embree-backed version just swaps in:
-// using SceneQueryImpl = SceneQueryEmbree;
-// or SceneQueryCpu

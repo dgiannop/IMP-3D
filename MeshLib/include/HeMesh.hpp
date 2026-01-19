@@ -1,13 +1,5 @@
 #pragma once
 
-/**
- * @brief Half-edge / loop-style mesh for DCC-style tools.
- *
- * PIMPL-wrapped: all topology (verts, edges, polys, loops) and
- * connectivity live in HeMeshData inside the .cpp. The public API
- * exposes only stable IDs and high-level adjacency queries.
- */
-
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>

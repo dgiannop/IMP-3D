@@ -127,10 +127,6 @@ struct SysMeshData
     SysCounterPtr topology_counter;
     SysCounterPtr deform_counter;
     SysCounterPtr select_counter;
-
-    /// Edge cache and change counter value
-    // std::vector<IndexPair> edges;
-    // uint64_t edge_version = 0;
 };
 
 #endif

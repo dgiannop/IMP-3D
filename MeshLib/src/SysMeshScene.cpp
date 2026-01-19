@@ -32,13 +32,11 @@ void SysMeshScene::commitMeshChanges()
 
         if (h->can_undo())
         {
-            // SysMesh::release_history() returns std::unique_ptr<History>
-            // History::insert(std::unique_ptr<HistoryAction>) accepts it (upcast).
             sceneTransaction->insert(mesh->release_history());
         }
         else
         {
-            // Keep behavior: if nothing to commit, freeze local history barrier.
+            // if nothing to commit, freeze local history barrier.
             h->freeze();
         }
     }
@@ -48,7 +46,6 @@ void SysMeshScene::commitMeshChanges()
         // Store the transaction in the scene history (ownership transfers)
         m_sceneHistory.insert(std::move(sceneTransaction));
     }
-    // else: sceneTransaction auto-destroys here
 }
 
 void SysMeshScene::abortMeshChanges()

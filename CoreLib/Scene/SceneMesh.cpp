@@ -86,7 +86,7 @@ void SceneMesh::subdivisionLevel(int levelDelta)
         m_changeCounter->change();
 }
 
-const int SceneMesh::subdivisionLevel() const
+int SceneMesh::subdivisionLevel() const
 {
     return m_subdivisionLevel;
 }

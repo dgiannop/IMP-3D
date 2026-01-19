@@ -23,12 +23,12 @@ Core::~Core()
 
 void Core::initializeDevice(const VulkanContext& ctx)
 {
-    m_scene->initDevice(ctx);
+    (void)m_scene->initDevice(ctx);
 }
 
 void Core::initializeSwapchain(VkRenderPass renderPass)
 {
-    m_scene->initSwapchain(renderPass);
+    (void)m_scene->initSwapchain(renderPass);
 }
 
 void Core::renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
@@ -36,12 +36,11 @@ void Core::renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
     if (!vp || !cmd || !m_scene)
         return;
 
-    m_scene->renderPrePass(vp, cmd, frameIndex);
+    (void)m_scene->renderPrePass(vp, cmd, frameIndex);
 }
 
 void Core::destroySwapchainResources()
 {
-    // m_scene->renderer()->waitDeviceIdle();
     m_scene->destroySwapchainResources();
 }
 
@@ -482,7 +481,7 @@ bool Core::toolPropertyGroupChanged() noexcept
 bool Core::toolPropertyValuesChanged() noexcept
 {
     // if (m_activeTool)
-    // return m_activeTool->propertyValuesChanged(); // already used in Tool.cpp
+    // return m_activeTool->propertyValuesChanged(); // todo: already used in Tool.cpp
     return true;
 }
 

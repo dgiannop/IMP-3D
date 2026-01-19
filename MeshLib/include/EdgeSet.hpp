@@ -5,9 +5,6 @@
 #include <cstdint>
 #include <set>
 
-// Todo: notes. If I'm going to use <set> then m_size is not needed
-// I can get the size of edges.size()
-
 using IndexPair = std::pair<int32_t, int32_t>;
 
 class EdgeSet

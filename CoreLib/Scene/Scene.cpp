@@ -317,8 +317,6 @@ void Scene::idle()
 {
     if (m_sceneQueryMonitor.changed())
     {
-        // TODO: FOR NOW, LATER WE NEED FOR MATERIALS, SCENE OBJECTS changes etc
-        // but for now it increaments with top and deform changes in here
         if (m_contentChangeCounter)
             m_contentChangeCounter->change();
 

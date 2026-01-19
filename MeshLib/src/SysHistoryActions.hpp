@@ -46,64 +46,6 @@ struct UndoMoveVertex : public HistoryAction
 
 // -------------------------------------------------------------------------------
 
-// struct UndoRemoveVertex : public HistoryAction
-// {
-//     virtual void undo(void* data) override
-//     {
-//         SysMesh* mesh = static_cast<SysMesh*>(data);
-
-//         int32_t new_index = mesh->create_vert(vert_pos);
-//         assert(new_index == vert_index);
-
-//         for (SysFullPoly& p : polys)
-//         {
-//             if (!mesh->poly_valid(p.index))
-//             {
-//                 mesh_data->polys[p.index] = p.data; // force slot restore
-//             }
-//             else
-//             {
-//                 mesh_data->polys[p.index].verts   = p.data.verts;
-//                 mesh_data->polys[p.index].removed = false;
-//             }
-
-//             for (int vert : p.data.verts)
-//                 mesh_data->verts[vert].polys.insert_unique(p.index);
-//         }
-
-//         for (SysFullMapPoly& mp : map_polys)
-//         {
-//             mesh_data->mesh_maps[mp.map]->polys[mp.index].verts = mp.data.verts;
-//         }
-//     }
-
-//     virtual void redo(void* data) override
-//     {
-//         SysMesh* mesh = static_cast<SysMesh*>(data);
-
-//         for (int32_t j = 0; j < static_cast<int32_t>(polys.size()); ++j)
-//         {
-//             SysFullPoly& p = polys[j];
-//             assert(mesh->poly_valid(p.index) && "UndoRemoveVertex::redo: poly index is no longer valid!");
-
-//             mesh_data->polys[p.index].verts.swap(p.data.verts);
-//         }
-//         for (int32_t j = 0; j < static_cast<int32_t>(map_polys.size()); ++j)
-//         {
-//             SysFullMapPoly& mp = map_polys[j];
-//             mesh_data->mesh_maps[mp.map]->polys[mp.index].verts.swap(mp.data.verts);
-//         }
-
-//         mesh->remove_vert(vert_index);
-//     }
-
-//     std::vector<SysFullPoly>    polys;
-//     std::vector<SysFullMapPoly> map_polys;
-//     glm::vec3                   vert_pos;
-//     SysMeshData*                mesh_data;
-//     int                         vert_index;
-// };
-
 struct UndoRemoveVertex : public HistoryAction
 {
     void undo(void* data) override
