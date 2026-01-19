@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>PropertyWindow</class>
+ <widget class="QWidget" name="PropertyWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>154</width>
+    <height>224</height>
+   </rect>
+  </property>
+  <property name="sizePolicy">
+   <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+    <horstretch>0</horstretch>
+    <verstretch>0</verstretch>
+   </sizepolicy>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>80</width>
+    <height>160</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QLabel {
+    background-color: #303645;
+    color: rgb(92, 102, 113);
+    font-weight: 550;
+    padding: 5px 0px;
+	border-radius: 0px;
+}
+
+QSpinBox, QDoubleSpinBox {
+    background-color: #282B32;
+    border: none;
+    padding: 2px;
+    min-width: 50px;
+    border-radius: 0;
+   color: #798593;
+}
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 12px;
+    height: 12px;
+    border: none;
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 12px;
+    height: 12px;
+    border: none;
+}
+
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(:/images/up.png);
+    width: 6px;
+    height: 6px;
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(:/images/down.png);
+    width: 6px;
+    height: 6px;
+}
+
+
+
+QPushButton {
+    background-color: rgb(35, 35, 37);
+    border: none; 
+    color: rgb(107, 117, 128); /*#57616c;*/ 
+    padding: 1px 0px; 
+    text-align: center; 
+    text-decoration: none;
+    font-size: 9pt; 
+	line-height: 23px;
+    margin: 0px 0px; 
+}
+
+QPushButton:pressed {
+	background-color: rgb(68, 93, 132);
+}
+
+QPushButton:hover {
+    background-color: rgb(35, 35, 36);
+}
+
+QPushButton::checked {
+    background-color: rgb(68, 93, 132);
+    color: white; /* #a4b0bd;*/
+}
+</string>
+  </property>
+  <layout class="QGridLayout" name="gridLayout">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <item row="0" column="0">
+    <layout class="QVBoxLayout" name="verticalLayout">
+     <property name="spacing">
+      <number>1</number>
+     </property>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

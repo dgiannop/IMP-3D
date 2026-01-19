@@ -1,0 +1,18 @@
+<RCC>
+    <qresource prefix="/">
+        <file>images/colorWheel_64.png</file>
+        <file>images/down.png</file>
+        <file>images/grid64.png</file>
+        <file>images/imp_logo.png</file>
+        <file>images/info.png</file>
+        <file>images/logo256.png</file>
+        <file>images/maximize64.png</file>
+        <file>images/move64.png</file>
+        <file>images/rotate64.png</file>
+        <file>images/snap_disabled_64.png</file>
+        <file>images/snap64.png</file>
+        <file>images/up.png</file>
+        <file>images/zoom64.png</file>
+        <file>styles/main.qss</file>
+    </qresource>
+</RCC>

@@ -1,0 +1,157 @@
+#include "TranslateGizmo.hpp"
+
+#include <cmath>
+#include <glm/gtx/norm.hpp>
+
+#include "Scene.hpp"
+#include "SelectionUtils.hpp"
+#include "Viewport.hpp"
+
+TranslateGizmo::TranslateGizmo(glm::vec3* amount) : m_amount{amount}
+{
+    if (m_amount)
+        *m_amount = glm::vec3{0.0f};
+}
+
+TranslateGizmo::Axis TranslateGizmo::axisFromPickName(const std::string& s) noexcept
+{
+    if (s == "x" || s == "X")
+        return Axis::X;
+    if (s == "y" || s == "Y")
+        return Axis::Y;
+    if (s == "z" || s == "Z")
+        return Axis::Z;
+    return Axis::None;
+}
+
+glm::vec3 TranslateGizmo::axisDir(Axis a) noexcept
+{
+    switch (a)
+    {
+        case Axis::X:
+            return glm::vec3{1.0f, 0.0f, 0.0f};
+        case Axis::Y:
+            return glm::vec3{0.0f, 1.0f, 0.0f};
+        case Axis::Z:
+            return glm::vec3{0.0f, 0.0f, 1.0f};
+        default:
+            return glm::vec3{0.0f};
+    }
+}
+
+glm::vec3 TranslateGizmo::dragPointOnAxisPlane(Viewport*        vp,
+                                               const glm::vec3& origin,
+                                               Axis             axis,
+                                               float            mx,
+                                               float            my) const
+{
+    const glm::vec3 aDir = axisDir(axis);
+
+    // Prefer actual view direction if available
+    const glm::vec3 camPos  = vp->cameraPosition(); // adapt name if needed
+    glm::vec3       viewDir = origin - camPos;
+
+    if (glm::length2(viewDir) < 1e-8f)
+        viewDir = glm::vec3{0.0f, 0.0f, -1.0f};
+    else
+        viewDir = glm::normalize(viewDir);
+
+    glm::vec3 n = glm::cross(aDir, viewDir);
+    if (glm::length2(n) < 1e-8f)
+    {
+        n = glm::cross(aDir, glm::vec3{0.0f, 0.0f, 1.0f});
+        if (glm::length2(n) < 1e-8f)
+            n = glm::cross(aDir, glm::vec3{0.0f, 1.0f, 0.0f});
+    }
+    n = glm::normalize(glm::cross(aDir, n)); // plane normal
+
+    const un::ray ray = vp->ray(mx, my); // adapt if needed
+
+    const float denom = glm::dot(n, ray.dir);
+    if (std::abs(denom) < 1e-8f)
+        return origin;
+
+    const float t = glm::dot(n, (origin - ray.org)) / denom;
+    return ray.org + ray.dir * t;
+}
+
+void TranslateGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
+{
+    if (!vp || !scene || !m_amount)
+        return;
+
+    const std::string name = m_overlayHandler.pick(vp, ev.x, ev.y);
+    m_axis                 = axisFromPickName(name);
+    m_dragging             = (m_axis != Axis::None);
+
+    if (!m_dragging)
+        return;
+
+    // Cache starting state (absolute parameter)
+    m_startAmount = *m_amount;
+
+    // IMPORTANT: base pivot is the selection center in the CURRENT scene state.
+    // It already includes the current amount's deformation, so we must subtract it out.
+    const glm::vec3 curCenter = sel::selection_center_bounds(scene);
+    m_baseOrigin              = curCenter - m_startAmount;
+
+    // Origin used for plane intersection is the pivot at the *current* amount.
+    m_origin  = m_baseOrigin + m_startAmount;
+    m_axisDir = axisDir(m_axis);
+
+    m_startOnPlane = dragPointOnAxisPlane(vp, m_origin, m_axis, ev.x, ev.y);
+}
+
+void TranslateGizmo::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& ev)
+{
+    if (!vp || !scene || !m_amount)
+        return;
+
+    if (!m_dragging || m_axis == Axis::None)
+        return;
+
+    const glm::vec3 curOnPlane = dragPointOnAxisPlane(vp, m_origin, m_axis, ev.x, ev.y);
+
+    const glm::vec3 dPlane = curOnPlane - m_startOnPlane;
+    const float     tAxis  = glm::dot(dPlane, m_axisDir);
+
+    // Write tool parameter (absolute)
+    *m_amount = m_startAmount + (m_axisDir * tAxis);
+}
+
+void TranslateGizmo::mouseUp(Viewport*, Scene*, const CoreEvent&)
+{
+    m_axis     = Axis::None;
+    m_dragging = false;
+}
+
+void TranslateGizmo::render(Viewport* vp, Scene* scene)
+{
+    if (!vp || !scene || !m_amount)
+        return;
+
+    // Keep baseOrigin tracking when not dragging (so gizmo follows selection changes).
+    if (!m_dragging)
+    {
+        const glm::vec3 curCenter = sel::selection_center_bounds(scene);
+        m_baseOrigin              = curCenter - *m_amount;
+    }
+
+    const glm::vec3 origin = m_baseOrigin + *m_amount;
+
+    const float px = vp->pixelScale(origin);
+    m_length       = std::max(0.05f, px * 80.0f);
+
+    m_overlayHandler.clear();
+
+    auto addAxis = [&](const char* name, const glm::vec3& dir, const glm::vec4& color) {
+        m_overlayHandler.begin_overlay(name);
+        m_overlayHandler.add_line(origin, origin + dir * m_length, 8.f, color);
+        m_overlayHandler.set_axis(dir);
+        m_overlayHandler.end_overlay();
+    };
+
+    addAxis("x", glm::vec3{1, 0, 0}, glm::vec4{1, 0, 0, 1});
+    addAxis("y", glm::vec3{0, 1, 0}, glm::vec4{0, 1, 0, 1});
+    addAxis("z", glm::vec3{0, 0, 1}, glm::vec4{0, 0, 1, 1});
+}

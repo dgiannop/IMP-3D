@@ -1,0 +1,448 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ViewportWidget</class>
+ <widget class="QWidget" name="ViewportWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>600</width>
+    <height>300</height>
+   </rect>
+  </property>
+  <property name="sizePolicy">
+   <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+    <horstretch>0</horstretch>
+    <verstretch>0</verstretch>
+   </sizepolicy>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <layout class="QGridLayout" name="gridLayout">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <item row="0" column="0">
+    <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1">
+     <property name="spacing">
+      <number>1</number>
+     </property>
+     <item>
+      <layout class="QHBoxLayout" name="horizontalLayout">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <item>
+        <widget class="QComboBox" name="cmbViewType">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>100</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>100</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">QComboBox {
+    background-color: #282b2e;
+    border: none;
+    border-radius: 0px;
+    padding-left: 5px;
+    color: rgb(107, 117, 128);
+}
+
+QComboBox::down-arrow {
+    image: url(:/images/arrow_down.png); /* Custom arrow image */
+    width: 8px; /* Adjust width of the arrow */
+    height: 8px; /* Adjust height of the arrow */
+    border-radius: 0px;
+}
+
+QComboBox::drop-down {
+    border: none; /* Remove the dropdown border */
+    border-radius: 0px; /* No radius on the drop-down button */
+}
+
+QComboBox::popup {
+    border: none; /* Remove the border from the dropdown */
+    background-color: #282b2e; /* Set the same background color for the dropdown */
+    padding: 0px;
+    overflow: hidden; /* Prevent the radius from being clipped */
+    border-radius: 8px; /* Apply border radius to the dropdown */
+}
+
+QComboBox QAbstractItemView {
+    background-color: #282b2e; /* Same background for dropdown items */
+    color: white; /* Set item text color */
+    border: none; /* No border for item list */
+    border-radius: 0px; /* No border radius for dropdown items */
+    border-bottom-left-radius: 4px;  /* rounded bottom-left corner */
+    border-bottom-right-radius: 5px; /* rounded bottom-right corner */
+}
+
+QComboBox::indicator {
+    width: 8px;
+    height: 8px;
+    background-color: transparent; /* To remove indicator styling */
+}
+</string>
+         </property>
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
+         <item>
+          <property name="text">
+           <string>Perspective</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Top</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Bottom</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Front</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Back</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Left</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Right</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="QComboBox" name="cmbDrawType">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>100</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>100</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">QComboBox {
+    background-color: #282b2e;
+    border: none;
+    border-radius: 0px;
+    padding-left: 5px;
+    color: rgb(107, 117, 128);
+}
+
+QComboBox::down-arrow {
+    image: url(:/images/arrow_down.png); /* Custom arrow image */
+    width: 8px; /* Adjust width of the arrow */
+    height: 8px; /* Adjust height of the arrow */
+    border-radius: 0px;
+}
+
+QComboBox::drop-down {
+    border: none; /* Remove the dropdown border */
+    border-radius: 0px; /* No radius on the drop-down button */
+}
+
+QComboBox::popup {
+    border: none; /* Remove the border from the dropdown */
+    background-color: #282b2e; /* Set the same background color for the dropdown */
+    padding: 0px;
+    overflow: hidden; /* Prevent the radius from being clipped */
+    border-radius: 8px; /* Apply border radius to the dropdown */
+}
+
+QComboBox QAbstractItemView {
+    background-color: #282b2e; /* Same background for dropdown items */
+    color: white; /* Set item text color */
+    border: none; /* No border for item list */
+    border-radius: 0px; /* No border radius for dropdown items */
+    border-bottom-left-radius: 4px;  /* rounded bottom-left corner */
+    border-bottom-right-radius: 5px; /* rounded bottom-right corner */
+}
+
+QComboBox::indicator {
+    width: 8px;
+    height: 8px;
+    background-color: transparent; /* To remove indicator styling */
+}
+</string>
+         </property>
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
+         <item>
+          <property name="text">
+           <string>Solid</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Shaded</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Wireframe</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Ray Trace</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btnExpand">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>26</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>26</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+         <property name="icon">
+          <iconset resource="Resources.qrc">
+           <normaloff>:/images/maximize64.png</normaloff>:/images/maximize64.png</iconset>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QWidget" name="spaceWidget" native="true">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>24</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>24</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">background-color: rgb(43, 47, 57);</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="verticalSpacer">
+         <property name="orientation">
+          <enum>Qt::Orientation::Vertical</enum>
+         </property>
+         <property name="sizeType">
+          <enum>QSizePolicy::Policy::Fixed</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>0</width>
+           <height>24</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item>
+        <widget class="ScrollButton" name="btnMove">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>26</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>26</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+         <property name="icon">
+          <iconset resource="Resources.qrc">
+           <normaloff>:/images/move64.png</normaloff>:/images/move64.png</iconset>
+         </property>
+         <property name="autoRepeat">
+          <bool>true</bool>
+         </property>
+         <property name="autoRepeatDelay">
+          <number>1</number>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="ScrollButton" name="btnZoom">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>26</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>26</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+         <property name="icon">
+          <iconset resource="Resources.qrc">
+           <normaloff>:/images/zoom64.png</normaloff>:/images/zoom64.png</iconset>
+         </property>
+         <property name="autoRepeat">
+          <bool>true</bool>
+         </property>
+         <property name="autoRepeatDelay">
+          <number>1</number>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="ScrollButton" name="btnRotate">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>26</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>26</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+         <property name="icon">
+          <iconset resource="Resources.qrc">
+           <normaloff>:/images/rotate64.png</normaloff>:/images/rotate64.png</iconset>
+         </property>
+         <property name="autoRepeat">
+          <bool>true</bool>
+         </property>
+         <property name="autoRepeatDelay">
+          <number>1</number>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <widget class="QWidget" name="renderPlaceholder" native="true">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">background-color: rgb(100, 100, 110);</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ScrollButton</class>
+   <extends>QPushButton</extends>
+   <header>ScrollButton.hpp</header>
+  </customwidget>
+ </customwidgets>
+ <resources>
+  <include location="Resources.qrc"/>
+ </resources>
+ <connections/>
+</ui>

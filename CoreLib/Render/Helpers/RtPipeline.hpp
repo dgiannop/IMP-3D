@@ -1,0 +1,69 @@
+#pragma once
+
+#include <cstdint>
+#include <vulkan/vulkan.h>
+
+#include "VulkanContext.hpp"
+
+namespace vkrt
+{
+    /**
+     * @brief Minimal RT pipeline wrapper (gradient test).
+     *
+     * Creates:
+     *  - VkPipelineLayout (set 0 = RT descriptor set layout)
+     *  - VkPipeline (raygen + miss, no hit groups yet)
+     *
+     * Used by Step 7 SBT build + vkCmdTraceRaysKHR.
+     */
+    class RtPipeline final
+    {
+    public:
+        RtPipeline()  = default;
+        ~RtPipeline() = default;
+
+        RtPipeline(const RtPipeline&)            = delete;
+        RtPipeline& operator=(const RtPipeline&) = delete;
+
+        RtPipeline(RtPipeline&& other) noexcept;
+        RtPipeline& operator=(RtPipeline&& other) noexcept;
+
+        void destroy() noexcept;
+
+        bool createGradientPipeline(const VulkanContext& ctx, VkDescriptorSetLayout rtSetLayout);
+
+        bool createScenePipeline(const VulkanContext& ctx, VkDescriptorSetLayout rtSetLayout);
+
+        [[nodiscard]] VkPipeline pipeline() const noexcept
+        {
+            return m_pipeline;
+        }
+
+        [[nodiscard]] VkPipelineLayout layout() const noexcept
+        {
+            return m_layout;
+        }
+
+        [[nodiscard]] bool valid() const noexcept
+        {
+            return m_pipeline != VK_NULL_HANDLE && m_layout != VK_NULL_HANDLE;
+        }
+
+        // Group counts for this pipeline layout (used by SBT creation).
+        // Gradient pipeline: raygen=1, miss=1, hit=0, callable=0.
+        static constexpr uint32_t kRaygenCount   = 1;
+        static constexpr uint32_t kMissCount     = 1;
+        static constexpr uint32_t kHitCount      = 1;
+        static constexpr uint32_t kCallableCount = 0;
+        static constexpr uint32_t kGroupCount    = kRaygenCount + kMissCount + kHitCount + kCallableCount;
+
+    private:
+        void moveFrom(RtPipeline&& other) noexcept;
+
+    private:
+        VkDevice         m_device   = VK_NULL_HANDLE;
+        VkPipelineLayout m_layout   = VK_NULL_HANDLE;
+        VkPipeline       m_pipeline = VK_NULL_HANDLE;
+    };
+
+} // namespace vkrt

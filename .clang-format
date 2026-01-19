@@ -1,0 +1,144 @@
+# -------------------------------
+# Project: IMP3D (C++23)
+# Style:   Allman, pointers/refs with the type
+# -------------------------------
+Language:        Cpp
+BasedOnStyle:    LLVM
+
+# Indentation & whitespace
+UseTab:          Never
+IndentWidth:     4
+TabWidth:        4
+ContinuationIndentWidth: 4
+IndentCaseLabels:        true
+IndentGotoLabels:        false
+IndentPPDirectives:      None
+PPIndentWidth:           4
+KeepEmptyLinesAtTheStartOfBlocks: false
+SpaceBeforeParens:       ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpacesInParentheses:     false
+SpacesInAngles:          false
+SpacesInCStyleCastParentheses: false
+SpaceAfterCStyleCast:    false
+SpaceAfterLogicalNot:    false
+SpaceAfterTemplateKeyword: false
+SpaceBeforeSquareBrackets: false
+SpaceInEmptyParentheses: false
+# Add spaces around binary / assignment operators
+SpaceAroundOperators: true
+
+
+# Pointers / references
+DerivePointerAlignment:  false
+PointerAlignment:        Left
+ReferenceAlignment:      Left
+
+## Bracing: Allman
+#BreakBeforeBraces: Allman
+#BraceWrapping:
+#  AfterCaseLabel:           false
+#  AfterClass:               true
+#  AfterControlStatement:    true
+#  AfterEnum:                true
+#  AfterFunction:            true
+#  AfterNamespace:           true
+#  AfterStruct:              true
+#  AfterUnion:               true
+#  BeforeCatch:              true
+#  BeforeElse:               true
+#  BeforeLambdaBody:         false
+#  BeforeWhile:              true
+#  IndentBraces:             false
+#  SplitEmptyFunction:       false
+#  SplitEmptyRecord:         false
+#  SplitEmptyNamespace:      false
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass:               true      # Allman
+  AfterControlStatement:    true      # Allman
+  AfterEnum:                true      # Allman
+  AfterFunction:            true      # Allman
+  AfterNamespace:           true      # Allman
+  AfterStruct:              true      # Allman
+  AfterUnion:               true      # Allman
+  BeforeCatch:              true      # Allman
+  BeforeElse:               true      # Allman
+  BeforeWhile:              true      # Allman
+  BeforeLambdaBody:         false     # For lambdas
+
+# Constructors / init-lists
+BreakConstructorInitializers: AfterColon
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+AllowAllConstructorInitializersOnNextLine:      false
+
+# Functions / calls
+BinPackParameters:                      false
+BinPackArguments:                       false
+AllowAllArgumentsOnNextLine:            false
+AllowShortFunctionsOnASingleLine:       None
+AllowShortIfStatementsOnASingleLine:    false
+AllowShortLoopsOnASingleLine:           false
+AllowShortCaseLabelsOnASingleLine:      false
+
+# Control flow & breaking
+BreakBeforeTernaryOperators:            true
+BreakBeforeBinaryOperators:             None
+PenaltyBreakBeforeFirstCallParameter:   19
+PenaltyBreakString:                     1000
+PenaltyExcessCharacter:                 1000000
+
+# Alignment
+AlignAfterOpenBracket:                  Align
+AlignConsecutiveAssignments:            true
+AlignConsecutiveBitFields:              true
+AlignConsecutiveDeclarations:           true
+AlignEscapedNewlines:                   Left
+AlignOperands:                          Align
+AlignTrailingComments:                  true
+InsertTrailingCommas:                   Wrapped
+
+# Comments
+ReflowComments:                         true
+MaxEmptyLinesToKeep:                    1
+
+# Includes
+SortIncludes:                           true
+IncludeBlocks:                          Regroup
+IncludeIsMainRegex:                     '([-_](test|unittest))?$'
+IncludeCategories:
+  - Regex: '^<([A-Za-z0-9_]+|c[^\s>]+)\.h>'
+    Priority: 1
+    SortPriority: 0
+  - Regex: '^<[^>]+>$'
+    Priority: 2
+    SortPriority: 0
+  - Regex: '^<glm/.*>$'
+    Priority: 3
+    SortPriority: 0
+  - Regex: '^<opensubdiv/.*>$'
+    Priority: 3
+    SortPriority: 1
+  - Regex: '^<CoreLib/.*>$'
+    Priority: 4
+    SortPriority: 0
+  - Regex: '^".*"'
+    Priority: 5
+    SortPriority: 0
+
+# Namespaces / lambdas
+NamespaceIndentation: All
+FixNamespaceComments: true
+ShortNamespaceLines:  0
+LambdaBodyIndentation: Signature
+
+# Preprocessor
+MacroBlockBegin: ''
+MacroBlockEnd:   ''
+
+# Misc
+ColumnLimit: 0
+SortUsingDeclarations: true
+EmptyLineBeforeAccessModifier: LogicalBlock
+AccessModifierOffset: -4
+DisableFormat: false
