@@ -161,23 +161,6 @@ namespace vkutil
                                       bool                 deviceAddress = false);
 
     /**
-     * @brief Create & upload a buffer with no reserved extra capacity.
-     *
-     * Convenience version of the above — allocates exactly `size` bytes and uploads
-     * the full data range.
-     *
-     * @param ctx   Vulkan device context.
-     * @param size  Bytes to allocate & upload.
-     * @param usage Buffer usage flags (DST bit added automatically).
-     * @param data  Pointer to CPU data of length @p size.
-     * @return GPU buffer, invalid on failure.
-     */
-    GpuBuffer createDeviceLocalBuffer(const VulkanContext& ctx,
-                                      VkDeviceSize         size,
-                                      VkBufferUsageFlags   usage,
-                                      const void*          data);
-
-    /**
      * @brief Update part of a device-local buffer via a transient staging buffer.
      *
      * This copies @p size bytes from CPU → staging → @p dst at offset @p dstOffset.

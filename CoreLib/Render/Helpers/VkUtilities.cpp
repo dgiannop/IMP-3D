@@ -427,15 +427,6 @@ namespace vkutil
         return dst;
     }
 
-    GpuBuffer createDeviceLocalBuffer(const VulkanContext& ctx,
-                                      VkDeviceSize         size,
-                                      VkBufferUsageFlags   usage,
-                                      const void*          data)
-    {
-        // Default: capacity == copySize == size (old behavior)
-        return createDeviceLocalBuffer(ctx, size, usage, data, size);
-    }
-
     void updateDeviceLocalBuffer(const VulkanContext& ctx,
                                  const GpuBuffer&     dst,
                                  VkDeviceSize         dstOffset,
