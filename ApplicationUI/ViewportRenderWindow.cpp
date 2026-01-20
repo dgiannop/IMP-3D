@@ -176,25 +176,6 @@ void ViewportRenderWindow::destroySwapchain() noexcept
     m_swapchain = nullptr;
 }
 
-struct FrameGuard
-{
-    VulkanBackend*       backend = nullptr;
-    ViewportSwapchain*   sc      = nullptr;
-    ViewportFrameContext fc      = {};
-    bool                 active  = false;
-
-    ~FrameGuard()
-    {
-        if (active && backend && sc && fc.frame)
-            backend->cancelFrame(sc, fc, true, 0.032f, 0.049f, 0.074f, 1.0f);
-    }
-
-    void dismiss() noexcept
-    {
-        active = false;
-    }
-};
-
 void ViewportRenderWindow::renderOnce() noexcept
 {
     if (!m_exposed)
@@ -221,8 +202,6 @@ void ViewportRenderWindow::renderOnce() noexcept
     if (!m_backend->beginFrame(m_swapchain, fc))
         return;
 
-    FrameGuard guard{m_backend, m_swapchain, fc, true};
-
     // RT / compute / prepass work must happen outside render pass
     m_core->renderPrePass(m_viewport, fc.frame->cmd, fc.frameIndex);
 
@@ -248,7 +227,6 @@ void ViewportRenderWindow::renderOnce() noexcept
     df->vkCmdEndRenderPass(fc.frame->cmd);
 
     m_backend->endFrame(m_swapchain, fc);
-    guard.dismiss();
 }
 
 CoreEvent ViewportRenderWindow::createCoreEvent(const QMouseEvent* e) const noexcept
