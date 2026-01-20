@@ -753,11 +753,11 @@ void MainWindow::initSideMenu()
     menuStackedWidget->addButton(0, "Box", ButtonType::Tool, "BoxTool", QKeySequence(Qt::SHIFT | Qt::Key_B));
     menuStackedWidget->addButton(0, "Sphere", ButtonType::Tool, "SphereTool", QKeySequence(Qt::SHIFT | Qt::Key_S));
     menuStackedWidget->addButton(0, "Cylinder", ButtonType::Tool, "CylinderTool", QKeySequence(Qt::SHIFT | Qt::Key_C));
-    menuStackedWidget->addButton(0, "Quad Sphere", ButtonType::Tool, "QuadBallTool", QKeySequence(Qt::SHIFT | Qt::Key_Q));
+    // menuStackedWidget->addButton(0, "Quad Sphere", ButtonType::Tool, "QuadBallTool", QKeySequence(Qt::SHIFT | Qt::Key_Q));
 
-    menuStackedWidget->addButton(0, "Plane", ButtonType::Tool, "PlaneTool", QKeySequence(Qt::SHIFT | Qt::Key_P));
-    menuStackedWidget->addButton(0, "Pipe", ButtonType::Tool, "PipeTool", QKeySequence(Qt::SHIFT | Qt::Key_I));
-    menuStackedWidget->addButton(0, "Torus", ButtonType::Tool, "TorusTool");
+    // menuStackedWidget->addButton(0, "Plane", ButtonType::Tool, "PlaneTool", QKeySequence(Qt::SHIFT | Qt::Key_P));
+    // menuStackedWidget->addButton(0, "Pipe", ButtonType::Tool, "PipeTool", QKeySequence(Qt::SHIFT | Qt::Key_I));
+    // menuStackedWidget->addButton(0, "Torus", ButtonType::Tool, "TorusTool");
 
     menuStackedWidget->addLabel(0, "Utilities");
     menuStackedWidget->addButton(0, "Center", ButtonType::Command, "Center");
@@ -786,8 +786,8 @@ void MainWindow::initSideMenu()
     menuStackedWidget->addButton(2, "Extrude", ButtonType::Tool, "ExtrudeTool", QKeySequence(Qt::CTRL | Qt::Key_E));
     menuStackedWidget->addButton(2, "Inset", ButtonType::Tool, "InsetTool", QKeySequence(Qt::Key_I));
     menuStackedWidget->addButton(2, "Bevel", ButtonType::Tool, "BevelTool");
-    menuStackedWidget->addButton(2, "Edge Cut", ButtonType::Tool, "EdgeCutTool");
-    menuStackedWidget->addButton(2, "Knife", ButtonType::Tool, "KnifeTool");
+    // menuStackedWidget->addButton(2, "Edge Cut", ButtonType::Tool, "EdgeCutTool");
+    // menuStackedWidget->addButton(2, "Knife", ButtonType::Tool, "KnifeTool");
 
     menuStackedWidget->addLabel(2, "Structure");
     menuStackedWidget->addButton(2, "Create Polygon", ButtonType::Command, "CreatePoly", QKeySequence(Qt::Key_P));

@@ -26,8 +26,11 @@
 #include "InsetTool.hpp"
 #include "MockTool.hpp"
 #include "MoveTool.hpp"
+#include "RotateTool.hpp"
+#include "ScaleTool.hpp"
 #include "SelectTool.hpp"
 #include "SphereTool.hpp"
+#include "StretchTool.hpp"
 
 namespace config
 {
@@ -36,6 +39,11 @@ namespace config
     {
         factory.registerItem("SelectTool", factory.createItemType<SelectTool>);
         factory.registerItem("MoveTool", factory.createItemType<MoveTool>);
+
+        factory.registerItem("RotateTool", factory.createItemType<RotateTool>);
+        factory.registerItem("ScaleTool", factory.createItemType<ScaleTool>);
+        factory.registerItem("StretchTool", factory.createItemType<StretchTool>);
+
         factory.registerItem("BoxTool", factory.createItemType<BoxTool>);
         factory.registerItem("SphereTool", factory.createItemType<SphereTool>);
         factory.registerItem("CylinderTool", factory.createItemType<CylinderTool>);
