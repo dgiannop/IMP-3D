@@ -9,6 +9,9 @@ clear separation between geometry, rendering, and user interface layers.
 
 > ⚠️ Early development — APIs, file formats, and behavior may change.
 
+**Project page / downloads:**  
+https://dgiannop.github.io/IMP3D-web/
+
 ---
 
 ## Overview
