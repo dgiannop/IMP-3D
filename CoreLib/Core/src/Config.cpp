@@ -1,5 +1,6 @@
 #include "Config.hpp"
 
+#include "BendTool.hpp"
 #include "BevelTool.hpp"
 #include "BoxTool.hpp"
 #include "CmdCenter.hpp"
@@ -51,6 +52,7 @@ namespace config
         factory.registerItem("ExtrudeTool", factory.createItemType<ExtrudeTool>);
         factory.registerItem("InsetTool", factory.createItemType<InsetTool>);
         factory.registerItem("BevelTool", factory.createItemType<BevelTool>);
+        factory.registerItem("BendTool", factory.createItemType<BendTool>);
         factory.registerItem("MockTool", factory.createItemType<MockTool>);
     }
 

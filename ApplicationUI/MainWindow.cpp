@@ -778,8 +778,8 @@ void MainWindow::initSideMenu()
     menuStackedWidget->addButton(1, "Stretch", ButtonType::Tool, "StretchTool", QKeySequence(Qt::Key_S));
 
     menuStackedWidget->addLabel(1, "Deform");
-    menuStackedWidget->addButton(1, "Bend", ButtonType::Command, "BendTool");
-    menuStackedWidget->addButton(1, "Randomize/Jitter", ButtonType::Tool, "RandomizeTool");
+    menuStackedWidget->addButton(1, "Bend", ButtonType::Tool, "BendTool");
+    // menuStackedWidget->addButton(1, "Randomize/Jitter", ButtonType::Tool, "RandomizeTool");
 
     // Topology (extend/structure tools)
     menuStackedWidget->addLabel(2, "Extend");
