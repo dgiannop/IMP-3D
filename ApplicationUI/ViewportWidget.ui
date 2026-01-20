@@ -220,17 +220,17 @@ QComboBox::indicator {
          </property>
          <item>
           <property name="text">
+           <string>Wireframe</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
            <string>Solid</string>
           </property>
          </item>
          <item>
           <property name="text">
            <string>Shaded</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Wireframe</string>
           </property>
          </item>
          <item>

@@ -31,9 +31,9 @@ enum class ViewMode
 
 enum class DrawMode
 {
+    WIREFRAME,
     SOLID,
     SHADED,
-    WIREFRAME,
     RAY_TRACE,
     // FLAT,
     // SHADED,
