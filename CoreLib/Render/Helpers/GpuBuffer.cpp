@@ -165,8 +165,6 @@ void GpuBuffer::upload(const void* data, VkDeviceSize size, VkDeviceSize offset)
     // Grow if needed (old contents are discarded).
     if (required > m_size)
     {
-        // Optional: grow with factor to reduce realloc churn:
-        // VkDeviceSize newSize = std::max(required, m_size + m_size / 2);
         VkDeviceSize newSize = required;
 
         create(m_device, m_physDevice, newSize, m_usage, m_memFlags, m_persistent, m_deviceAddress);
@@ -178,30 +176,44 @@ void GpuBuffer::upload(const void* data, VkDeviceSize size, VkDeviceSize offset)
         }
     }
 
-    // Now [offset, offset+size) fits.
     if (!m_memory)
         return;
 
-    void* ptr = m_persistent ? m_mapped : nullptr;
-
-    if (!ptr)
+    // ------------------------------------------------------------
+    // Persistent mapping path: copy into the always-mapped pointer.
+    // ------------------------------------------------------------
+    if (m_persistent)
     {
-        VkResult res = vkMapMemory(m_device, m_memory, offset, size, 0, &ptr);
-        if (res != VK_SUCCESS || !ptr)
+        if (!m_mapped)
         {
-            std::cerr << "GpuBuffer::upload: vkMapMemory failed.\n";
+            std::cerr << "GpuBuffer::upload: persistent buffer has no mapped pointer.\n";
             return;
         }
+
+        std::memcpy(static_cast<char*>(m_mapped) + static_cast<std::size_t>(offset),
+                    data,
+                    static_cast<std::size_t>(size));
+        return;
     }
 
-    std::memcpy(static_cast<char*>(ptr) + static_cast<std::size_t>(offset),
-                data,
-                static_cast<std::size_t>(size));
+    // ------------------------------------------------------------
+    // Non-persistent path: map EXACTLY the region we want and copy
+    // directly to the returned pointer (no extra offset).
+    // ------------------------------------------------------------
+    void* ptr = nullptr;
 
-    if (!m_persistent)
+    VkResult res = vkMapMemory(m_device, m_memory, offset, size, 0, &ptr);
+    if (res != VK_SUCCESS || !ptr)
     {
-        vkUnmapMemory(m_device, m_memory);
+        std::cerr << "GpuBuffer::upload: vkMapMemory failed.\n";
+        return;
     }
+
+    std::memcpy(ptr, data, static_cast<std::size_t>(size));
+
+    // If we ever allow non-coherent HOST_VISIBLE memory, I'll need:
+    // vkFlushMappedMemoryRanges(...) here. ATM I'm currently using HOST_COHERENT.
+    vkUnmapMemory(m_device, m_memory);
 }
 
 // --------------------------------------------------------

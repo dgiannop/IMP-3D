@@ -35,6 +35,7 @@ qt_add_executable(ApplicationUI
     SubWindows/PropertyWindow.hpp SubWindows/PropertyWindow.cpp SubWindows/PropertyWindow.ui
     SubWindows/PropertyItem.hpp
     SubWindows/MaterialEditorDialog.hpp SubWindows/MaterialEditorDialog.cpp SubWindows/MaterialEditorDialog.ui
+    VkDebugNames.hpp
 )
 
 set_target_properties(ApplicationUI PROPERTIES OUTPUT_NAME "Imp3d")

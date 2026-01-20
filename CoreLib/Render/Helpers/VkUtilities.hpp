@@ -204,3 +204,145 @@ namespace vkutil
     VkPipeline createGraphicsPipeline(VkDevice device, const GraphicsPipelineDesc& desc);
 
 } // namespace vkutil
+
+/// Debug utils
+namespace vkutil
+{
+    inline void setObjectName(VkDevice     device,
+                              VkObjectType type,
+                              uint64_t     objectHandle,
+                              const char*  baseName,
+                              int32_t      frameIndex = -1) noexcept
+    {
+        if (!device || !objectHandle || !baseName)
+            return;
+
+        auto fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+            vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
+
+        if (!fn)
+            return;
+
+        char nameBuf[128] = {};
+        if (frameIndex >= 0)
+            std::snprintf(nameBuf, sizeof(nameBuf), "%s [f%d]", baseName, frameIndex);
+        else
+            std::snprintf(nameBuf, sizeof(nameBuf), "%s", baseName);
+
+        VkDebugUtilsObjectNameInfoEXT info{};
+        info.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        info.objectType   = type;
+        info.objectHandle = objectHandle;
+        info.pObjectName  = nameBuf;
+
+        fn(device, &info);
+    }
+
+    // Convenience overloads
+    inline void name(VkDevice device, VkBuffer buffer, const char* baseName, int32_t frameIndex = -1) noexcept
+    {
+        setObjectName(device, VK_OBJECT_TYPE_BUFFER, uint64_t(buffer), baseName, frameIndex);
+    }
+
+    inline void name(VkDevice device, VkImage image, const char* baseName, int32_t frameIndex = -1) noexcept
+    {
+        setObjectName(device, VK_OBJECT_TYPE_IMAGE, uint64_t(image), baseName, frameIndex);
+    }
+
+    inline void name(VkDevice device, VkImageView view, const char* baseName, int32_t frameIndex = -1) noexcept
+    {
+        setObjectName(device, VK_OBJECT_TYPE_IMAGE_VIEW, uint64_t(view), baseName, frameIndex);
+    }
+
+    inline void name(VkDevice device, VkPipeline pipeline, const char* baseName, int32_t frameIndex = -1) noexcept
+    {
+        setObjectName(device, VK_OBJECT_TYPE_PIPELINE, uint64_t(pipeline), baseName, frameIndex);
+    }
+
+    inline void name(VkDevice device, VkDescriptorSet set, const char* baseName, int32_t frameIndex = -1) noexcept
+    {
+        setObjectName(device, VK_OBJECT_TYPE_DESCRIPTOR_SET, uint64_t(set), baseName, frameIndex);
+    }
+
+    inline void name(VkDevice device, VkCommandBuffer cmd, const char* baseName, int32_t frameIndex = -1) noexcept
+    {
+        setObjectName(device, VK_OBJECT_TYPE_COMMAND_BUFFER, uint64_t(cmd), baseName, frameIndex);
+    }
+
+    inline void name(VkDevice                   device,
+                     VkAccelerationStructureKHR as,
+                     const char*                baseName,
+                     int32_t                    frameIndex = -1) noexcept
+    {
+        setObjectName(device,
+                      VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
+                      uint64_t(as),
+                      baseName,
+                      frameIndex);
+    }
+} // namespace vkutil
+
+#if !defined(NDEBUG)
+#define VKUTIL_DEBUG_NAMES 1
+#else
+#define VKUTIL_DEBUG_NAMES 0
+#endif
+
+#if VKUTIL_DEBUG_NAMES
+#define VKUTIL_NAME_BUFFER(device, buffer, name, ...) \
+    vkutil::name((device), (buffer), (name), ##__VA_ARGS__)
+
+#define VKUTIL_NAME_IMAGE(device, image, name, ...) \
+    vkutil::name((device), (image), (name), ##__VA_ARGS__)
+
+#define VKUTIL_NAME_IMAGE_VIEW(device, view, name, ...) \
+    vkutil::name((device), (view), (name), ##__VA_ARGS__)
+
+#define VKUTIL_NAME_PIPELINE(device, pipeline, name, ...) \
+    vkutil::name((device), (pipeline), (name), ##__VA_ARGS__)
+
+#define VKUTIL_NAME_DESC_SET(device, set, name, ...) \
+    vkutil::name((device), (set), (name), ##__VA_ARGS__)
+
+#define VKUTIL_NAME_CMD(device, cmd, name, ...) \
+    vkutil::name((device), (cmd), (name), ##__VA_ARGS__)
+
+#define VKUTIL_NAME_AS(device, as, name, ...) \
+    vkutil::name((device), (as), (name), ##__VA_ARGS__)
+#else
+#define VKUTIL_NAME_BUFFER(...) \
+    do                          \
+    {                           \
+    }                           \
+    while (0)
+#define VKUTIL_NAME_IMAGE(...) \
+    do                         \
+    {                          \
+    }                          \
+    while (0)
+#define VKUTIL_NAME_IMAGE_VIEW(...) \
+    do                              \
+    {                               \
+    }                               \
+    while (0)
+#define VKUTIL_NAME_PIPELINE(...) \
+    do                            \
+    {                             \
+    }                             \
+    while (0)
+#define VKUTIL_NAME_DESC_SET(...) \
+    do                            \
+    {                             \
+    }                             \
+    while (0)
+#define VKUTIL_NAME_CMD(...) \
+    do                       \
+    {                        \
+    }                        \
+    while (0)
+#define VKUTIL_NAME_AS(...) \
+    do                      \
+    {                       \
+    }                       \
+    while (0)
+#endif
