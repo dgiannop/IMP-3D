@@ -1,5 +1,7 @@
 #include "DescriptorSet.hpp"
 
+#include <span>
+
 bool DescriptorSet::allocate(VkDevice device, VkDescriptorPool pool, VkDescriptorSetLayout layout)
 {
     VkDescriptorSetAllocateInfo ai{};
@@ -98,6 +100,52 @@ void DescriptorSet::writeCombinedImageSampler(VkDevice      device,
     w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.descriptorCount = 1;
     w.pImageInfo      = &ii;
+
+    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+}
+
+void DescriptorSet::writeCombinedImageSamplerArray(VkDevice                               device,
+                                                   uint32_t                               binding,
+                                                   std::span<const VkDescriptorImageInfo> infos,
+                                                   uint32_t                               dstArrayElement)
+{
+    if (!device || m_set == VK_NULL_HANDLE)
+        return;
+
+    if (infos.empty())
+        return;
+
+    VkWriteDescriptorSet w{};
+    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet          = m_set;
+    w.dstBinding      = binding;
+    w.dstArrayElement = dstArrayElement;
+    w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.descriptorCount = static_cast<uint32_t>(infos.size());
+    w.pImageInfo      = infos.data();
+
+    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+}
+
+void DescriptorSet::writeAccelerationStructure(VkDevice                   device,
+                                               uint32_t                   binding,
+                                               VkAccelerationStructureKHR as)
+{
+    if (!device || m_set == VK_NULL_HANDLE || as == VK_NULL_HANDLE)
+        return;
+
+    VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+    asInfo.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    asInfo.accelerationStructureCount = 1;
+    asInfo.pAccelerationStructures    = &as;
+
+    VkWriteDescriptorSet w{};
+    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.pNext           = &asInfo;
+    w.dstSet          = m_set;
+    w.dstBinding      = binding;
+    w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    w.descriptorCount = 1;
 
     vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
 }

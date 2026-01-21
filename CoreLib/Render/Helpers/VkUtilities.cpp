@@ -43,7 +43,7 @@ namespace vkutil
 
     void printVkResult(VkResult r, const char* where)
     {
-        const char* name = "VK_<unknown>";
+        const char* name; //= "VK_<unknown>";
         switch (r)
         {
             case VK_SUCCESS:

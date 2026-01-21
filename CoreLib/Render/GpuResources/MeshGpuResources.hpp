@@ -464,7 +464,8 @@ private:
                                    std::vector<uint32_t>&  outMat);
 
 private:
-    static constexpr VkDeviceSize kCapacity64KiB = 64ull * 1024ull;
+    static constexpr VkDeviceSize kCapacity64KiB = 2 * 1024 * 1024;
+    // 64ull * 1024ull;
 
     template<typename T>
     void updateOrRecreate(GpuBuffer&            buffer,
