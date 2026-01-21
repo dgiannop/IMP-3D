@@ -57,17 +57,6 @@ public:
      */
     void initializeSwapchain(VkRenderPass renderPass);
 
-    /**
-     * @brief Perform pre-render pass work (e.g. ray tracing, compute).
-     *
-     * Called before beginning the render pass.
-     *
-     * @param vp Viewport being rendered
-     * @param cmd Command buffer for the current frame
-     * @param frameIndex Frame-in-flight index
-     */
-    void renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex);
-
     /** @brief Destroy swapchain-dependent resources. */
     void destroySwapchainResources();
 
@@ -181,13 +170,26 @@ public:
     bool needsRender() noexcept;
 
     /**
+     * @brief Perform pre-render pass work (e.g. ray tracing, compute).
+     *
+     * Called before beginning the render pass.
+     *
+     * @param vp Viewport being rendered
+     * @param cmd Command buffer for the current frame
+     * @param frameIndex Frame-in-flight index
+     */
+    // void renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex);
+    void renderPrePass(Viewport* vp, const RenderFrameContext& fc);
+
+    /**
      * @brief Render the scene for a viewport.
      *
      * @param vp Viewport to render
      * @param cmd Command buffer (optional)
      * @param frameIndex Frame-in-flight index
      */
-    void render(Viewport* vp, VkCommandBuffer cmd = nullptr, uint32_t frameIndex = 0);
+    // void render(Viewport* vp, VkCommandBuffer cmd = nullptr, uint32_t frameIndex = 0);
+    void render(Viewport* vp, const RenderFrameContext& fc);
 
     // ------------------------------------------------------------
     // File operations (triggered by UI)

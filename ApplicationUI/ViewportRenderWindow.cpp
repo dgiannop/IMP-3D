@@ -10,7 +10,6 @@
 #include <QResizeEvent>
 #include <QWheelEvent>
 #include <cmath>
-#include <iostream>
 
 #include "VulkanBackend.hpp"
 
@@ -202,13 +201,19 @@ void ViewportRenderWindow::renderOnce() noexcept
     if (!m_backend->beginFrame(m_swapchain, fc))
         return;
 
+    // Build the per-call render context passed into CoreLib.
+    RenderFrameContext rfc = {};
+    rfc.cmd                = fc.frame->cmd;
+    rfc.frameIndex         = fc.frameIndex;
+    rfc.deferred           = &m_swapchain->deferred;
+
     // RT / compute / prepass work must happen outside render pass
-    m_core->renderPrePass(m_viewport, fc.frame->cmd, fc.frameIndex);
+    m_core->renderPrePass(m_viewport, rfc);
 
     VkClearValue clears[3] = {};
     clears[0].color        = {{0.032f, 0.049f, 0.074f, 1.0f}};
     clears[1].depthStencil = {1.0f, 0};
-    clears[2].color        = {{0.0f, 0.0f, 0.0f, 0.0f}}; // resolve (unused
+    clears[2].color        = {{0.0f, 0.0f, 0.0f, 0.0f}}; // resolve (unused)
 
     VkRenderPassBeginInfo rp = {};
     rp.sType                 = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -222,7 +227,7 @@ void ViewportRenderWindow::renderOnce() noexcept
     df->vkCmdBeginRenderPass(fc.frame->cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
     // Draw scene via CoreLib
-    m_core->render(m_viewport, fc.frame->cmd, fc.frameIndex);
+    m_core->render(m_viewport, rfc);
 
     df->vkCmdEndRenderPass(fc.frame->cmd);
 

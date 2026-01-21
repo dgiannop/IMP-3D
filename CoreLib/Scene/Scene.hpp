@@ -56,17 +56,6 @@ public:
      */
     [[nodiscard]] bool initSwapchain(VkRenderPass rp);
 
-    /**
-     * @brief Perform pre-render pass work (compute / ray tracing).
-     *
-     * Called before beginning the render pass.
-     *
-     * @param vp Active viewport
-     * @param cmd Command buffer
-     * @param frameIndex Frame-in-flight index
-     */
-    void renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex);
-
     /** @brief Destroy swapchain-dependent resources. */
     void destroySwapchainResources();
 
@@ -210,13 +199,24 @@ public:
     void idle();
 
     /**
-     * @brief Render the scene.
+     * @brief Perform pre-render pass work (compute / ray tracing).
      *
-     * @param vp Viewport to render
+     * Called before beginning the render pass.
+     *
+     * @param vp Active viewport
      * @param cmd Command buffer
      * @param frameIndex Frame-in-flight index
      */
-    void render(class Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex);
+    void renderPrePass(Viewport* vp, const RenderFrameContext& fc);
+
+    /**
+     * @brief Render the scene.
+     *
+     * @param vp Viewport to render
+     * @param fc Command buffer
+     * @param frameIndex Frame-in-flight index
+     */
+    void render(class Viewport* vp, const RenderFrameContext& fc);
 
     /** @brief Scene change counter (topology + selection). */
     [[nodiscard]] SysCounterPtr changeCounter() const noexcept;

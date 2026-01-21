@@ -15,5 +15,7 @@ public:
     ///  - query the owning SceneMesh / SysMesh
     ///  - compare change counters
     ///  - (re)create or update GPU buffers as needed
-    virtual void update() = 0;
+    virtual void update()
+    {
+    } // = 0;
 };

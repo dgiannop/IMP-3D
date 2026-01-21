@@ -68,6 +68,18 @@ namespace
 
 } // namespace
 
+namespace
+{
+    struct AsLeak
+    {
+        VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+        GpuBuffer                  backing; // holds the AS storage buffer alive
+    };
+
+    static std::vector<AsLeak> s_leakedBlas;
+    static std::vector<AsLeak> s_leakedTlas;
+} // namespace
+
 //==================================================================
 // RtViewportState destruction
 //==================================================================
@@ -186,6 +198,36 @@ void Renderer::destroySwapchainResources() noexcept
     destroyPipelines();
 }
 
+namespace
+{
+    static void cleanupLeakedAs(const VulkanContext& ctx) noexcept
+    {
+        if (!ctx.device || !ctx.rtDispatch)
+            return;
+
+        // GPU must be idle before we destroy these.
+        vkDeviceWaitIdle(ctx.device);
+
+        auto destroyList = [&](std::vector<AsLeak>& list) noexcept {
+            for (AsLeak& L : list)
+            {
+                if (L.as != VK_NULL_HANDLE)
+                {
+                    ctx.rtDispatch->vkDestroyAccelerationStructureKHR(ctx.device, L.as, nullptr);
+                    L.as = VK_NULL_HANDLE;
+                }
+
+                // Backing buffer must be destroyed after AS handle is destroyed
+                L.backing.destroy();
+            }
+            list.clear();
+        };
+
+        destroyList(s_leakedBlas);
+        destroyList(s_leakedTlas);
+    }
+} // namespace
+
 void Renderer::shutdown() noexcept
 {
     destroySwapchainResources();
@@ -224,6 +266,8 @@ void Renderer::shutdown() noexcept
 
     m_rtPool.destroy();
     m_rtSetLayout.destroy();
+
+    cleanupLeakedAs(m_ctx);
 
     if (m_rtSampler != VK_NULL_HANDLE && m_ctx.device)
     {
@@ -1438,6 +1482,8 @@ void Renderer::destroyRtBlasFor(SceneMesh* sm) noexcept
 
     RtBlas& b = it->second;
 
+    // vkDeviceWaitIdle(m_ctx.device);
+
     if (b.as != VK_NULL_HANDLE)
     {
         m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
@@ -1457,6 +1503,8 @@ void Renderer::destroyAllRtBlas() noexcept
 
     for (auto& [sm, b] : m_rtBlas)
     {
+        // vkDeviceWaitIdle(m_ctx.device);
+
         if (b.as != VK_NULL_HANDLE)
             m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
 
@@ -1475,6 +1523,8 @@ void Renderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffe
         return;
 
     RtTlasFrame& t = m_rtTlasFrames[frameIndex];
+
+    // vkDeviceWaitIdle(m_ctx.device);
 
     if (rtReady(m_ctx) && m_ctx.rtDispatch && m_ctx.device && t.as)
         m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
@@ -1501,19 +1551,66 @@ void Renderer::destroyAllRtTlasFrames() noexcept
 }
 
 //==================================================================
-// Render (RT present now uses per-viewport RT set/image)
+// renderPrePass (NOW does ALL MeshGpuResources::update(cmd) work here)
 //==================================================================
 
-void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t frameIndex)
+void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 {
-    if (!vp || !scene)
+    if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
         return;
 
-    if (frameIndex >= m_framesInFlight)
+    if (fc.frameIndex >= m_framesInFlight)
+        return;
+
+    // ------------------------------------------------------------
+    // 1) Update ALL MeshGpuResources here (outside render pass)
+    // ------------------------------------------------------------
+    for (SceneMesh* sm : scene->sceneMeshes())
+    {
+        if (!sm || !sm->visible())
+            continue;
+
+        if (!sm->gpu())
+            sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
+
+        MeshGpuResources* gpu = sm->gpu();
+        if (!gpu)
+            continue;
+
+        // IMPORTANT: update() records transfer/barrier commands.
+        // Must be done BEFORE the render pass begins.
+        gpu->update(fc);
+    }
+
+    // ------------------------------------------------------------
+    // 2) RT dispatch (still here, also outside render pass)
+    // ------------------------------------------------------------
+    if (vp->drawMode() == DrawMode::RAY_TRACE)
+    {
+        if (!rtReady(m_ctx))
+            return;
+
+        renderRayTrace(vp, fc.cmd, scene, fc.frameIndex);
+    }
+}
+
+//==================================================================
+// Render (NO MeshGpuResources::update(cmd) calls here anymore)
+//==================================================================
+
+void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
+{
+    if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
+        return;
+
+    if (fc.frameIndex >= m_framesInFlight)
         return;
 
     if (m_pipelineLayout == VK_NULL_HANDLE)
         return;
+
+    const VkCommandBuffer cmd      = fc.cmd;
+    const uint32_t        frameIdx = fc.frameIndex;
 
     const uint32_t w = static_cast<uint32_t>(vp->width());
     const uint32_t h = static_cast<uint32_t>(vp->height());
@@ -1538,14 +1635,14 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
         if (!m_rtPresentPipeline || !m_rtPresentLayout)
             return;
 
-        if (frameIndex >= rtv.sets.size())
+        if (frameIdx >= rtv.sets.size())
             return;
 
         vkutil::setViewportAndScissor(cmd, w, h);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresentPipeline);
 
-        VkDescriptorSet rtSet0 = rtv.sets[frameIndex].set();
+        VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
         vkCmdBindDescriptorSets(cmd,
                                 VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_rtPresentLayout,
@@ -1561,16 +1658,16 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
         {
             ViewportUboState& vpUbo = ensureViewportUboState(vp);
 
-            if (frameIndex < vpUbo.mvpBuffers.size() &&
-                frameIndex < vpUbo.uboSets.size() &&
-                vpUbo.mvpBuffers[frameIndex].valid())
+            if (frameIdx < vpUbo.mvpBuffers.size() &&
+                frameIdx < vpUbo.uboSets.size() &&
+                vpUbo.mvpBuffers[frameIdx].valid())
             {
                 MvpUBO ubo{};
                 ubo.proj = vp->projection();
                 ubo.view = vp->view();
-                vpUbo.mvpBuffers[frameIndex].upload(&ubo, sizeof(ubo));
+                vpUbo.mvpBuffers[frameIdx].upload(&ubo, sizeof(ubo));
 
-                VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIndex].set();
+                VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
                 vkCmdBindDescriptorSets(cmd,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         m_pipelineLayout,
@@ -1588,24 +1685,25 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
     // ------------------------------------------------------------
     // NORMAL GRAPHICS PATH (bind MVP set=0)
     // ------------------------------------------------------------
-
     ViewportUboState& vpUbo = ensureViewportUboState(vp);
 
-    if (frameIndex >= vpUbo.mvpBuffers.size() || frameIndex >= vpUbo.uboSets.size())
+    if (frameIdx >= vpUbo.mvpBuffers.size() || frameIdx >= vpUbo.uboSets.size())
         return;
 
-    if (!vpUbo.mvpBuffers[frameIndex].valid())
+    if (!vpUbo.mvpBuffers[frameIdx].valid())
         return;
 
-    MvpUBO ubo{};
-    ubo.proj = vp->projection();
-    ubo.view = vp->view();
-    vpUbo.mvpBuffers[frameIndex].upload(&ubo, sizeof(ubo));
+    {
+        MvpUBO ubo{};
+        ubo.proj = vp->projection();
+        ubo.view = vp->view();
+        vpUbo.mvpBuffers[frameIdx].upload(&ubo, sizeof(ubo));
+    }
 
     vkutil::setViewportAndScissor(cmd, w, h);
 
     {
-        VkDescriptorSet set0 = vpUbo.uboSets[frameIndex].set();
+        VkDescriptorSet set0 = vpUbo.uboSets[frameIdx].set();
         vkCmdBindDescriptorSets(cmd,
                                 VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_pipelineLayout,
@@ -1637,7 +1735,7 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
         }
 
         {
-            VkDescriptorSet set1 = m_materialSets[frameIndex].set();
+            VkDescriptorSet set1 = m_materialSets[frameIdx].set();
             vkCmdBindDescriptorSets(cmd,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     m_pipelineLayout,
@@ -1654,14 +1752,15 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
 
             for (SceneMesh* sm : scene->sceneMeshes())
             {
-                if (!sm->visible())
+                if (!sm || !sm->visible())
                     continue;
 
                 if (!sm->gpu())
                     sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
 
                 auto* gpu = sm->gpu();
-                gpu->update();
+                if (!gpu)
+                    continue;
 
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
@@ -1734,14 +1833,15 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
 
             for (SceneMesh* sm : scene->sceneMeshes())
             {
-                if (!sm->visible())
+                if (!sm || !sm->visible())
                     continue;
 
                 if (!sm->gpu())
                     sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
 
                 auto* gpu = sm->gpu();
-                gpu->update();
+                if (!gpu)
+                    continue;
 
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
@@ -1801,14 +1901,15 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
 
             for (SceneMesh* sm : scene->sceneMeshes())
             {
-                if (!sm->visible())
+                if (!sm || !sm->visible())
                     continue;
 
                 if (!sm->gpu())
                     sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
 
                 auto* gpu = sm->gpu();
-                gpu->update();
+                if (!gpu)
+                    continue;
 
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
@@ -1884,14 +1985,15 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
 
             for (SceneMesh* sm : scene->sceneMeshes())
             {
-                if (!sm->visible())
+                if (!sm || !sm->visible())
                     continue;
 
                 if (!sm->gpu())
                     sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
 
                 auto* gpu = sm->gpu();
-                gpu->update();
+                if (!gpu)
+                    continue;
 
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
@@ -1946,7 +2048,7 @@ void Renderer::render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t 
         drawEdges(m_pipelineWire, wireVisibleColor);
     }
 
-    // Selection overlay
+    // Selection overlay (must NOT call gpu->update() inside)
     drawSelection(cmd, vp, scene);
 
     // Scene Grid (draw last) - NOT in SHADED mode
@@ -1978,6 +2080,10 @@ void Renderer::writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
 
     rtv.sets[frameIndex].writeAccelerationStructure(m_ctx.device, 3, tf.as);
 }
+
+//==================================================================
+// RT dispatch (remove redundant gpu->update(cmd) here; prepass does it)
+//==================================================================
 
 void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, uint32_t frameIndex)
 {
@@ -2058,20 +2164,15 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     }
 
-    // Build BLAS for visible meshes
+    // Build BLAS for visible meshes (assumes MeshGpuResources already updated in renderPrePass)
     for (SceneMesh* sm : scene->sceneMeshes())
     {
         if (!sm || !sm->visible())
             continue;
 
-        if (!sm->gpu())
-            sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
-
         MeshGpuResources* gpu = sm->gpu();
         if (!gpu)
             continue;
-
-        gpu->update();
 
         const RtMeshGeometry geo = selectRtGeometry(sm);
         if (!geo.valid())
@@ -2204,20 +2305,6 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 }
 
-void Renderer::renderPrePass(Viewport* vp, VkCommandBuffer cmd, Scene* scene, uint32_t frameIndex)
-{
-    if (!vp || !cmd || !scene)
-        return;
-
-    if (vp->drawMode() != DrawMode::RAY_TRACE)
-        return;
-
-    if (!rtReady(m_ctx))
-        return;
-
-    renderRayTrace(vp, cmd, scene, frameIndex);
-}
-
 bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkCommandBuffer cmd) noexcept
 {
     if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !sm || !cmd)
@@ -2249,12 +2336,17 @@ bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkComman
         return true;
 
     // Tear down existing BLAS
-    if (b.as != VK_NULL_HANDLE)
+    if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
     {
-        m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
-        b.as = VK_NULL_HANDLE;
+        AsLeak leak{};
+        leak.as      = b.as;
+        leak.backing = std::move(b.asBuffer);
+        s_leakedBlas.push_back(std::move(leak));
+
+        b.as       = VK_NULL_HANDLE;
+        b.asBuffer = {};
     }
-    b.asBuffer.destroy();
+
     b.address  = 0;
     b.buildKey = 0;
 
@@ -2378,8 +2470,25 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     RtTlasFrame& t = m_rtTlasFrames[frameIndex];
 
     // Use your change counter as the TLAS rebuild key.
-    // You already reset buildKey=0 in idle() when monitor changes.
-    const uint64_t key = m_rtTlasChangeCounter ? m_rtTlasChangeCounter->value() : 1;
+    uint64_t key = m_rtTlasChangeCounter ? m_rtTlasChangeCounter->value() : 1ull;
+
+    // Also rebuild TLAS if any BLAS changed (subdiv level change rebuilds BLAS)
+    for (SceneMesh* sm : scene->sceneMeshes())
+    {
+        if (!sm || !sm->visible())
+            continue;
+
+        auto it = m_rtBlas.find(sm);
+        if (it == m_rtBlas.end())
+            continue;
+
+        const RtBlas& b = it->second;
+        if (b.as == VK_NULL_HANDLE || b.address == 0)
+            continue;
+
+        // Hash-combine b.buildKey into TLAS key
+        key ^= (b.buildKey + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2));
+    }
 
     if (!kRtRebuildAsEveryFrame && t.as != VK_NULL_HANDLE && t.buildKey == key)
         return true;
@@ -2526,12 +2635,17 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     if (needNewTlasStorage)
     {
         // Destroy old TLAS
-        if (t.as != VK_NULL_HANDLE)
+        if (t.as != VK_NULL_HANDLE || t.buffer.valid())
         {
-            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
-            t.as = VK_NULL_HANDLE;
+            AsLeak leak{};
+            leak.as      = t.as;
+            leak.backing = std::move(t.buffer);
+            s_leakedTlas.push_back(std::move(leak));
+
+            t.as     = VK_NULL_HANDLE;
+            t.buffer = {};
         }
-        t.buffer.destroy();
+
         t.address = 0;
 
         t.buffer.create(m_ctx.device,
@@ -2694,6 +2808,10 @@ void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
     m_overlayVertexCapacity = requiredVertexCount;
 }
 
+//==================================================================
+// drawSelection (NO MeshGpuResources::update(cmd) calls here anymore)
+//==================================================================
+
 void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
 {
     if (!scene || !vp)
@@ -2755,13 +2873,11 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
             sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
 
         MeshGpuResources* gpu = sm->gpu();
-        gpu->update();
+        if (!gpu)
+            continue;
 
         const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
-        // ---------------------------------------------------------
-        // Choose position buffer + selection index buffers
-        // ---------------------------------------------------------
         VkBuffer   posVb    = VK_NULL_HANDLE;
         uint32_t   selCount = 0;
         VkBuffer   selIb    = VK_NULL_HANDLE;
@@ -2814,7 +2930,6 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
         }
         else
         {
-            // Subdiv selection indices are into the subdiv shared vertex buffer.
             if (gpu->subdivSharedVertCount() == 0 || !gpu->subdivSharedVertBuffer().valid())
                 continue;
 
@@ -2856,9 +2971,6 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
             }
         }
 
-        // ---------------------------------------------------------
-        // Bind + draw
-        // ---------------------------------------------------------
         vkCmdBindVertexBuffers(cmd, 0, 1, &posVb, &zeroOffset);
         vkCmdBindIndexBuffer(cmd, selIb, 0, VK_INDEX_TYPE_UINT32);
 

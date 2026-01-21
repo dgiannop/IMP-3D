@@ -53,6 +53,8 @@ struct ViewportSwapchain
     QSize pendingPixelSize = {};
 
     std::vector<VkFramebuffer> framebuffers = {};
+
+    DeferredDeletion deferred = {}; // per-viewport deferred destruction
 };
 
 struct ViewportFrameContext
@@ -84,8 +86,6 @@ public:
     bool beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out) noexcept;
     void endFrame(ViewportSwapchain* sc, const ViewportFrameContext& fc) noexcept;
 
-    // If beginFrame() succeeded but the caller must early-out,
-    // call cancelFrame() to still submit + present something (optionally a clear).
     void cancelFrame(ViewportSwapchain*          sc,
                      const ViewportFrameContext& fc,
                      bool                        clear,
@@ -94,7 +94,6 @@ public:
                      float                       b = 0.0f,
                      float                       a = 1.0f) noexcept;
 
-    // Temp
     void renderClear(ViewportSwapchain* sc, float r, float g, float b, float a);
 
     QVulkanInstance* qvk() const noexcept
@@ -107,23 +106,16 @@ public:
         return m_device;
     }
 
-    VulkanContext context() const noexcept
+    // ------------------------------------------------------------
+    // VulkanContext
+    // ------------------------------------------------------------
+    VulkanContext& context() noexcept
     {
-        VulkanContext ctx            = {};
-        ctx.instance                 = m_instance;
-        ctx.physicalDevice           = m_physicalDevice;
-        ctx.device                   = m_device;
-        ctx.graphicsQueue            = m_graphicsQueue;
-        ctx.graphicsQueueFamilyIndex = m_graphicsFamily;
-        ctx.framesInFlight           = m_framesInFlight;
-        ctx.sampleCount              = m_sampleCount;
-        ctx.deviceProps              = m_deviceProps;
-        ctx.supportsRayTracing       = m_supportsRayTracing;
-        ctx.rtProps                  = m_rtProps;
-        ctx.asProps                  = m_asProps;
-        ctx.rtDispatch               = m_supportsRayTracing ? &m_rtDispatch : nullptr;
-        ctx.allocator                = nullptr; // optional later
-        return ctx;
+        return m_ctx;
+    }
+    const VulkanContext& context() const noexcept
+    {
+        return m_ctx;
     }
 
     QVulkanDeviceFunctions* deviceFunctions() const noexcept
@@ -133,6 +125,7 @@ public:
 
 private:
     bool createDevice();
+    void ensureContext() noexcept;
     bool loadKhrEntryPoints() noexcept;
 
     bool createSwapchain(ViewportSwapchain* sc, const QSize& pixelSize);
@@ -164,6 +157,13 @@ private:
     VkSampleCountFlagBits m_sampleCount = VK_SAMPLE_COUNT_1_BIT;
 
     VkPhysicalDeviceProperties m_deviceProps = {};
+
+private:
+    // ------------------------------------------------------------
+    // Cached VulkanContext (kept up-to-date by init/createDevice/loadKhrEntryPoints/shutdown)
+    // ------------------------------------------------------------
+    VulkanContext    m_ctx              = {};
+    DeferredDeletion m_deferredDeletion = {};
 
 private:
     // -------- core loader --------

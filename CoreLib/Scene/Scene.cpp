@@ -38,20 +38,6 @@ bool Scene::initSwapchain(VkRenderPass rp)
     return m_renderer && m_renderer->initSwapchain(rp);
 }
 
-void Scene::renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
-{
-    if (!vp || !cmd)
-        return;
-
-    // Only do work needed outside a render pass.
-    // (Right now: RT dispatch.)
-    if (vp->drawMode() == DrawMode::RAY_TRACE)
-    {
-        if (m_renderer)
-            m_renderer->renderPrePass(vp, cmd, this, frameIndex);
-    }
-}
-
 void Scene::destroySwapchainResources()
 {
     if (m_renderer)
@@ -339,10 +325,24 @@ void Scene::idle()
     }
 }
 
-void Scene::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
+void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
+{
+    if (!vp || !fc.cmd)
+        return;
+
+    // IMPORTANT:
+    // renderPrePass is where we do any work that must happen OUTSIDE a render pass.
+    // This includes MeshGpuResources uploads/updates (raster) and RT dispatch (ray tracing).
+    // So it must run for ALL draw modes.
+    if (m_renderer)
+        m_renderer->renderPrePass(vp, this, fc);
+}
+
+// void Scene::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
+void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
     vp->apply();
-    m_renderer->render(cmd, vp, this, frameIndex);
+    m_renderer->render(vp, this, fc);
 }
 
 SysCounterPtr Scene::changeCounter() const noexcept

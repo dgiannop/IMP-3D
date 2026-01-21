@@ -230,6 +230,7 @@ bool VulkanBackend::init(QVulkanInstance* qvk, uint32_t framesInFlight)
     if (!loadKhrEntryPoints())
         return false;
 
+    ensureContext();
     return true;
 }
 
@@ -244,6 +245,8 @@ void VulkanBackend::shutdown() noexcept
         m_swapchains.clear();
         m_qvk      = nullptr;
         m_instance = VK_NULL_HANDLE;
+        m_ctx      = {};
+        vkutil::shutdown();
         return;
     }
 
@@ -305,6 +308,9 @@ void VulkanBackend::shutdown() noexcept
     m_qvk      = nullptr;
     m_instance = VK_NULL_HANDLE;
 
+    m_ctx = {};
+
+    // Note: m_deferredDeletion is owned here; nothing special required.
     vkutil::shutdown(); // just for debug validation names
 }
 
@@ -382,6 +388,11 @@ bool VulkanBackend::createDevice()
         return false;
     };
 
+    const uint32_t apiMajor = VK_VERSION_MAJOR(m_deviceProps.apiVersion);
+    const uint32_t apiMinor = VK_VERSION_MINOR(m_deviceProps.apiVersion);
+    const bool     apiAtLeast12 =
+        (apiMajor > 1) || (apiMajor == 1 && apiMinor >= 2);
+
     // ------------------------------------------------------------
     // Query core features (ALWAYS) - we need shaderInt64 for RT shaders
     // ------------------------------------------------------------
@@ -392,6 +403,34 @@ bool VulkanBackend::createDevice()
     // Base extensions (always)
     std::vector<const char*> enabledExts;
     enabledExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+
+    // ------------------------------------------------------------
+    // Timeline semaphore support (Vulkan 1.2 core OR KHR extension)
+    // ------------------------------------------------------------
+    const bool hasTimelineExt    = hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    const bool timelineAvailable = apiAtLeast12 || hasTimelineExt;
+
+    // We only need to enable the extension if the device is < 1.2
+    const bool needTimelineExtEnable = (!apiAtLeast12) && hasTimelineExt;
+
+    // Query timeline feature support (via Features2 chain)
+    VkPhysicalDeviceTimelineSemaphoreFeatures supportedTimeline = {};
+    supportedTimeline.sType                                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+
+    VkPhysicalDeviceFeatures2 supportedTimelineQuery = {};
+    supportedTimelineQuery.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    supportedTimelineQuery.pNext                     = &supportedTimeline;
+
+    if (timelineAvailable)
+        f->vkGetPhysicalDeviceFeatures2(m_physicalDevice, &supportedTimelineQuery);
+
+    const bool timelineOk =
+        timelineAvailable && (supportedTimeline.timelineSemaphore == VK_TRUE);
+
+    // If you want it to be mandatory, you can fail here instead.
+    // For now we enable it if available.
+    if (needTimelineExtEnable)
+        enabledExts.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
 
     // ------------------------------------------------------------
     // Optional ray tracing extension bundle
@@ -469,10 +508,8 @@ bool VulkanBackend::createDevice()
 
     feats2.features.geometryShader    = VK_TRUE;
     feats2.features.samplerAnisotropy = VK_TRUE;
-    feats2.features.shaderInt64       = VK_TRUE;
 
-    // IMPORTANT: enable shaderInt64 if supported (required by your RT shaders).
-    // If RT is enabled, we already gated on shaderInt64 above, so this will be true.
+    // Enable shaderInt64 if supported (required by your RT shaders).
     feats2.features.shaderInt64 = supportedCore.features.shaderInt64 ? VK_TRUE : VK_FALSE;
 
     // Optional RT feature chain (only used if m_supportsRayTracing == true)
@@ -484,6 +521,10 @@ bool VulkanBackend::createDevice()
 
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeat = {};
     rtFeat.sType                                         = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+
+    // Timeline semaphore feature (enable if supported)
+    VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeat = {};
+    timelineFeat.sType                                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
 
     void* pNextChain = nullptr;
 
@@ -503,6 +544,17 @@ bool VulkanBackend::createDevice()
         chain(rtFeat);
         chain(asFeat);
         chain(bda);
+    }
+
+    if (timelineOk)
+    {
+        timelineFeat.timelineSemaphore = VK_TRUE;
+        chain(timelineFeat);
+    }
+    else
+    {
+        // Not fatal. You can make it fatal if you want.
+        // std::cerr << "VulkanBackend: timeline semaphores not available.\n";
     }
 
     feats2.pNext = pNextChain;
@@ -551,12 +603,39 @@ bool VulkanBackend::createDevice()
         f->vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
     }
 
+    if (timelineOk)
+        std::cerr << "VulkanBackend: Timeline semaphores enabled.\n";
+    else
+        std::cerr << "VulkanBackend: Timeline semaphores not available (will use fences).\n";
+
     if (m_supportsRayTracing)
         std::cerr << "VulkanBackend: Ray tracing enabled.\n";
     else
         std::cerr << "VulkanBackend: Ray tracing not available (running raster-only).\n";
 
     return true;
+}
+
+// ============================================================
+// VulkanBackend.cpp (add ensureContext(), remove fillContext usage)
+// ============================================================
+
+void VulkanBackend::ensureContext() noexcept
+{
+    m_ctx                          = {};
+    m_ctx.instance                 = m_instance;
+    m_ctx.physicalDevice           = m_physicalDevice;
+    m_ctx.device                   = m_device;
+    m_ctx.graphicsQueue            = m_graphicsQueue;
+    m_ctx.graphicsQueueFamilyIndex = m_graphicsFamily;
+    m_ctx.framesInFlight           = m_framesInFlight;
+    m_ctx.sampleCount              = m_sampleCount;
+    m_ctx.deviceProps              = m_deviceProps;
+    m_ctx.supportsRayTracing       = m_supportsRayTracing;
+    m_ctx.rtProps                  = m_rtProps;
+    m_ctx.asProps                  = m_asProps;
+    m_ctx.rtDispatch               = m_supportsRayTracing ? &m_rtDispatch : nullptr;
+    m_ctx.allocator                = nullptr;
 }
 
 ViewportSwapchain* VulkanBackend::createViewportSwapchain(QWindow* window)
@@ -697,8 +776,6 @@ uint32_t VulkanBackend::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags 
     }
     return 0;
 }
-
-#if 1 // Use validation names for debug
 
 bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSize)
 {
@@ -1024,6 +1101,11 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
     // ------------------------------------------------------------
     sc->frames.resize(m_framesInFlight);
 
+    sc->deferred.init(uint32_t(sc->frames.size()));
+
+    // NOTE: Deferred deletion is now global (m_deferredDeletion) and keyed by Viewport*.
+    // VulkanBackend does NOT flush here because it doesn't know the Viewport* key.
+
     std::vector<VkCommandBuffer> cmds(m_framesInFlight, VK_NULL_HANDLE);
 
     VkCommandBufferAllocateInfo cbai = {};
@@ -1111,393 +1193,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
 
     return true;
 }
-
-#else
-bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSize)
-{
-    QVulkanDeviceFunctions* df = devFns(m_qvk, m_device);
-
-    if (!sc || !df || !m_device)
-        return false;
-
-    if (!m_vkGetPhysicalDeviceSurfaceCapabilitiesKHR ||
-        !m_vkGetPhysicalDeviceSurfaceFormatsKHR ||
-        !m_vkGetPhysicalDeviceSurfacePresentModesKHR ||
-        !m_vkCreateSwapchainKHR ||
-        !m_vkGetSwapchainImagesKHR)
-    {
-        return false;
-    }
-
-    // If caller is recreating, it should have already destroyed old objects.
-    // We'll still be defensive and wipe anything that might be dangling.
-    destroySwapchainObjects(sc);
-
-    // ------------------------------------------------------------
-    // Helpers (local)
-    // ------------------------------------------------------------
-    auto createImage2D = [&](VkFormat              format,
-                             VkImageUsageFlags     usage,
-                             VkImageAspectFlags    aspect,
-                             VkSampleCountFlagBits samples,
-                             VkImage&              outImage,
-                             VkDeviceMemory&       outMem,
-                             VkImageView&          outView) -> bool {
-        outImage = VK_NULL_HANDLE;
-        outMem   = VK_NULL_HANDLE;
-        outView  = VK_NULL_HANDLE;
-
-        VkImageCreateInfo ici = {};
-        ici.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ici.imageType         = VK_IMAGE_TYPE_2D;
-        ici.format            = format;
-        ici.extent            = {sc->extent.width, sc->extent.height, 1};
-        ici.mipLevels         = 1;
-        ici.arrayLayers       = 1;
-        ici.samples           = samples;
-        ici.tiling            = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage             = usage;
-        ici.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-
-        if (df->vkCreateImage(m_device, &ici, nullptr, &outImage) != VK_SUCCESS)
-            return false;
-
-        VkMemoryRequirements mr = {};
-        df->vkGetImageMemoryRequirements(m_device, outImage, &mr);
-
-        VkMemoryAllocateInfo mai = {};
-        mai.sType                = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        mai.allocationSize       = mr.size;
-        mai.memoryTypeIndex      = findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-        if (mai.memoryTypeIndex == 0 && (mr.memoryTypeBits & 1u) == 0)
-            return false;
-
-        if (df->vkAllocateMemory(m_device, &mai, nullptr, &outMem) != VK_SUCCESS)
-            return false;
-
-        if (df->vkBindImageMemory(m_device, outImage, outMem, 0) != VK_SUCCESS)
-            return false;
-
-        VkImageViewCreateInfo vci           = {};
-        vci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vci.image                           = outImage;
-        vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format                          = format;
-        vci.subresourceRange.aspectMask     = aspect;
-        vci.subresourceRange.baseMipLevel   = 0;
-        vci.subresourceRange.levelCount     = 1;
-        vci.subresourceRange.baseArrayLayer = 0;
-        vci.subresourceRange.layerCount     = 1;
-
-        if (df->vkCreateImageView(m_device, &vci, nullptr, &outView) != VK_SUCCESS)
-            return false;
-
-        return true;
-    };
-
-    auto createSwapchainImageView = [&](VkImage image, VkFormat format, VkImageView& outView) -> bool {
-        outView = VK_NULL_HANDLE;
-
-        VkImageViewCreateInfo vci           = {};
-        vci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vci.image                           = image;
-        vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format                          = format;
-        vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        vci.subresourceRange.baseMipLevel   = 0;
-        vci.subresourceRange.levelCount     = 1;
-        vci.subresourceRange.baseArrayLayer = 0;
-        vci.subresourceRange.layerCount     = 1;
-
-        return df->vkCreateImageView(m_device, &vci, nullptr, &outView) == VK_SUCCESS;
-    };
-
-    // ------------------------------------------------------------
-    // Choose surface details
-    // ------------------------------------------------------------
-    // Store what this swapchain was created with.
-    sc->sampleCount = m_sampleCount;
-
-    VkSurfaceCapabilitiesKHR caps = {};
-    m_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice, sc->surface, &caps);
-
-    uint32_t fmtCount = 0;
-    m_vkGetPhysicalDeviceSurfaceFormatsKHR(m_physicalDevice, sc->surface, &fmtCount, nullptr);
-    std::vector<VkSurfaceFormatKHR> formats(fmtCount);
-    if (fmtCount)
-        m_vkGetPhysicalDeviceSurfaceFormatsKHR(m_physicalDevice, sc->surface, &fmtCount, formats.data());
-
-    uint32_t pmCount = 0;
-    m_vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, sc->surface, &pmCount, nullptr);
-    std::vector<VkPresentModeKHR> modes(pmCount);
-    if (pmCount)
-        m_vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, sc->surface, &pmCount, modes.data());
-
-    const VkSurfaceFormatKHR sf = chooseSurfaceFormat(formats);
-    const VkPresentModeKHR   pm = choosePresentMode(modes);
-    const VkExtent2D         ex = chooseExtent(caps, pixelSize);
-
-    if (ex.width == 0 || ex.height == 0)
-        return false;
-
-    uint32_t imageCount = std::max(caps.minImageCount + 1u, 2u);
-    if (caps.maxImageCount > 0)
-        imageCount = std::min(imageCount, caps.maxImageCount);
-
-    // ------------------------------------------------------------
-    // Create swapchain
-    // ------------------------------------------------------------
-    VkSwapchainCreateInfoKHR ci = {};
-    ci.sType                    = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    ci.surface                  = sc->surface;
-    ci.minImageCount            = imageCount;
-    ci.imageFormat              = sf.format;
-    ci.imageColorSpace          = sf.colorSpace;
-    ci.imageExtent              = ex;
-    ci.imageArrayLayers         = 1;
-    ci.imageUsage               = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    ci.imageSharingMode         = VK_SHARING_MODE_EXCLUSIVE;
-    ci.preTransform             = caps.currentTransform;
-    ci.compositeAlpha           = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    ci.presentMode              = pm;
-    ci.clipped                  = VK_TRUE;
-    ci.oldSwapchain             = VK_NULL_HANDLE;
-
-    if (m_vkCreateSwapchainKHR(m_device, &ci, nullptr, &sc->swapchain) != VK_SUCCESS)
-        return false;
-
-    sc->colorFormat = sf.format;
-    sc->extent      = ex;
-
-    // ------------------------------------------------------------
-    // Get swapchain images + create views
-    // ------------------------------------------------------------
-    uint32_t imgCount = 0;
-    m_vkGetSwapchainImagesKHR(m_device, sc->swapchain, &imgCount, nullptr);
-    if (imgCount == 0)
-    {
-        destroySwapchainObjects(sc);
-        return false;
-    }
-
-    sc->images.resize(imgCount);
-    m_vkGetSwapchainImagesKHR(m_device, sc->swapchain, &imgCount, sc->images.data());
-
-    sc->views.resize(imgCount, VK_NULL_HANDLE);
-    for (uint32_t i = 0; i < imgCount; ++i)
-    {
-        if (!createSwapchainImageView(sc->images[i], sc->colorFormat, sc->views[i]))
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------
-    // Render pass (MSAA color + MSAA depth + resolve)
-    // ------------------------------------------------------------
-    VkAttachmentDescription attachments[3] = {};
-
-    // 0) MSAA color
-    attachments[0].format         = sc->colorFormat;
-    attachments[0].samples        = sc->sampleCount;
-    attachments[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[0].storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[0].finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    // 1) MSAA depth
-    constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
-    attachments[1].format           = kDepthFormat;
-    attachments[1].samples          = sc->sampleCount;
-    attachments[1].loadOp           = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[1].storeOp          = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[1].stencilLoadOp    = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[1].stencilStoreOp   = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[1].initialLayout    = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[1].finalLayout      = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    // 2) Resolve (swapchain)
-    attachments[2].format         = sc->colorFormat;
-    attachments[2].samples        = VK_SAMPLE_COUNT_1_BIT;
-    attachments[2].loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[2].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[2].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[2].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[2].finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentReference colorRef = {};
-    colorRef.attachment            = 0;
-    colorRef.layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference depthRef = {};
-    depthRef.attachment            = 1;
-    depthRef.layout                = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference resolveRef = {};
-    resolveRef.attachment            = 2;
-    resolveRef.layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription sub    = {};
-    sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount    = 1;
-    sub.pColorAttachments       = &colorRef;
-    sub.pResolveAttachments     = &resolveRef;
-    sub.pDepthStencilAttachment = &depthRef;
-
-    VkRenderPassCreateInfo rpci = {};
-    rpci.sType                  = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpci.attachmentCount        = 3;
-    rpci.pAttachments           = attachments;
-    rpci.subpassCount           = 1;
-    rpci.pSubpasses             = &sub;
-
-    if (df->vkCreateRenderPass(m_device, &rpci, nullptr, &sc->renderPass) != VK_SUCCESS)
-    {
-        destroySwapchainObjects(sc);
-        return false;
-    }
-
-    // ------------------------------------------------------------
-    // Per-swapchain-image MSAA color + depth
-    // ------------------------------------------------------------
-    sc->msaaColorImages.resize(imgCount, VK_NULL_HANDLE);
-    sc->msaaColorMems.resize(imgCount, VK_NULL_HANDLE);
-    sc->msaaColorViews.resize(imgCount, VK_NULL_HANDLE);
-
-    sc->depthImages.resize(imgCount, VK_NULL_HANDLE);
-    sc->depthMems.resize(imgCount, VK_NULL_HANDLE);
-    sc->depthViews.resize(imgCount, VK_NULL_HANDLE);
-
-    for (uint32_t i = 0; i < imgCount; ++i)
-    {
-        if (!createImage2D(sc->colorFormat,
-                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                           VK_IMAGE_ASPECT_COLOR_BIT,
-                           sc->sampleCount,
-                           sc->msaaColorImages[i],
-                           sc->msaaColorMems[i],
-                           sc->msaaColorViews[i]))
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-
-        if (!createImage2D(kDepthFormat,
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                           VK_IMAGE_ASPECT_DEPTH_BIT,
-                           sc->sampleCount,
-                           sc->depthImages[i],
-                           sc->depthMems[i],
-                           sc->depthViews[i]))
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------
-    // Command pool
-    // ------------------------------------------------------------
-    VkCommandPoolCreateInfo cpci = {};
-    cpci.sType                   = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    cpci.queueFamilyIndex        = m_graphicsFamily;
-    cpci.flags                   = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-
-    if (df->vkCreateCommandPool(m_device, &cpci, nullptr, &sc->cmdPool) != VK_SUCCESS)
-    {
-        destroySwapchainObjects(sc);
-        return false;
-    }
-
-    // ------------------------------------------------------------
-    // Frames in flight (cmd + sync)
-    // ------------------------------------------------------------
-    sc->frames.resize(m_framesInFlight);
-
-    std::vector<VkCommandBuffer> cmds(m_framesInFlight, VK_NULL_HANDLE);
-
-    VkCommandBufferAllocateInfo cbai = {};
-    cbai.sType                       = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cbai.commandPool                 = sc->cmdPool;
-    cbai.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cbai.commandBufferCount          = m_framesInFlight;
-
-    if (df->vkAllocateCommandBuffers(m_device, &cbai, cmds.data()) != VK_SUCCESS)
-    {
-        destroySwapchainObjects(sc);
-        return false;
-    }
-
-    for (uint32_t i = 0; i < m_framesInFlight; ++i)
-    {
-        sc->frames[i].cmd = cmds[i];
-
-        VkFenceCreateInfo fci = {};
-        fci.sType             = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fci.flags             = VK_FENCE_CREATE_SIGNALED_BIT;
-
-        if (df->vkCreateFence(m_device, &fci, nullptr, &sc->frames[i].fence) != VK_SUCCESS)
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-
-        VkSemaphoreCreateInfo sci = {};
-        sci.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-        if (df->vkCreateSemaphore(m_device, &sci, nullptr, &sc->frames[i].imageAvailable) != VK_SUCCESS)
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-
-        if (df->vkCreateSemaphore(m_device, &sci, nullptr, &sc->frames[i].renderFinished) != VK_SUCCESS)
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------
-    // Framebuffers (one per swapchain image)
-    // Attachments: [msaaColor, msaaDepth, resolveSwapchain]
-    // ------------------------------------------------------------
-    sc->framebuffers.resize(imgCount, VK_NULL_HANDLE);
-    for (uint32_t i = 0; i < imgCount; ++i)
-    {
-        VkImageView atts[3] =
-            {
-                sc->msaaColorViews[i],
-                sc->depthViews[i],
-                sc->views[i]};
-
-        VkFramebufferCreateInfo fci = {};
-        fci.sType                   = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fci.renderPass              = sc->renderPass;
-        fci.attachmentCount         = 3;
-        fci.pAttachments            = atts;
-        fci.width                   = sc->extent.width;
-        fci.height                  = sc->extent.height;
-        fci.layers                  = 1;
-
-        if (df->vkCreateFramebuffer(m_device, &fci, nullptr, &sc->framebuffers[i]) != VK_SUCCESS)
-        {
-            destroySwapchainObjects(sc);
-            return false;
-        }
-    }
-
-    sc->needsRecreate    = false;
-    sc->pendingPixelSize = QSize();
-
-    return true;
-}
-#endif
 
 void VulkanBackend::destroySwapchainObjects(ViewportSwapchain* sc) noexcept
 {
@@ -1662,8 +1357,7 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
     const uint32_t fi = sc->frameIndex % uint32_t(sc->frames.size());
     ViewportFrame& fr = sc->frames[fi];
 
-    // Wait for this frame slot to be available (previous submit must have signaled it).
-    // df->vkWaitForFences(m_device, 1, &fr.fence, VK_TRUE, UINT64_MAX);
+    // Wait for this frame slot to be available.
     VkResult wr = df->vkWaitForFences(m_device, 1, &fr.fence, VK_TRUE, 1000000000ull);
     if (wr == VK_TIMEOUT)
     {
@@ -1673,8 +1367,9 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
         return false;
     }
 
-    // NOTE: We do NOT reset the fence here anymore.
-    // We reset it only when we are about to submit work that will signal it (in endFrame()).
+    // All work previously submitted for this frame slot is complete.
+    // Now it's safe to destroy resources deferred for this slot (PER-VIEWPORT queue).
+    sc->deferred.flush(fi);
 
     uint32_t imageIndex = 0;
     VkResult acq        = m_vkAcquireNextImageKHR(

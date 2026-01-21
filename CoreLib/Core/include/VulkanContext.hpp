@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 /**
@@ -25,6 +27,73 @@ struct VulkanRtDispatch
     PFN_vkCreateRayTracingPipelinesKHR       vkCreateRayTracingPipelinesKHR       = nullptr;
     PFN_vkGetRayTracingShaderGroupHandlesKHR vkGetRayTracingShaderGroupHandlesKHR = nullptr;
     PFN_vkCmdTraceRaysKHR                    vkCmdTraceRaysKHR                    = nullptr;
+};
+
+/**
+ * @brief Per-frame deferred destruction queue.
+ *
+ * Used to delay destruction of Vulkan resources until it is safe with respect
+ * to GPU work in flight.
+ *
+ * The queue is indexed by "frame-in-flight slot" (frameIndex), not swapchain
+ * image index. Typical usage:
+ *  - In beginFrame(): after waiting for the fence of slot fi, call flush(fi)
+ *    to destroy resources queued the last time fi was used.
+ *  - During rendering/recreation: enqueue(fi, ...) to schedule destruction for
+ *    when that same slot becomes safe again.
+ *
+ * Notes:
+ *  - Not thread-safe.
+ *  - Enqueued callables may capture state. Ensure captured objects outlive the
+ *    eventual flush().
+ */
+#include <functional> // still
+// ...
+
+struct DeferredDeletion
+{
+    std::vector<std::vector<std::move_only_function<void()>>> perFrame;
+
+    void init(uint32_t framesInFlight)
+    {
+        perFrame.clear();
+        perFrame.resize(framesInFlight);
+    }
+
+    void enqueue(uint32_t frameIndex, std::move_only_function<void()>&& fn)
+    {
+        if (frameIndex >= perFrame.size())
+            return;
+        perFrame[frameIndex].push_back(std::move(fn));
+    }
+
+    void flush(uint32_t frameIndex)
+    {
+        if (frameIndex >= perFrame.size())
+            return;
+
+        auto& q = perFrame[frameIndex];
+        for (auto& fn : q)
+            fn();
+        q.clear();
+    }
+};
+
+/**
+ * @brief Small, per-call context passed down from UI into CoreLib render functions.
+ *
+ * This avoids having to extend render() / renderPrePass() signatures every time
+ * we need one more per-frame/per-viewport bit of data.
+ *
+ * Lifetime:
+ *  - cmd is valid for the duration of the current frame recording.
+ *  - deferred typically points to the per-viewport swapchain deferred queue.
+ */
+struct RenderFrameContext
+{
+    VkCommandBuffer   cmd        = VK_NULL_HANDLE;
+    uint32_t          frameIndex = 0;
+    DeferredDeletion* deferred   = nullptr; ///< points to per-viewport deferred queue (e.g. ViewportSwapchain::deferred)
 };
 
 /**
@@ -60,7 +129,7 @@ struct VulkanContext
     void* allocator = nullptr;
 };
 
-inline bool rtReady(const VulkanContext& ctx) noexcept
+[[nodiscard]] inline bool rtReady(const VulkanContext& ctx) noexcept
 {
     return ctx.supportsRayTracing && ctx.rtDispatch != nullptr;
 }

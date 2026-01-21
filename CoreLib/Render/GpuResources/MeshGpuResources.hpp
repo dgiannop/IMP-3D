@@ -29,7 +29,7 @@ public:
     void destroy() noexcept;
 
     /// Ensure GPU buffers match the owner's SysMesh (using counters).
-    void update() override;
+    void update(const RenderFrameContext& fc); // override;
 
     // ---------------------------------------------------------
     // Coarse solid (corner-expanded triangle list, no indices)
@@ -446,16 +446,17 @@ private:
     SysMonitor m_selectionMonitor;
 
 private:
-    void fullRebuild(const SysMesh* sys);
-    void updateDeformBuffers(const SysMesh* sys);
-    void updateSelectionBuffers(const SysMesh* sys);
+    void fullRebuild(const RenderFrameContext& fc, const SysMesh* sys);
+    void updateDeformBuffers(const RenderFrameContext& fc, const SysMesh* sys);
+    void updateSelectionBuffers(const RenderFrameContext& fc, const SysMesh* sys);
 
     // --- Subdiv
-    void updateSelectionBuffersSubdiv(const SysMesh* sys, int level);
+    void updateSelectionBuffersSubdiv(const RenderFrameContext& fc, const SysMesh* sys, int level);
 
     std::vector<uint32_t> flattenEdgePairs(const std::vector<std::pair<uint32_t, uint32_t>>& edges);
-    void                  fullRebuildSubdiv(const SysMesh* sys, int level);
-    void                  updateSubdivDeform(const SysMesh* sys, int level);
+
+    void fullRebuildSubdiv(const RenderFrameContext& fc, const SysMesh* sys, int level);
+    void updateSubdivDeform(const RenderFrameContext& fc, const SysMesh* sys, int level);
 
     void buildSubdivCornerExpanded(SubdivEvaluator&        subdiv,
                                    std::vector<glm::vec3>& outPos,
@@ -464,13 +465,13 @@ private:
                                    std::vector<uint32_t>&  outMat);
 
 private:
-    static constexpr VkDeviceSize kCapacity64KiB = 2 * 1024 * 1024;
-    // 64ull * 1024ull;
+    static constexpr VkDeviceSize kCapacity64KiB = 64ull * 1024ull;
 
     template<typename T>
-    void updateOrRecreate(GpuBuffer&            buffer,
-                          const std::vector<T>& data,
-                          VkBufferUsageFlags    usage,
-                          VkDeviceSize          initialCapacity = kCapacity64KiB,
-                          bool                  deviceAddress   = false);
+    void updateOrRecreate(const RenderFrameContext& fc,
+                          GpuBuffer&                buffer,
+                          const std::vector<T>&     data,
+                          VkBufferUsageFlags        usage,
+                          VkDeviceSize              initialCapacity = kCapacity64KiB,
+                          bool                      deviceAddress   = false);
 };

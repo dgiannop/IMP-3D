@@ -31,14 +31,6 @@ void Core::initializeSwapchain(VkRenderPass renderPass)
     (void)m_scene->initSwapchain(renderPass);
 }
 
-void Core::renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
-{
-    if (!vp || !cmd || !m_scene)
-        return;
-
-    (void)m_scene->renderPrePass(vp, cmd, frameIndex);
-}
-
 void Core::destroySwapchainResources()
 {
     m_scene->destroySwapchainResources();
@@ -291,12 +283,24 @@ bool Core::needsRender() noexcept
     return m_scene && m_scene->needsRender();
 }
 
-void Core::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
+// void Core::renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
+void Core::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
+{
+    if (!vp || !fc.cmd || !m_scene)
+        return;
+
+    m_scene->renderPrePass(vp, fc);
+    //(void)m_scene->renderPrePass(vp, cmd, frameIndex);
+}
+
+// void Core::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
+void Core::render(Viewport* vp, const RenderFrameContext& fc)
 {
     if (!m_scene)
         return;
 
-    m_scene->render(vp, cmd, frameIndex);
+    // m_scene->render(vp, cmd, frameIndex);
+    m_scene->render(vp, fc);
 
     if (m_activeTool)
     {
@@ -308,7 +312,7 @@ void Core::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
     {
         if (OverlayHandler* oh = m_activeTool->overlayHandler())
         {
-            renderer->drawOverlays(cmd, vp, *oh);
+            renderer->drawOverlays(fc.cmd, vp, *oh);
         }
     }
 }

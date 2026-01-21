@@ -1,3 +1,6 @@
+//============================================================
+// VkUtilities.hpp
+//============================================================
 #pragma once
 
 #include <cstdint>
@@ -5,10 +8,8 @@
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 
+#include "GpuBuffer.hpp"
 #include "VulkanContext.hpp"
-
-struct VulkanContext;
-class GpuBuffer;
 
 namespace vkutil
 {
@@ -23,17 +24,102 @@ namespace vkutil
     void printVkResult(VkResult r, const char* where);
 
     // ============================================================================
-    // Common fixed-function state helpers
+    // Upload helpers (frame-cmd path)
+    // ============================================================================
+
+    /**
+     * @brief Ensure a HOST_VISIBLE upload/staging buffer has at least @p bytes capacity.
+     *
+     * The buffer is created with:
+     * - VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+     * - HOST_VISIBLE | HOST_COHERENT
+     * - persistent map enabled
+     */
+    bool ensureUploadBuffer(const VulkanContext& ctx,
+                            GpuBuffer&           upload,
+                            VkDeviceSize         bytes) noexcept;
+
+    /**
+     * @brief Record CPU->staging->device-local copy into an EXISTING command buffer.
+     *
+     * IMPORTANT:
+     * - This records vkCmdCopyBuffer only.
+     * - It does NOT insert any barriers.
+     * - MUST be called OUTSIDE a render pass.
+     *
+     * @param upload Reusable HOST_VISIBLE staging buffer (persistently mapped).
+     */
+    bool recordUploadToDeviceLocalBuffer(const VulkanContext& ctx,
+                                         VkCommandBuffer      cmd,
+                                         VkBuffer             dst,
+                                         VkDeviceSize         dstOffset,
+                                         const void*          data,
+                                         VkDeviceSize         bytes) noexcept;
+
+    /**
+     * @brief Create a device-local buffer (capacity only, no upload).
+     *
+     * NOTE: Adds VK_BUFFER_USAGE_TRANSFER_DST_BIT automatically (since you will upload into it).
+     */
+    [[nodiscard]] GpuBuffer createDeviceLocalBufferEmpty(const VulkanContext& ctx,
+                                                         VkDeviceSize         capacity,
+                                                         VkBufferUsageFlags   usage,
+                                                         bool                 deviceAddress);
+
+    inline void createDeviceLocalBufferEmpty(const VulkanContext& ctx,
+                                             VkDeviceSize         capacity,
+                                             VkBufferUsageFlags   usage,
+                                             bool                 deviceAddress,
+                                             GpuBuffer&           out)
+    {
+        out = createDeviceLocalBufferEmpty(ctx, capacity, usage, deviceAddress);
+    }
+
+    // ============================================================================
+    // Barriers (use after recordUploadToDeviceLocalBuffer as needed)
+    // ============================================================================
+
+    /// Transfer-write -> vertex attribute read (vertex buffers)
+    void barrierTransferToVertexAttributeRead(VkCommandBuffer cmd);
+
+    /// Transfer-write -> index read (index buffers)
+    void barrierTransferToIndexRead(VkCommandBuffer cmd);
+
+    /// Transfer-write -> graphics shader read (UBO/SSBO read in VS/FS)
+    void barrierTransferToGraphicsShaderRead(VkCommandBuffer cmd);
+
+    /// Transfer-write -> ray tracing shader read (SSBO read in RT pipeline)
+    void barrierTransferToRtShaderRead(VkCommandBuffer cmd);
+
+    /**
+     * @brief Transfer-write -> acceleration structure build read (AS build inputs).
+     *
+     * Use this after uploading any buffer that will be consumed by vkCmdBuildAccelerationStructuresKHR
+     * or vkCmdBuildAccelerationStructuresIndirectKHR via:
+     * VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+     *
+     * Example buffers:
+     * - vertex/index buffers used for BLAS build input
+     * - instance buffers used for TLAS build input
+     */
+    void barrierTransferToAsBuildRead(VkCommandBuffer cmd);
+
+    /// AS build writes -> RT shader reads (TLAS/BLAS visibility for trace rays)
+    void barrierAsBuildToTrace(VkCommandBuffer cmd);
+
+    // ============================================================================
+    // Device address helpers
     // ============================================================================
 
     VkDeviceAddress bufferDeviceAddress(VkDevice device, VkBuffer buf) noexcept;
 
-    // Overload if your GpuBuffer type exists:
     VkDeviceAddress bufferDeviceAddress(VkDevice device, const GpuBuffer& buf) noexcept;
 
-    // VkDeviceAddress bufferDeviceAddress(const VulkanContext& ctx, VkBuffer buf);
-
     uint32_t findMemoryType(VkPhysicalDevice phys, uint32_t typeBits, VkMemoryPropertyFlags props) noexcept;
+
+    // ============================================================================
+    // Common fixed-function state helpers
+    // ============================================================================
 
     VkPipelineInputAssemblyStateCreateInfo makeInputAssembly(VkPrimitiveTopology topology);
 
@@ -57,102 +143,28 @@ namespace vkutil
     void setViewportAndScissor(VkCommandBuffer cmd, uint32_t width, uint32_t height);
 
     // ============================================================================
-    // One-time Command Buffer Utilities
+    // One-time Command Buffer Utilities (keep for non-frame work if you still use them)
     // ============================================================================
 
-    /**
-     * @brief Lightweight bundle storing resources required for a one-shot command recording.
-     *
-     * A `OneTimeCmd` struct holds:
-     * - command pool (transient, auto-destroyed)
-     * - command buffer (allocated from the pool)
-     * - queue + family index used to submit work
-     *
-     * This is used internally by `beginOneTimeCommands()` / `endOneTimeCommands()` or via
-     * the convenience `submitOneTimeCommands()` wrapper.
-     */
     struct OneTimeCmd
     {
-        VkDevice        device      = VK_NULL_HANDLE; ///< Vulkan device used for allocation.
-        VkCommandPool   pool        = VK_NULL_HANDLE; ///< Transient pool for this command buffer.
-        VkCommandBuffer cmd         = VK_NULL_HANDLE; ///< Primary command buffer.
-        VkQueue         queue       = VK_NULL_HANDLE; ///< Queue used for submission.
-        uint32_t        queueFamily = 0;              ///< Queue family index.
+        VkDevice        device      = VK_NULL_HANDLE;
+        VkCommandPool   pool        = VK_NULL_HANDLE;
+        VkCommandBuffer cmd         = VK_NULL_HANDLE;
+        VkQueue         queue       = VK_NULL_HANDLE;
+        uint32_t        queueFamily = 0;
     };
 
-    /**
-     * @brief Allocate & begin a transient, one-time submit command buffer.
-     *
-     * Creates a command pool with `VK_COMMAND_POOL_CREATE_TRANSIENT_BIT`,
-     * allocates a primary command buffer, and begins recording with
-     * `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT`.
-     *
-     * @param ctx Vulkan device + queue context.
-     * @return A valid `OneTimeCmd` on success; invalid handles if allocation fails.
-     *
-     * @warning Must be finished with `submitTransientCmd()` to submit & clean up.
-     */
     OneTimeCmd beginTransientCmd(const VulkanContext& ctx);
 
-    /**
-     * @brief End recording, submit to queue, wait, then destroy the pool/cmd.
-     *
-     * This finalizes the command buffer, submits it once, waits for fence,
-     * frees the command buffer and destroys the command pool.
-     *
-     * @param otc The handle returned by `beginTransientCmd()`.
-     */
     bool submitTransientCmd(const OneTimeCmd& otc) noexcept;
 
-    /**
-     * @brief One-call wrapper: begin → record(cmd) → end.
-     *
-     * Example:
-     * @code
-     * TransientCmd(ctx, [&](VkCommandBuffer cmd) {
-     *     vkCmdCopyBuffer(cmd, src, dst, 1, &region);
-     * });
-     * @endcode
-     *
-     * @param ctx Vulkan context for allocation & submission.
-     * @param record Lambda/function that records commands into the buffer.
-     * @return true if successfully submitted, false if allocation or recording failed.
-     */
     bool TransientCmd(const VulkanContext& ctx, const std::function<void(VkCommandBuffer)>& record);
 
     // ============================================================================
-    // Device-Local Buffer Upload Helpers (staged copy)
+    // Device-Local Buffer Upload Helpers (legacy transient path - keep for now)
     // ============================================================================
 
-    /**
-     * @brief Create a device-local GPU buffer with extra capacity, uploading only @p copySize bytes.
-     *
-     * This form supports buffers whose allocated size (`capacity`) is larger than the initial
-     * data payload (`copySize`). Used for growing vertex/index buffers without recreating on
-     * every small edit.
-     *
-     * Internally performs:
-     * 1. Create device-local buffer (`capacity` bytes)
-     * 2. Create staging buffer (`copySize` bytes)
-     * 3. Upload CPU → staging
-     * 4. Copy staging → device (one-time command)
-     *
-     * If @p deviceAddress is true, the buffer is created with device-address support:
-     * - Adds `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` to the final usage flags
-     * - Allocates memory with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`
-     *
-     * This is required for features that read buffer contents via device addresses
-     * (e.g., ray tracing acceleration structure build inputs).
-     *
-     * @param ctx           Vulkan device context (device, phys, queue).
-     * @param capacity      Total bytes allocated in the GPU buffer.
-     * @param usage         Buffer usage flags (VK_BUFFER_USAGE_*). `VK_BUFFER_USAGE_TRANSFER_DST_BIT`
-     *                      is added automatically.
-     * @param data          Pointer to CPU source data (must contain at least @p copySize bytes).
-     * @param copySize      Number of bytes to upload to the start of the buffer.
-     * @param deviceAddress If true, enable shader device address for this buffer.
-     * @return GpuBuffer handle. `valid()==false` if creation/upload failed.
-     */
     GpuBuffer createDeviceLocalBuffer(const VulkanContext& ctx,
                                       VkDeviceSize         capacity,
                                       VkBufferUsageFlags   usage,
@@ -160,27 +172,16 @@ namespace vkutil
                                       VkDeviceSize         copySize,
                                       bool                 deviceAddress = false);
 
-    /**
-     * @brief Update part of a device-local buffer via a transient staging buffer.
-     *
-     * This copies @p size bytes from CPU → staging → @p dst at offset @p dstOffset.
-     * The buffer must have been created with `VK_BUFFER_USAGE_TRANSFER_DST_BIT`.
-     *
-     * @param ctx       Vulkan context providing queue access.
-     * @param dst       The device-local buffer to update.
-     * @param dstOffset Destination byte offset inside @p dst.
-     * @param size      Number of bytes to copy.
-     * @param data      CPU source pointer (must be at least size).
-     */
     void updateDeviceLocalBuffer(const VulkanContext& ctx,
                                  const GpuBuffer&     dst,
                                  VkDeviceSize         dstOffset,
                                  VkDeviceSize         size,
                                  const void*          data);
 
-    /// Lightweight descriptor for a single graphics pipeline.
-    /// All pointers are non-owning; they must live at least until
-    /// vkCreateGraphicsPipelines returns.
+    // ============================================================================
+    // Pipeline helper
+    // ============================================================================
+
     struct GraphicsPipelineDesc
     {
         VkRenderPass     renderPass = VK_NULL_HANDLE;
@@ -199,150 +200,17 @@ namespace vkutil
         const VkPipelineDynamicStateCreateInfo*       dynamicState  = nullptr;
     };
 
-    /// Create a graphics pipeline from the descriptor.
-    /// Returns VK_NULL_HANDLE on failure.
     VkPipeline createGraphicsPipeline(VkDevice device, const GraphicsPipelineDesc& desc);
 
 } // namespace vkutil
 
-/// Debug utils
 namespace vkutil
 {
-    inline void setObjectName(VkDevice     device,
-                              VkObjectType type,
-                              uint64_t     objectHandle,
-                              const char*  baseName,
-                              int32_t      frameIndex = -1) noexcept
+    struct FrameUploadTrash
     {
-        if (!device || !objectHandle || !baseName)
-            return;
+        std::vector<GpuBuffer> staging;
+    };
 
-        auto fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-            vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
-
-        if (!fn)
-            return;
-
-        char nameBuf[128] = {};
-        if (frameIndex >= 0)
-            std::snprintf(nameBuf, sizeof(nameBuf), "%s [f%d]", baseName, frameIndex);
-        else
-            std::snprintf(nameBuf, sizeof(nameBuf), "%s", baseName);
-
-        VkDebugUtilsObjectNameInfoEXT info{};
-        info.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        info.objectType   = type;
-        info.objectHandle = objectHandle;
-        info.pObjectName  = nameBuf;
-
-        fn(device, &info);
-    }
-
-    // Convenience overloads
-    inline void name(VkDevice device, VkBuffer buffer, const char* baseName, int32_t frameIndex = -1) noexcept
-    {
-        setObjectName(device, VK_OBJECT_TYPE_BUFFER, uint64_t(buffer), baseName, frameIndex);
-    }
-
-    inline void name(VkDevice device, VkImage image, const char* baseName, int32_t frameIndex = -1) noexcept
-    {
-        setObjectName(device, VK_OBJECT_TYPE_IMAGE, uint64_t(image), baseName, frameIndex);
-    }
-
-    inline void name(VkDevice device, VkImageView view, const char* baseName, int32_t frameIndex = -1) noexcept
-    {
-        setObjectName(device, VK_OBJECT_TYPE_IMAGE_VIEW, uint64_t(view), baseName, frameIndex);
-    }
-
-    inline void name(VkDevice device, VkPipeline pipeline, const char* baseName, int32_t frameIndex = -1) noexcept
-    {
-        setObjectName(device, VK_OBJECT_TYPE_PIPELINE, uint64_t(pipeline), baseName, frameIndex);
-    }
-
-    inline void name(VkDevice device, VkDescriptorSet set, const char* baseName, int32_t frameIndex = -1) noexcept
-    {
-        setObjectName(device, VK_OBJECT_TYPE_DESCRIPTOR_SET, uint64_t(set), baseName, frameIndex);
-    }
-
-    inline void name(VkDevice device, VkCommandBuffer cmd, const char* baseName, int32_t frameIndex = -1) noexcept
-    {
-        setObjectName(device, VK_OBJECT_TYPE_COMMAND_BUFFER, uint64_t(cmd), baseName, frameIndex);
-    }
-
-    inline void name(VkDevice                   device,
-                     VkAccelerationStructureKHR as,
-                     const char*                baseName,
-                     int32_t                    frameIndex = -1) noexcept
-    {
-        setObjectName(device,
-                      VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
-                      uint64_t(as),
-                      baseName,
-                      frameIndex);
-    }
+    void              setFrameUploadTrash(FrameUploadTrash* trash) noexcept;
+    FrameUploadTrash* frameUploadTrash() noexcept;
 } // namespace vkutil
-
-#if !defined(NDEBUG)
-#define VKUTIL_DEBUG_NAMES 1
-#else
-#define VKUTIL_DEBUG_NAMES 0
-#endif
-
-#if VKUTIL_DEBUG_NAMES
-#define VKUTIL_NAME_BUFFER(device, buffer, name, ...) \
-    vkutil::name((device), (buffer), (name), ##__VA_ARGS__)
-
-#define VKUTIL_NAME_IMAGE(device, image, name, ...) \
-    vkutil::name((device), (image), (name), ##__VA_ARGS__)
-
-#define VKUTIL_NAME_IMAGE_VIEW(device, view, name, ...) \
-    vkutil::name((device), (view), (name), ##__VA_ARGS__)
-
-#define VKUTIL_NAME_PIPELINE(device, pipeline, name, ...) \
-    vkutil::name((device), (pipeline), (name), ##__VA_ARGS__)
-
-#define VKUTIL_NAME_DESC_SET(device, set, name, ...) \
-    vkutil::name((device), (set), (name), ##__VA_ARGS__)
-
-#define VKUTIL_NAME_CMD(device, cmd, name, ...) \
-    vkutil::name((device), (cmd), (name), ##__VA_ARGS__)
-
-#define VKUTIL_NAME_AS(device, as, name, ...) \
-    vkutil::name((device), (as), (name), ##__VA_ARGS__)
-#else
-#define VKUTIL_NAME_BUFFER(...) \
-    do                          \
-    {                           \
-    }                           \
-    while (0)
-#define VKUTIL_NAME_IMAGE(...) \
-    do                         \
-    {                          \
-    }                          \
-    while (0)
-#define VKUTIL_NAME_IMAGE_VIEW(...) \
-    do                              \
-    {                               \
-    }                               \
-    while (0)
-#define VKUTIL_NAME_PIPELINE(...) \
-    do                            \
-    {                             \
-    }                             \
-    while (0)
-#define VKUTIL_NAME_DESC_SET(...) \
-    do                            \
-    {                             \
-    }                             \
-    while (0)
-#define VKUTIL_NAME_CMD(...) \
-    do                       \
-    {                        \
-    }                        \
-    while (0)
-#define VKUTIL_NAME_AS(...) \
-    do                      \
-    {                       \
-    }                       \
-    while (0)
-#endif

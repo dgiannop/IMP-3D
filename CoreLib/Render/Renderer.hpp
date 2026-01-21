@@ -15,6 +15,7 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
+#include "DeferredAsDestroy.hpp"
 #include "DescriptorPool.hpp"
 #include "DescriptorSet.hpp"
 #include "DescriptorSetLayout.hpp"
@@ -24,6 +25,7 @@
 #include "OverlayHandler.hpp"
 #include "RtPipeline.hpp"
 #include "RtSbt.hpp"
+#include "VkUtilities.hpp" // for FrameUploadTrash
 #include "VulkanContext.hpp"
 
 class Scene;
@@ -90,14 +92,9 @@ public:
     // ------------------------------------------------------------
 
     void updateMaterialTextureTable(const TextureHandler& textureHandler, uint32_t frameIndex);
-    void render(VkCommandBuffer cmd, Viewport* vp, Scene* scene, uint32_t frameIndex);
+    void renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
+    void render(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
     void drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays);
-
-    // ------------------------------------------------------------
-    // RT related
-    // ------------------------------------------------------------
-
-    void renderPrePass(Viewport* vp, VkCommandBuffer cmd, Scene* scene, uint32_t frameIndex);
 
     // ------------------------------------------------------------
     // Internal structs (host-side)
@@ -420,4 +417,7 @@ private:
     SysMonitor    m_rtTlasChangeMonitor;
 
     std::unordered_set<class SysMesh*> m_rtTlasLinkedMeshes;
+
+    DeferredAsDestroy m_deferredBlasDestroy = {};
+    DeferredAsDestroy m_deferredTlasDestroy = {};
 };
