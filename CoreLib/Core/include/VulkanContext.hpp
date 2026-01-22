@@ -47,9 +47,6 @@ struct VulkanRtDispatch
  *  - Enqueued callables may capture state. Ensure captured objects outlive the
  *    eventual flush().
  */
-#include <functional> // still
-// ...
-
 struct DeferredDeletion
 {
     std::vector<std::vector<std::move_only_function<void()>>> perFrame;
@@ -94,6 +91,9 @@ struct RenderFrameContext
     VkCommandBuffer   cmd        = VK_NULL_HANDLE;
     uint32_t          frameIndex = 0;
     DeferredDeletion* deferred   = nullptr; ///< points to per-viewport deferred queue (e.g. ViewportSwapchain::deferred)
+    // True when beginFrame() waited the fence for this frameIndex
+    // so it is SAFE to destroy resources deferred to this frame slot.
+    bool frameFenceWaited = false;
 };
 
 /**

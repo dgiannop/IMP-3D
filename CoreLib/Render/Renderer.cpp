@@ -68,17 +68,17 @@ namespace
 
 } // namespace
 
-namespace
-{
-    struct AsLeak
-    {
-        VkAccelerationStructureKHR as = VK_NULL_HANDLE;
-        GpuBuffer                  backing; // holds the AS storage buffer alive
-    };
+// namespace
+// {
+//     struct AsLeak
+//     {
+//         VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+//         GpuBuffer                  backing; // holds the AS storage buffer alive
+//     };
 
-    static std::vector<AsLeak> s_leakedBlas;
-    static std::vector<AsLeak> s_leakedTlas;
-} // namespace
+//     static std::vector<AsLeak> s_leakedBlas;
+//     static std::vector<AsLeak> s_leakedTlas;
+// } // namespace
 
 //==================================================================
 // RtViewportState destruction
@@ -198,38 +198,41 @@ void Renderer::destroySwapchainResources() noexcept
     destroyPipelines();
 }
 
-namespace
-{
-    static void cleanupLeakedAs(const VulkanContext& ctx) noexcept
-    {
-        if (!ctx.device || !ctx.rtDispatch)
-            return;
+// namespace
+// {
+//     static void cleanupLeakedAs(const VulkanContext& ctx) noexcept
+//     {
+//         if (!ctx.device || !ctx.rtDispatch)
+//             return;
 
-        // GPU must be idle before we destroy these.
-        vkDeviceWaitIdle(ctx.device);
+//         // GPU must be idle before we destroy these.
+//         vkDeviceWaitIdle(ctx.device);
 
-        auto destroyList = [&](std::vector<AsLeak>& list) noexcept {
-            for (AsLeak& L : list)
-            {
-                if (L.as != VK_NULL_HANDLE)
-                {
-                    ctx.rtDispatch->vkDestroyAccelerationStructureKHR(ctx.device, L.as, nullptr);
-                    L.as = VK_NULL_HANDLE;
-                }
+//         auto destroyList = [&](std::vector<AsLeak>& list) noexcept {
+//             for (AsLeak& L : list)
+//             {
+//                 if (L.as != VK_NULL_HANDLE)
+//                 {
+//                     ctx.rtDispatch->vkDestroyAccelerationStructureKHR(ctx.device, L.as, nullptr);
+//                     L.as = VK_NULL_HANDLE;
+//                 }
 
-                // Backing buffer must be destroyed after AS handle is destroyed
-                L.backing.destroy();
-            }
-            list.clear();
-        };
+//                 // Backing buffer must be destroyed after AS handle is destroyed
+//                 L.backing.destroy();
+//             }
+//             list.clear();
+//         };
 
-        destroyList(s_leakedBlas);
-        destroyList(s_leakedTlas);
-    }
-} // namespace
+//         destroyList(s_leakedBlas);
+//         destroyList(s_leakedTlas);
+//     }
+// } // namespace
 
 void Renderer::shutdown() noexcept
 {
+    if (m_ctx.device)
+        vkDeviceWaitIdle(m_ctx.device);
+
     destroySwapchainResources();
 
     // Per-viewport MVP state
@@ -267,7 +270,7 @@ void Renderer::shutdown() noexcept
     m_rtPool.destroy();
     m_rtSetLayout.destroy();
 
-    cleanupLeakedAs(m_ctx);
+    // cleanupLeakedAs(m_ctx);
 
     if (m_rtSampler != VK_NULL_HANDLE && m_ctx.device)
     {
@@ -297,7 +300,8 @@ void Renderer::shutdown() noexcept
     m_materialCount      = 0;
     m_curMaterialCounter = 0;
     m_framesInFlight     = 0;
-    m_ctx                = {};
+
+    m_ctx = {};
 
     m_rtTlasLinkedMeshes.clear();
     m_rtTlasChangeCounter.reset();
@@ -1474,24 +1478,50 @@ bool Renderer::ensureRtScratch(VkDeviceSize bytes) noexcept
 // RT AS teardown (UNCHANGED from your current file)
 //==================================================================
 
-void Renderer::destroyRtBlasFor(SceneMesh* sm) noexcept
+void Renderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept
 {
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch)
+        return;
+
+    if (!sm)
+        return;
+
     auto it = m_rtBlas.find(sm);
     if (it == m_rtBlas.end())
         return;
 
     RtBlas& b = it->second;
 
-    // vkDeviceWaitIdle(m_ctx.device);
-
-    if (b.as != VK_NULL_HANDLE)
+    if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
     {
-        m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
-        b.as = VK_NULL_HANDLE;
+        if (fc.deferred)
+        {
+            VkDevice device = m_ctx.device;
+            auto*    rt     = m_ctx.rtDispatch;
+
+            VkAccelerationStructureKHR oldAs      = b.as;
+            GpuBuffer                  oldBacking = std::move(b.asBuffer);
+
+            fc.deferred->enqueue(fc.frameIndex,
+                                 [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
+                                     if (rt && device && oldAs != VK_NULL_HANDLE)
+                                         rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
+                                     backing.destroy();
+                                 });
+        }
+        else
+        {
+            // Fallback (shouldn't happen in your normal flow)
+            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
+            b.asBuffer.destroy();
+        }
+
+        b.as       = VK_NULL_HANDLE;
+        b.asBuffer = {};
     }
 
-    b.asBuffer.destroy();
-    b.address = 0;
+    b.address  = 0;
+    b.buildKey = 0;
 
     m_rtBlas.erase(it);
 }
@@ -1590,7 +1620,7 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
         if (!rtReady(m_ctx))
             return;
 
-        renderRayTrace(vp, fc.cmd, scene, fc.frameIndex);
+        renderRayTrace(vp, scene, fc);
     }
 }
 
@@ -2085,18 +2115,18 @@ void Renderer::writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
 // RT dispatch (remove redundant gpu->update(cmd) here; prepass does it)
 //==================================================================
 
-void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, uint32_t frameIndex)
+void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 {
     if (!rtReady(m_ctx) || !m_ctx.rtDispatch)
         return;
 
-    if (!cmd || !vp || !scene)
+    if (!fc.cmd || !vp || !scene)
         return;
 
     if (!m_rtPipeline.valid() || !m_rtSbt.buffer())
         return;
 
-    if (frameIndex >= m_framesInFlight)
+    if (fc.frameIndex >= m_framesInFlight)
         return;
 
     RtViewportState& rtv = ensureRtViewportState(vp);
@@ -2109,10 +2139,10 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
     if (!ensureRtOutputImages(rtv, w, h))
         return;
 
-    if (frameIndex >= rtv.images.size() || frameIndex >= rtv.cameraBuffers.size())
+    if (fc.frameIndex >= rtv.images.size() || fc.frameIndex >= rtv.cameraBuffers.size())
         return;
 
-    RtImagePerFrame& out = rtv.images[frameIndex];
+    RtImagePerFrame& out = rtv.images[fc.frameIndex];
     if (!out.image || !out.view)
         return;
 
@@ -2129,7 +2159,7 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
 
         if (out.needsInit)
         {
-            imageBarrier(cmd,
+            imageBarrier(fc.cmd,
                          out.image,
                          VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_GENERAL,
@@ -2142,7 +2172,7 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
         }
         else
         {
-            imageBarrier(cmd,
+            imageBarrier(fc.cmd,
                          out.image,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_IMAGE_LAYOUT_GENERAL,
@@ -2152,9 +2182,9 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
                          VK_PIPELINE_STAGE_TRANSFER_BIT);
         }
 
-        vkCmdClearColorImage(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+        vkCmdClearColorImage(fc.cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
 
-        imageBarrier(cmd,
+        imageBarrier(fc.cmd,
                      out.image,
                      VK_IMAGE_LAYOUT_GENERAL,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2178,18 +2208,18 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
         if (!geo.valid())
             continue;
 
-        if (!ensureMeshBlas(sm, geo, cmd))
+        if (!ensureMeshBlas(vp, sm, geo, fc))
             continue;
     }
 
-    if (!ensureSceneTlas(scene, cmd, frameIndex))
+    if (!ensureSceneTlas(vp, scene, fc))
         return;
 
-    if (frameIndex >= m_rtTlasFrames.size() || m_rtTlasFrames[frameIndex].as == VK_NULL_HANDLE)
+    if (fc.frameIndex >= m_rtTlasFrames.size() || m_rtTlasFrames[fc.frameIndex].as == VK_NULL_HANDLE)
         return;
 
     // Bind TLAS into THIS viewport’s RT set for this frame
-    writeRtTlasDescriptor(vp, frameIndex);
+    writeRtTlasDescriptor(vp, fc.frameIndex);
 
     // Upload per-instance shader data
     {
@@ -2239,13 +2269,13 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
         if (!instData.empty())
         {
             const VkDeviceSize bytes = VkDeviceSize(instData.size() * sizeof(RtInstanceData));
-            rtv.instanceDataBuffers[frameIndex].upload(instData.data(), bytes);
+            rtv.instanceDataBuffers[fc.frameIndex].upload(instData.data(), bytes);
 
-            rtv.sets[frameIndex].writeStorageBuffer(m_ctx.device,
-                                                    4,
-                                                    rtv.instanceDataBuffers[frameIndex].buffer(),
-                                                    bytes,
-                                                    0);
+            rtv.sets[fc.frameIndex].writeStorageBuffer(m_ctx.device,
+                                                       4,
+                                                       rtv.instanceDataBuffers[fc.frameIndex].buffer(),
+                                                       bytes,
+                                                       0);
         }
     }
 
@@ -2254,11 +2284,11 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
         RtCameraUBO cam = {};
         cam.invViewProj = glm::inverse(vp->projection() * vp->view());
         cam.camPos      = glm::vec4(vp->cameraPosition(), 1.0f);
-        rtv.cameraBuffers[frameIndex].upload(&cam, sizeof(cam));
+        rtv.cameraBuffers[fc.frameIndex].upload(&cam, sizeof(cam));
     }
 
     // Transition for raygen writes
-    imageBarrier(cmd,
+    imageBarrier(fc.cmd,
                  out.image,
                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_IMAGE_LAYOUT_GENERAL,
@@ -2267,10 +2297,10 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                  VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
+    vkCmdBindPipeline(fc.cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
 
-    VkDescriptorSet set0 = rtv.sets[frameIndex].set();
-    vkCmdBindDescriptorSets(cmd,
+    VkDescriptorSet set0 = rtv.sets[fc.frameIndex].set();
+    vkCmdBindDescriptorSets(fc.cmd,
                             VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                             m_rtPipeline.layout(),
                             0,
@@ -2285,7 +2315,7 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
     VkStridedDeviceAddressRegionKHR call = {};
     m_rtSbt.regions(m_ctx, rgen, miss, hit, call);
 
-    m_ctx.rtDispatch->vkCmdTraceRaysKHR(cmd,
+    m_ctx.rtDispatch->vkCmdTraceRaysKHR(fc.cmd,
                                         &rgen,
                                         &miss,
                                         &hit,
@@ -2295,7 +2325,7 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
                                         1);
 
     // Transition back for present sampling
-    imageBarrier(cmd,
+    imageBarrier(fc.cmd,
                  out.image,
                  VK_IMAGE_LAYOUT_GENERAL,
                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2305,9 +2335,9 @@ void Renderer::renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, u
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 }
 
-bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkCommandBuffer cmd) noexcept
+bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept
 {
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !sm || !cmd)
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !sm || !fc.cmd)
         return false;
 
     if (!geo.valid() || geo.buildIndexCount == 0 || geo.buildPosCount == 0)
@@ -2338,10 +2368,31 @@ bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkComman
     // Tear down existing BLAS
     if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
     {
-        AsLeak leak{};
-        leak.as      = b.as;
-        leak.backing = std::move(b.asBuffer);
-        s_leakedBlas.push_back(std::move(leak));
+        if (fc.deferred)
+        {
+            VkDevice device = m_ctx.device;
+            auto*    rt     = m_ctx.rtDispatch;
+
+            VkAccelerationStructureKHR oldAs      = b.as;
+            GpuBuffer                  oldBacking = std::move(b.asBuffer);
+
+            fc.deferred->enqueue(fc.frameIndex,
+                                 [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
+                                     if (rt && device && oldAs != VK_NULL_HANDLE)
+                                         rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
+
+                                     // backing must die after AS handle is destroyed
+                                     backing.destroy();
+                                 });
+        }
+        else
+        {
+            // Fallback: safest is to wait idle (or leak) – but ideally deferred is always present
+            // vkDeviceWaitIdle(m_ctx.device);
+            if (m_ctx.rtDispatch && m_ctx.device && b.as)
+                m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
+            b.asBuffer.destroy();
+        }
 
         b.as       = VK_NULL_HANDLE;
         b.asBuffer = {};
@@ -2430,7 +2481,7 @@ bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkComman
     range.primitiveCount                                      = primCount;
     const VkAccelerationStructureBuildRangeInfoKHR* pRanges[] = {&range};
 
-    m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, pRanges);
+    m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
 
     // Barrier: BLAS build writes -> RT reads
     VkMemoryBarrier mb{};
@@ -2438,7 +2489,7 @@ bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkComman
     mb.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
     mb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 
-    vkCmdPipelineBarrier(cmd,
+    vkCmdPipelineBarrier(fc.cmd,
                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                          0,
@@ -2459,15 +2510,15 @@ bool Renderer::ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkComman
     return (b.address != 0);
 }
 
-bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frameIndex) noexcept
+bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept
 {
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !scene || !cmd)
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !scene || !fc.cmd)
         return false;
 
-    if (frameIndex >= m_rtTlasFrames.size())
+    if (fc.frameIndex >= m_rtTlasFrames.size())
         return false;
 
-    RtTlasFrame& t = m_rtTlasFrames[frameIndex];
+    RtTlasFrame& t = m_rtTlasFrames[fc.frameIndex];
 
     // Use your change counter as the TLAS rebuild key.
     uint64_t key = m_rtTlasChangeCounter ? m_rtTlasChangeCounter->value() : 1ull;
@@ -2531,7 +2582,7 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     if (instances.empty())
     {
         // No geometry: destroy TLAS if it exists.
-        destroyRtTlasFrame(frameIndex, false);
+        destroyRtTlasFrame(fc.frameIndex, false);
         t.buildKey = key;
         return true;
     }
@@ -2575,7 +2626,7 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     // Copy staging -> device-local
     VkBufferCopy cpy{};
     cpy.size = instanceBytes;
-    vkCmdCopyBuffer(cmd, t.instanceStaging.buffer(), t.instanceBuffer.buffer(), 1, &cpy);
+    vkCmdCopyBuffer(fc.cmd, t.instanceStaging.buffer(), t.instanceBuffer.buffer(), 1, &cpy);
 
     // Barrier: transfer write -> AS build read
     VkMemoryBarrier mb0{};
@@ -2583,7 +2634,7 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     mb0.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     mb0.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 
-    vkCmdPipelineBarrier(cmd,
+    vkCmdPipelineBarrier(fc.cmd,
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                          0,
@@ -2637,10 +2688,27 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
         // Destroy old TLAS
         if (t.as != VK_NULL_HANDLE || t.buffer.valid())
         {
-            AsLeak leak{};
-            leak.as      = t.as;
-            leak.backing = std::move(t.buffer);
-            s_leakedTlas.push_back(std::move(leak));
+            if (fc.deferred)
+            {
+                VkDevice device = m_ctx.device;
+                auto*    rt     = m_ctx.rtDispatch;
+
+                VkAccelerationStructureKHR oldAs      = t.as;
+                GpuBuffer                  oldBacking = std::move(t.buffer);
+
+                fc.deferred->enqueue(fc.frameIndex,
+                                     [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
+                                         if (rt && device && oldAs != VK_NULL_HANDLE)
+                                             rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
+                                         backing.destroy();
+                                     });
+            }
+            else
+            {
+                if (m_ctx.rtDispatch && m_ctx.device && t.as)
+                    m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
+                t.buffer.destroy();
+            }
 
             t.as     = VK_NULL_HANDLE;
             t.buffer = {};
@@ -2680,7 +2748,7 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     range.primitiveCount                                      = primCount;
     const VkAccelerationStructureBuildRangeInfoKHR* pRanges[] = {&range};
 
-    m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, pRanges);
+    m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
 
     // Barrier: TLAS build writes -> RT reads
     VkMemoryBarrier mb1{};
@@ -2688,7 +2756,7 @@ bool Renderer::ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frame
     mb1.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
     mb1.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 
-    vkCmdPipelineBarrier(cmd,
+    vkCmdPipelineBarrier(fc.cmd,
                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                          0,
@@ -2846,9 +2914,8 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
         if (!pipeline || indexCount == 0)
             return;
 
-        vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
-
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
         pushPC(sm, selColorHidden);
         vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
     };
@@ -2857,9 +2924,8 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
         if (!pipeline || indexCount == 0)
             return;
 
-        vkCmdSetDepthBias(cmd, -1.0f, 0.0f, -1.0f);
-
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdSetDepthBias(cmd, -1.0f, 0.0f, -1.0f);
         pushPC(sm, selColorVisible);
         vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
     };

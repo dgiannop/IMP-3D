@@ -15,7 +15,6 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
-#include "DeferredAsDestroy.hpp"
 #include "DescriptorPool.hpp"
 #include "DescriptorSet.hpp"
 #include "DescriptorSetLayout.hpp"
@@ -25,7 +24,6 @@
 #include "OverlayHandler.hpp"
 #include "RtPipeline.hpp"
 #include "RtSbt.hpp"
-#include "VkUtilities.hpp" // for FrameUploadTrash
 #include "VulkanContext.hpp"
 
 class Scene;
@@ -262,18 +260,18 @@ private:
     bool createRtPresentPipeline(VkRenderPass rp);
     void destroyRtPresentPipeline() noexcept;
 
-    bool ensureSceneTlas(Scene* scene, VkCommandBuffer cmd, uint32_t frameIndex) noexcept;
+    bool ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept;
     void writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept;
 
-    bool ensureMeshBlas(SceneMesh* sm, const RtMeshGeometry& geo, VkCommandBuffer cmd) noexcept;
+    bool ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept;
 
-    void destroyRtBlasFor(SceneMesh* sm) noexcept;
+    void destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept;
     void destroyAllRtBlas() noexcept;
 
     void destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffers) noexcept;
     void destroyAllRtTlasFrames() noexcept;
 
-    void renderRayTrace(Viewport* vp, VkCommandBuffer cmd, Scene* scene, uint32_t frameIndex);
+    void renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
 
     RtMeshGeometry selectRtGeometry(SceneMesh* sm) noexcept;
 
@@ -417,7 +415,4 @@ private:
     SysMonitor    m_rtTlasChangeMonitor;
 
     std::unordered_set<class SysMesh*> m_rtTlasLinkedMeshes;
-
-    DeferredAsDestroy m_deferredBlasDestroy = {};
-    DeferredAsDestroy m_deferredTlasDestroy = {};
 };
