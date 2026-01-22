@@ -242,6 +242,9 @@ private:
         std::vector<GpuBuffer>       instanceDataBuffers; ///< per-frame instance SSBO (binding=4)
         std::vector<RtImagePerFrame> images;              ///< per-frame RT output image + view
 
+        std::vector<GpuBuffer>    scratchBuffers; ///< per-frame RT scratch (AS build)
+        std::vector<VkDeviceSize> scratchSizes;   ///< per-frame scratch capacity (bytes)
+
         uint32_t cachedW = 0;
         uint32_t cachedH = 0;
 
@@ -275,7 +278,7 @@ private:
 
     RtMeshGeometry selectRtGeometry(SceneMesh* sm) noexcept;
 
-    bool ensureRtScratch(VkDeviceSize bytes) noexcept;
+    bool ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
 
 private:
     // ------------------------------------------------------------
@@ -339,8 +342,8 @@ private:
     std::unordered_map<Viewport*, RtViewportState> m_rtViewports;
 
     // RT scratch reused for BLAS/TLAS builds
-    GpuBuffer    m_rtScratch     = {};
-    VkDeviceSize m_rtScratchSize = 0;
+    // GpuBuffer    m_rtScratch     = {};
+    // VkDeviceSize m_rtScratchSize = 0;
 
     // ------------------------------------------------------------
     // Descriptors (raster)

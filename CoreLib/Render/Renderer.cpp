@@ -94,6 +94,12 @@ void Renderer::RtViewportState::destroyDeviceResources(const VulkanContext& ctx)
         b.destroy();
     instanceDataBuffers.clear();
 
+    // NEW: per-viewport scratch
+    for (GpuBuffer& b : scratchBuffers)
+        b.destroy();
+    scratchBuffers.clear();
+    scratchSizes.clear();
+
     if (ctx.device)
     {
         VkDevice device = ctx.device;
@@ -264,13 +270,10 @@ void Renderer::shutdown() noexcept
     m_rtSbt.destroy();
     m_rtPipeline.destroy();
 
-    m_rtScratch.destroy();
-    m_rtScratchSize = 0;
+    // REMOVED: m_rtScratch + m_rtScratchSize
 
     m_rtPool.destroy();
     m_rtSetLayout.destroy();
-
-    // cleanupLeakedAs(m_ctx);
 
     if (m_rtSampler != VK_NULL_HANDLE && m_ctx.device)
     {
@@ -529,6 +532,10 @@ Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp)
     st.cameraBuffers.resize(m_framesInFlight);
     st.instanceDataBuffers.resize(m_framesInFlight);
     st.images.resize(m_framesInFlight);
+
+    // NEW
+    st.scratchBuffers.resize(m_framesInFlight);
+    st.scratchSizes.resize(m_framesInFlight, 0);
 
     for (uint32_t i = 0; i < m_framesInFlight; ++i)
     {
@@ -1445,32 +1452,70 @@ bool Renderer::initRayTracingResources()
 // RT scratch
 //==================================================================
 
-bool Renderer::ensureRtScratch(VkDeviceSize bytes) noexcept
+bool Renderer::ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept
 {
-    if (!rtReady(m_ctx) || !m_ctx.device)
+    if (!rtReady(m_ctx) || !m_ctx.device || !vp)
         return false;
 
     if (bytes == 0)
         return false;
 
-    if (m_rtScratch.valid() && m_rtScratch.size() >= bytes)
-        return true;
-
-    m_rtScratch.destroy();
-    m_rtScratchSize = 0;
-
-    m_rtScratch.create(m_ctx.device,
-                       m_ctx.physicalDevice,
-                       bytes,
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                       false,
-                       true);
-
-    if (!m_rtScratch.valid())
+    if (fc.frameIndex >= m_framesInFlight)
         return false;
 
-    m_rtScratchSize = bytes;
+    RtViewportState& rts = ensureRtViewportState(vp);
+
+    if (rts.scratchBuffers.size() != m_framesInFlight)
+    {
+        rts.scratchBuffers.resize(m_framesInFlight);
+        rts.scratchSizes.resize(m_framesInFlight, 0);
+    }
+
+    GpuBuffer&    scratch = rts.scratchBuffers[fc.frameIndex];
+    VkDeviceSize& cap     = rts.scratchSizes[fc.frameIndex];
+
+    // Vulkan requires scratch address alignment. We'll allocate extra so we can align the address safely.
+    const VkDeviceSize align =
+        (m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment != 0)
+            ? VkDeviceSize(m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment)
+            : VkDeviceSize(256);
+
+    const VkDeviceSize want = bytes + align;
+
+    if (scratch.valid() && cap >= want)
+        return true;
+
+    // If replacing an existing scratch buffer, defer destruction to this viewport’s per-frame queue.
+    if (scratch.valid())
+    {
+        if (fc.deferred)
+        {
+            GpuBuffer old = std::move(scratch);
+            cap           = 0;
+
+            fc.deferred->enqueue(fc.frameIndex, [buf = std::move(old)]() mutable {
+                buf.destroy();
+            });
+        }
+        else
+        {
+            scratch.destroy();
+            cap = 0;
+        }
+    }
+
+    scratch.create(m_ctx.device,
+                   m_ctx.physicalDevice,
+                   want,
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                   false,
+                   true);
+
+    if (!scratch.valid())
+        return false;
+
+    cap = want;
     return true;
 }
 
@@ -1492,38 +1537,57 @@ void Renderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noe
 
     RtBlas& b = it->second;
 
-    if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
+    // Nothing to destroy
+    if (b.as == VK_NULL_HANDLE && !b.asBuffer.valid())
     {
-        if (fc.deferred)
-        {
-            VkDevice device = m_ctx.device;
-            auto*    rt     = m_ctx.rtDispatch;
-
-            VkAccelerationStructureKHR oldAs      = b.as;
-            GpuBuffer                  oldBacking = std::move(b.asBuffer);
-
-            fc.deferred->enqueue(fc.frameIndex,
-                                 [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
-                                     if (rt && device && oldAs != VK_NULL_HANDLE)
-                                         rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
-                                     backing.destroy();
-                                 });
-        }
-        else
-        {
-            // Fallback (shouldn't happen in your normal flow)
-            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
-            b.asBuffer.destroy();
-        }
-
-        b.as       = VK_NULL_HANDLE;
-        b.asBuffer = {};
+        m_rtBlas.erase(it);
+        return;
     }
 
-    b.address  = 0;
-    b.buildKey = 0;
+    // Move resources out first so analyzers see a clear ownership transfer.
+    VkAccelerationStructureKHR oldAs      = b.as;
+    GpuBuffer                  oldBacking = std::move(b.asBuffer);
 
-    m_rtBlas.erase(it);
+    // Clear the live entry immediately after moving out.
+    // From here on, this RtBlas no longer owns the AS/backing buffer.
+    b.as       = VK_NULL_HANDLE;
+    b.asBuffer = {};
+
+    b.address       = 0;
+    b.buildKey      = 0;
+    b.posBuffer     = VK_NULL_HANDLE;
+    b.posCount      = 0;
+    b.idxBuffer     = VK_NULL_HANDLE;
+    b.idxCount      = 0;
+    b.subdivLevel   = 0;
+    b.topoCounter   = 0;
+    b.deformCounter = 0;
+
+    if (fc.deferred)
+    {
+        VkDevice device = m_ctx.device;
+        auto*    rt     = m_ctx.rtDispatch;
+
+        fc.deferred->enqueue(
+            fc.frameIndex,
+            [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
+                if (rt && device && oldAs != VK_NULL_HANDLE)
+                    rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
+
+                backing.destroy();
+            });
+    }
+    else
+    {
+        // Fallback (ideally shouldn't happen in your normal flow)
+        if (m_ctx.rtDispatch && m_ctx.device && oldAs != VK_NULL_HANDLE)
+            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, oldAs, nullptr);
+
+        oldBacking.destroy();
+    }
+
+    // Remove entry from map now that resources have been scheduled/freed.
+    m_rtBlas.erase(it); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 void Renderer::destroyAllRtBlas() noexcept
@@ -2335,18 +2399,26 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 }
 
-bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept
+bool Renderer::ensureMeshBlas(Viewport*                 vp,
+                              SceneMesh*                sm,
+                              const RtMeshGeometry&     geo,
+                              const RenderFrameContext& fc) noexcept
 {
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !sm || !fc.cmd)
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !vp || !sm || !fc.cmd)
         return false;
 
     if (!geo.valid() || geo.buildIndexCount == 0 || geo.buildPosCount == 0)
         return false;
 
+    if (fc.frameIndex >= m_framesInFlight)
+        return false;
+
+    // ------------------------------------------------------------
     // Build key: topology+deform counters + geometry sizes.
-    // If you have better mesh/gpu counters, replace this. This works with SysMesh counters.
+    // ------------------------------------------------------------
     uint64_t topo   = 0;
     uint64_t deform = 0;
+
     if (sm->sysMesh())
     {
         if (sm->sysMesh()->topology_counter())
@@ -2355,7 +2427,6 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry&
             deform = sm->sysMesh()->deform_counter()->value();
     }
 
-    // Mix into a cheap key.
     uint64_t key = topo;
     key ^= (deform + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2));
     key ^= (uint64_t(geo.buildPosCount) << 32) ^ uint64_t(geo.buildIndexCount);
@@ -2365,7 +2436,9 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry&
     if (!kRtRebuildAsEveryFrame && b.as != VK_NULL_HANDLE && b.buildKey == key)
         return true;
 
-    // Tear down existing BLAS
+    // ------------------------------------------------------------
+    // Tear down existing BLAS (deferred to the *viewport* frame slot)
+    // ------------------------------------------------------------
     if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
     {
         if (fc.deferred)
@@ -2381,46 +2454,46 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry&
                                      if (rt && device && oldAs != VK_NULL_HANDLE)
                                          rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
 
-                                     // backing must die after AS handle is destroyed
                                      backing.destroy();
                                  });
         }
         else
         {
-            // Fallback: safest is to wait idle (or leak) – but ideally deferred is always present
-            // vkDeviceWaitIdle(m_ctx.device);
-            if (m_ctx.rtDispatch && m_ctx.device && b.as)
+            if (m_ctx.rtDispatch && m_ctx.device && b.as != VK_NULL_HANDLE)
                 m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
+
             b.asBuffer.destroy();
         }
 
-        b.as       = VK_NULL_HANDLE;
+        b.as       = VK_NULL_HANDLE; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
         b.asBuffer = {};
     }
 
     b.address  = 0;
     b.buildKey = 0;
 
-    // Geometry description
+    // ------------------------------------------------------------
+    // Geometry device addresses
+    // ------------------------------------------------------------
     const VkDeviceAddress vAdr = vkutil::bufferDeviceAddress(m_ctx.device, geo.buildPosBuffer);
     const VkDeviceAddress iAdr = vkutil::bufferDeviceAddress(m_ctx.device, geo.buildIndexBuffer);
 
     if (vAdr == 0 || iAdr == 0)
         return false;
 
-    VkAccelerationStructureGeometryKHR asGeom{};
-    asGeom.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    asGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    asGeom.flags        = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    VkAccelerationStructureGeometryKHR asGeom = {};
+    asGeom.sType                              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    asGeom.geometryType                       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    asGeom.flags                              = VK_GEOMETRY_OPAQUE_BIT_KHR;
 
-    VkAccelerationStructureGeometryTrianglesDataKHR tri{};
-    tri.sType                    = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-    tri.vertexFormat             = VK_FORMAT_R32G32B32_SFLOAT;
-    tri.vertexData.deviceAddress = vAdr;
-    tri.vertexStride             = sizeof(glm::vec3); // your unique/shared buffers are vec3 tightly packed
-    tri.maxVertex                = geo.buildPosCount ? (geo.buildPosCount - 1) : 0;
-    tri.indexType                = VK_INDEX_TYPE_UINT32;
-    tri.indexData.deviceAddress  = iAdr;
+    VkAccelerationStructureGeometryTrianglesDataKHR tri = {};
+    tri.sType                                           = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    tri.vertexFormat                                    = VK_FORMAT_R32G32B32_SFLOAT;
+    tri.vertexData.deviceAddress                        = vAdr;
+    tri.vertexStride                                    = sizeof(glm::vec3);
+    tri.maxVertex                                       = geo.buildPosCount ? (geo.buildPosCount - 1) : 0;
+    tri.indexType                                       = VK_INDEX_TYPE_UINT32;
+    tri.indexData.deviceAddress                         = iAdr;
 
     asGeom.geometry.triangles = tri;
 
@@ -2428,27 +2501,33 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry&
     if (primCount == 0)
         return false;
 
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
-    buildInfo.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-    buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    buildInfo.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    buildInfo.geometryCount = 1;
-    buildInfo.pGeometries   = &asGeom;
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {};
+    buildInfo.sType                                       = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type                                        = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags                                       = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.mode                                        = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.geometryCount                               = 1;
+    buildInfo.pGeometries                                 = &asGeom;
 
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
-    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {};
+    sizeInfo.sType                                    = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
 
-    m_ctx.rtDispatch->vkGetAccelerationStructureBuildSizesKHR(m_ctx.device,
-                                                              VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                                              &buildInfo,
-                                                              &primCount,
-                                                              &sizeInfo);
+    auto* rt = m_ctx.rtDispatch;
+    if (!rt)
+        return false;
+
+    rt->vkGetAccelerationStructureBuildSizesKHR(m_ctx.device,
+                                                VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                                &buildInfo,
+                                                &primCount,
+                                                &sizeInfo);
 
     if (sizeInfo.accelerationStructureSize == 0 || sizeInfo.buildScratchSize == 0)
         return false;
 
+    // ------------------------------------------------------------
     // Create buffer backing the BLAS
+    // ------------------------------------------------------------
     b.asBuffer.create(m_ctx.device,
                       m_ctx.physicalDevice,
                       sizeInfo.accelerationStructureSize,
@@ -2461,33 +2540,49 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry&
     if (!b.asBuffer.valid())
         return false;
 
-    VkAccelerationStructureCreateInfoKHR asci{};
-    asci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-    asci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    asci.size   = sizeInfo.accelerationStructureSize;
-    asci.buffer = b.asBuffer.buffer();
+    VkAccelerationStructureCreateInfoKHR asci = {};
+    asci.sType                                = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+    asci.type                                 = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    asci.size                                 = sizeInfo.accelerationStructureSize;
+    asci.buffer                               = b.asBuffer.buffer();
 
     if (m_ctx.rtDispatch->vkCreateAccelerationStructureKHR(m_ctx.device, &asci, nullptr, &b.as) != VK_SUCCESS)
         return false;
 
-    // Scratch
-    if (!ensureRtScratch(sizeInfo.buildScratchSize))
+    // ------------------------------------------------------------
+    // Per-viewport per-frame scratch (CRITICAL for multi-viewport)
+    // ------------------------------------------------------------
+    if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
         return false;
 
-    buildInfo.dstAccelerationStructure  = b.as;
-    buildInfo.scratchData.deviceAddress = vkutil::bufferDeviceAddress(m_ctx.device, m_rtScratch.buffer());
+    RtViewportState& rts     = ensureRtViewportState(vp);
+    GpuBuffer&       scratch = rts.scratchBuffers[fc.frameIndex];
 
-    VkAccelerationStructureBuildRangeInfoKHR range{};
+    VkDeviceAddress scratchAdr = vkutil::bufferDeviceAddress(m_ctx.device, scratch.buffer());
+    if (scratchAdr == 0)
+        return false;
+
+    const VkDeviceSize align =
+        (m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment != 0)
+            ? VkDeviceSize(m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment)
+            : VkDeviceSize(256);
+
+    scratchAdr = vkrt::align_up<VkDeviceAddress>(scratchAdr, VkDeviceAddress(align));
+
+    buildInfo.dstAccelerationStructure  = b.as;
+    buildInfo.scratchData.deviceAddress = scratchAdr;
+
+    VkAccelerationStructureBuildRangeInfoKHR range            = {};
     range.primitiveCount                                      = primCount;
     const VkAccelerationStructureBuildRangeInfoKHR* pRanges[] = {&range};
 
     m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
 
     // Barrier: BLAS build writes -> RT reads
-    VkMemoryBarrier mb{};
-    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    mb.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    mb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkMemoryBarrier mb = {};
+    mb.sType           = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask   = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    mb.dstAccessMask   = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 
     vkCmdPipelineBarrier(fc.cmd,
                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -2500,9 +2595,9 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry&
                          0,
                          nullptr);
 
-    VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
-    addrInfo.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    addrInfo.accelerationStructure = b.as;
+    VkAccelerationStructureDeviceAddressInfoKHR addrInfo = {};
+    addrInfo.sType                                       = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    addrInfo.accelerationStructure                       = b.as;
 
     b.address  = m_ctx.rtDispatch->vkGetAccelerationStructureDeviceAddressKHR(m_ctx.device, &addrInfo);
     b.buildKey = key;
@@ -2710,7 +2805,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
                 t.buffer.destroy();
             }
 
-            t.as     = VK_NULL_HANDLE;
+            t.as     = VK_NULL_HANDLE; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
             t.buffer = {};
         }
 
@@ -2738,11 +2833,29 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
             return false;
     }
 
-    if (!ensureRtScratch(sizeInfo.buildScratchSize))
+    if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
         return false;
 
     buildInfo.dstAccelerationStructure  = t.as;
-    buildInfo.scratchData.deviceAddress = vkutil::bufferDeviceAddress(m_ctx.device, m_rtScratch.buffer());
+    if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
+        return false;
+
+    RtViewportState& rts     = ensureRtViewportState(vp);
+    GpuBuffer&       scratch = rts.scratchBuffers[fc.frameIndex];
+
+    VkDeviceAddress scratchAdr = vkutil::bufferDeviceAddress(m_ctx.device, scratch.buffer());
+    if (scratchAdr == 0)
+        return false;
+
+    const VkDeviceSize align =
+        (m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment != 0)
+            ? VkDeviceSize(m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment)
+            : VkDeviceSize(256);
+
+    scratchAdr = vkrt::align_up<VkDeviceAddress>(scratchAdr, VkDeviceAddress(align));
+
+    buildInfo.dstAccelerationStructure  = t.as;
+    buildInfo.scratchData.deviceAddress = scratchAdr;
 
     VkAccelerationStructureBuildRangeInfoKHR range{};
     range.primitiveCount                                      = primCount;
