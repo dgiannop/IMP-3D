@@ -1499,6 +1499,10 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
 // Render (NO MeshGpuResources::update(cmd) calls here anymore)
 //==================================================================
 
+//==================================================================
+// Render (RT present + raster overlays/selection)
+//==================================================================
+
 void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 {
     if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
@@ -1521,7 +1525,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     const glm::vec4 wireHiddenColor{0.85f, 0.85f, 0.85f, 0.25f};
 
     // ------------------------------------------------------------
-    // RAY TRACE PRESENT PATH (EARLY OUT) - PER VIEWPORT
+    // RAY TRACE PRESENT PATH (present RT image, then draw overlays)
     // ------------------------------------------------------------
     if (vp->drawMode() == DrawMode::RAY_TRACE)
     {
@@ -1539,6 +1543,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         if (frameIdx >= rtv.sets.size())
             return;
 
+        // Present the RT output image to the current framebuffer.
         vkutil::setViewportAndScissor(cmd, w, h);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresentPipeline);
@@ -1555,29 +1560,50 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         vkCmdDraw(cmd, 3, 1, 0, 0);
 
-        // IMPORTANT: restore normal graphics set=0 binding/layout.
+        // ------------------------------------------------------------
+        // IMPORTANT:
+        // Restore normal graphics pipeline layout + set=0 (MVP UBO),
+        // so drawSelection()/drawOverlays()/grid can render on top.
+        // ------------------------------------------------------------
+        ViewportUboState& vpUbo = ensureViewportUboState(vp);
+
+        if (frameIdx >= vpUbo.mvpBuffers.size() || frameIdx >= vpUbo.uboSets.size())
+            return;
+
+        if (!vpUbo.mvpBuffers[frameIdx].valid())
+            return;
+
         {
-            ViewportUboState& vpUbo = ensureViewportUboState(vp);
+            MvpUBO ubo{};
+            ubo.proj = vp->projection();
+            ubo.view = vp->view();
+            vpUbo.mvpBuffers[frameIdx].upload(&ubo, sizeof(ubo));
+        }
 
-            if (frameIdx < vpUbo.mvpBuffers.size() &&
-                frameIdx < vpUbo.uboSets.size() &&
-                vpUbo.mvpBuffers[frameIdx].valid())
-            {
-                MvpUBO ubo{};
-                ubo.proj = vp->projection();
-                ubo.view = vp->view();
-                vpUbo.mvpBuffers[frameIdx].upload(&ubo, sizeof(ubo));
+        // Re-bind set=0 for the normal graphics pipeline layout.
+        {
+            VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
+            vkCmdBindDescriptorSets(cmd,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout,
+                                    0,
+                                    1,
+                                    &gfxSet0,
+                                    0,
+                                    nullptr);
+        }
 
-                VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
-                vkCmdBindDescriptorSets(cmd,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        m_pipelineLayout,
-                                        0,
-                                        1,
-                                        &gfxSet0,
-                                        0,
-                                        nullptr);
-            }
+        // Keep viewport/scissor consistent for overlays.
+        vkutil::setViewportAndScissor(cmd, w, h);
+
+        // Draw selection overlay (on top of RT image).
+        drawSelection(cmd, vp, scene);
+
+        // Scene Grid (draw last) - NOT in SHADED mode
+        // (RT mode is not SHADED, so grid will show if enabled)
+        if (scene->showSceneGrid() && vp->drawMode() != DrawMode::SHADED)
+        {
+            drawSceneGrid(cmd, vp, scene);
         }
 
         return;
@@ -1695,9 +1721,6 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                    sizeof(PushConstants),
                                    &pc);
 
-                // =========================================================
-                // REPLACED: duplicated base/subdiv edge bind+draw
-                // =========================================================
                 const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
                 if (!wgeo.valid())
                     return;
@@ -1765,9 +1788,6 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                    sizeof(PushConstants),
                                    &pc);
 
-                // =========================================================
-                // REPLACED: duplicated base/subdiv edge bind+draw
-                // =========================================================
                 const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
                 if (!wgeo.valid())
                     return;
