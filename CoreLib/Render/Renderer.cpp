@@ -1462,6 +1462,31 @@ void Renderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffe
     }
 }
 
+void Renderer::clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
+{
+    if (!vp)
+        return;
+
+    RtViewportState& rtv = ensureRtViewportState(vp);
+    if (frameIndex >= rtv.sets.size())
+        return;
+
+    VkAccelerationStructureKHR nullAs = VK_NULL_HANDLE;
+
+    VkWriteDescriptorSetAccelerationStructureKHR asInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    asInfo.accelerationStructureCount = 1;
+    asInfo.pAccelerationStructures    = &nullAs;
+
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.pNext           = &asInfo;
+    w.dstSet          = rtv.sets[frameIndex].set();
+    w.dstBinding      = 3;
+    w.descriptorCount = 1;
+    w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+
+    vkUpdateDescriptorSets(m_ctx.device, 1, &w, 0, nullptr);
+}
+
 void Renderer::destroyAllRtTlasFrames() noexcept
 {
     for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTlasFrames.size()); ++i)
@@ -1888,7 +1913,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
         return;
 
     // ------------------------------------------------------------
-    // Clear RT output to viewport background (optional but fine)
+    // Clear RT output to viewport background (safe even if no TLAS)
     // ------------------------------------------------------------
     {
         const VkClearColorValue clear = vkutil::toVkClearColor(vp->clearColor());
@@ -1938,22 +1963,36 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     }
 
     // ------------------------------------------------------------
-    // Build BLAS for visible meshes
+    // Build (or DESTROY) BLAS for visible meshes
+    // CRITICAL: when mesh becomes empty, we must destroy old BLAS entry
     // ------------------------------------------------------------
-    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* /*gpu*/) {
+    for (SceneMesh* sm : scene->sceneMeshes())
+    {
+        if (!sm || !sm->visible())
+            continue;
+
         const render::geom::RtMeshGeometry geo = render::geom::selectRtGeometry(sm);
-        if (!geo.valid())
-            return;
+
+        if (!geo.valid() || geo.buildIndexCount == 0 || geo.buildPosCount == 0)
+        {
+            destroyRtBlasFor(sm, fc);
+            continue;
+        }
 
         (void)ensureMeshBlas(vp, sm, geo, fc);
-    });
+    }
 
+    // ------------------------------------------------------------
+    // Ensure scene TLAS (may destroy TLAS + clear descriptor if empty)
+    // ------------------------------------------------------------
     if (!ensureSceneTlas(vp, scene, fc))
         return;
 
     if (fc.frameIndex >= m_rtTlasFrames.size() ||
         m_rtTlasFrames[fc.frameIndex].as == VK_NULL_HANDLE)
     {
+        // No TLAS => keep cleared output image. Also ensure set binding is cleared.
+        clearRtTlasDescriptor(vp, fc.frameIndex);
         return;
     }
 
@@ -1962,6 +2001,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
 
     // ------------------------------------------------------------
     // Upload per-instance shader data (includes matIdAdr)
+    // Must match TLAS instance ordering (ensureSceneTlas)
     // ------------------------------------------------------------
     {
         std::vector<RtInstanceData> instData;
@@ -1998,7 +2038,6 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
             if (geo.shadeUvCount != primCount * 3u)
                 continue;
 
-            // NEW: one material id per triangle
             if (geo.shadeMatIdCount != primCount)
                 continue;
 
@@ -2028,6 +2067,15 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
                                                        bytes,
                                                        0);
         }
+        else
+        {
+            // No instances (should match TLAS empty case, but be safe)
+            rtv.sets[fc.frameIndex].writeStorageBuffer(m_ctx.device,
+                                                       4,
+                                                       rtv.instanceDataBuffers[fc.frameIndex].buffer(),
+                                                       0,
+                                                       0);
+        }
     }
 
     // ------------------------------------------------------------
@@ -2037,13 +2085,12 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
         RtCameraUBO cam = {};
         cam.invViewProj = glm::inverse(vp->projection() * vp->view());
         cam.camPos      = glm::vec4(vp->cameraPosition(), 1.0f);
-        cam.clearColor  = vp->clearColor(); // used by rmiss
+        cam.clearColor  = vp->clearColor();
         rtv.cameraBuffers[fc.frameIndex].upload(&cam, sizeof(cam));
     }
 
     // ------------------------------------------------------------
     // Ensure material table is up to date for RT
-    // (kept as you wrote it)
     // ------------------------------------------------------------
     if (scene->materialHandler() &&
         m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
@@ -2074,7 +2121,6 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     // ------------------------------------------------------------
     vkCmdBindPipeline(fc.cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
 
-    // bind BOTH set=0 (RT) and set=1 (materials)
     VkDescriptorSet sets[2] = {
         rtv.sets[fc.frameIndex].set(),      // set 0 : RT
         m_materialSets[fc.frameIndex].set() // set 1 : materials
@@ -2315,7 +2361,7 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::R
 
 bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept
 {
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !scene || !fc.cmd)
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !scene || !fc.cmd || !vp)
         return false;
 
     if (fc.frameIndex >= m_rtTlasFrames.size())
@@ -2347,11 +2393,8 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
         }
     };
 
-    // ------------------------------------------------------------
-    // Also rebuild TLAS if any BLAS changed (subdiv level change rebuilds BLAS)
-    // ------------------------------------------------------------
+    // Also rebuild TLAS if any BLAS changed
     forEachVisibleBlasMesh([&](SceneMesh& /*sm*/, const RtBlas& b) {
-        // Hash-combine b.buildKey into TLAS key
         key ^= (b.buildKey + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2));
     });
 
@@ -2359,22 +2402,20 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
         return true;
 
     // ------------------------------------------------------------
-    // Gather instances (must match the order used for RtInstanceData upload!)
+    // Gather instances (must match ordering used for RtInstanceData upload!)
     // ------------------------------------------------------------
     std::vector<VkAccelerationStructureInstanceKHR> instances;
     instances.reserve(scene->sceneMeshes().size());
 
     forEachVisibleBlasMesh([&](SceneMesh& /*sm*/, const RtBlas& b) {
         VkAccelerationStructureInstanceKHR inst{};
-        // Row-major 3x4; identity (no transforms yet)
         inst.transform.matrix[0][0] = 1.0f;
         inst.transform.matrix[1][1] = 1.0f;
         inst.transform.matrix[2][2] = 1.0f;
 
-        // Must match shader instance indexing assumptions
         inst.instanceCustomIndex                    = static_cast<uint32_t>(instances.size());
         inst.mask                                   = 0xFF;
-        inst.instanceShaderBindingTableRecordOffset = 0; // 1 hit group for now
+        inst.instanceShaderBindingTableRecordOffset = 0;
         inst.flags                                  = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         inst.accelerationStructureReference         = b.address;
 
@@ -2385,6 +2426,10 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
     {
         // No geometry: destroy TLAS if it exists.
         destroyRtTlasFrame(fc.frameIndex, false);
+
+        // CRITICAL: clear stale TLAS binding for this viewport+frame
+        clearRtTlasDescriptor(vp, fc.frameIndex);
+
         t.buildKey = key;
         return true;
     }
@@ -2487,7 +2532,6 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
 
     if (needNewTlasStorage)
     {
-        // Destroy old TLAS
         if (t.as != VK_NULL_HANDLE || t.buffer.valid())
         {
             if (fc.deferred)
@@ -2512,7 +2556,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
                 t.buffer.destroy();
             }
 
-            t.as     = VK_NULL_HANDLE; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+            t.as     = VK_NULL_HANDLE;
             t.buffer = {};
         }
 

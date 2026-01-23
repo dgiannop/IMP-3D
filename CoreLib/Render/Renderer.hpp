@@ -245,6 +245,8 @@ private:
     void destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffers) noexcept;
     void destroyAllRtTlasFrames() noexcept;
 
+    void clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept;
+
     void renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
 
     bool ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
