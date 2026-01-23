@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "Formats/SceneIOUtils.hpp"
 #include "Scene.hpp"
 
 namespace
@@ -137,6 +138,7 @@ bool CoreDocument::openFile(const std::filesystem::path& path, const LoadOptions
     {
         rep->status = SceneIOStatus::InvalidScene;
         rep->error("CoreDocument::openFile: scene is null");
+        dumpSceneIOReport(*rep);
         return false;
     }
 
@@ -145,11 +147,19 @@ bool CoreDocument::openFile(const std::filesystem::path& path, const LoadOptions
     {
         rep->status = SceneIOStatus::UnsupportedFormat;
         rep->error("CoreDocument::openFile: unsupported extension: " + path.extension().string());
+        dumpSceneIOReport(*rep);
         return false;
     }
 
     if (!fmt->load(m_scene, path, options, *rep))
+    {
+        dumpSceneIOReport(*rep);
         return false;
+    }
+
+#ifndef NDEBUG
+    dumpSceneIOReport(*rep); // ← this is GOLD while debugging glTF
+#endif
 
     // Opening a file updates document path to what was opened.
     m_path = path;

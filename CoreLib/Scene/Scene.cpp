@@ -338,7 +338,6 @@ void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
         m_renderer->renderPrePass(vp, this, fc);
 }
 
-// void Scene::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
 void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
     vp->apply();

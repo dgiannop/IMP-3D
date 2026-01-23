@@ -22,6 +22,7 @@
 #include "CmdTriangulate.hpp"
 #include "CylinderTool.hpp"
 #include "ExtrudeTool.hpp"
+#include "Formats/GltfSceneFormat.hpp"
 #include "Formats/ImpSceneFormat.hpp"
 #include "Formats/ObjSceneFormat.hpp"
 #include "InsetTool.hpp"
@@ -84,6 +85,8 @@ namespace config
     {
         factory.registerItem(".imp", factory.createItemType<ImpSceneFormat>);
         factory.registerItem(".obj", factory.createItemType<ObjSceneFormat>);
+        factory.registerItem(".gltf", factory.createItemType<GltfSceneFormat>);
+        factory.registerItem(".glb", factory.createItemType<GltfSceneFormat>);
     }
 
 } // namespace config
