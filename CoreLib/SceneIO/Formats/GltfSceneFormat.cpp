@@ -1,3 +1,7 @@
+// ============================================================
+// GltfSceneFormat.cpp
+// ============================================================
+
 #include "GltfSceneFormat.hpp"
 
 #define TINYGLTF_IMPLEMENTATION
@@ -388,6 +392,11 @@ namespace
         const tinygltf::Image& img      = model.images[tex.source];
         const std::string      nameHint = makeName(img.name, tex.source, "Image_");
 
+        // NOTE:
+        // We currently pass flipY=true when creating textures. That means we *should not*
+        // also flip UVs here unless the rest of your pipeline expects it.
+        // If you later decide UVs need flipping, flip them at import (see below).
+
         // 1) External path URI
         if (!img.uri.empty())
         {
@@ -424,7 +433,10 @@ namespace
                 if (off + size <= buf.data.size() && size > 0)
                 {
                     const unsigned char* p  = buf.data.data() + off;
-                    const ImageId        id = ih->loadFromEncodedMemory(std::span<const unsigned char>(p, size), nameHint, /*flipY=*/true);
+                    const ImageId        id = ih->loadFromEncodedMemory(
+                        std::span<const unsigned char>(p, size),
+                        nameHint,
+                        /*flipY=*/true);
 
                     if (id != kInvalidImageId)
                     {
@@ -608,6 +620,17 @@ namespace
         matCache[gltfMatIndex] = static_cast<uint32_t>(matId);
         return static_cast<uint32_t>(matId);
     }
+
+    // ------------------------------------------------------------
+    // Optional UV flip helper
+    // ------------------------------------------------------------
+    static glm::vec2 maybeFlipUv(glm::vec2 uv, bool flipUvY) noexcept
+    {
+        if (flipUvY)
+            uv.y = 1.0f - uv.y;
+        return uv;
+    }
+
 } // namespace
 
 bool GltfSceneFormat::load(Scene*                       scene,
@@ -661,13 +684,9 @@ bool GltfSceneFormat::load(Scene*                       scene,
 
     bool ok = false;
     if (isGlb)
-    {
         ok = loader.LoadBinaryFromFile(&model, &err, &warn, filePath.string());
-    }
     else
-    {
         ok = loader.LoadASCIIFromFile(&model, &err, &warn, filePath.string());
-    }
 
     if (!warn.empty())
         report.warning("glTF warning: " + warn);
@@ -720,6 +739,10 @@ bool GltfSceneFormat::load(Scene*                       scene,
     // Import nodes that reference meshes
     // ---------------------------------------------------------
     int importedMeshCount = 0;
+
+    // If you flip images at load time (we do: flipY=true), usually you do NOT flip UVs.
+    // But different pipelines differ. If textures are upside-down, set this to true.
+    const bool flipUvY = true;
 
     for (size_t nodeIdx = 0; nodeIdx < model.nodes.size(); ++nodeIdx)
     {
@@ -866,9 +889,7 @@ bool GltfSceneFormat::load(Scene*                       scene,
             // Material
             uint32_t matIndex = 0;
             if (prim.material >= 0)
-            {
                 matIndex = resolveMaterialIndex(scene, model, prim.material, baseDir, matCache, texCache, report);
-            }
 
             // Create SysMesh verts for this primitive (no dedupe; simple & correct)
             std::vector<int32_t> vRemap;
@@ -931,9 +952,9 @@ bool GltfSceneFormat::load(Scene*                       scene,
                     SysPolyVerts pt;
                     pt.reserve(3);
 
-                    const glm::vec2 uv0 = uvs[i0];
-                    const glm::vec2 uv1 = uvs[i1];
-                    const glm::vec2 uv2 = uvs[i2];
+                    const glm::vec2 uv0 = maybeFlipUv(uvs[i0], flipUvY);
+                    const glm::vec2 uv1 = maybeFlipUv(uvs[i1], flipUvY);
+                    const glm::vec2 uv2 = maybeFlipUv(uvs[i2], flipUvY);
 
                     pt.push_back(mesh->map_create_vert(texMap, glm::value_ptr(uv0)));
                     pt.push_back(mesh->map_create_vert(texMap, glm::value_ptr(uv1)));
@@ -948,13 +969,9 @@ bool GltfSceneFormat::load(Scene*                       scene,
     }
 
     if (importedMeshCount == 0)
-    {
         report.warning("glTF: no meshes found to import.");
-    }
     else
-    {
         report.info("glTF: imported " + std::to_string(importedMeshCount) + " scene meshes.");
-    }
 
     report.status = SceneIOStatus::Ok;
     return !report.hasErrors();
