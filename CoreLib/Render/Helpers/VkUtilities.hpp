@@ -27,6 +27,19 @@ namespace vkutil
     // Upload helpers (frame-cmd path)
     // ============================================================================
 
+    void imageBarrier(VkCommandBuffer      cmd,
+                      VkImage              image,
+                      VkImageLayout        oldLayout,
+                      VkImageLayout        newLayout,
+                      VkAccessFlags        srcAccess,
+                      VkAccessFlags        dstAccess,
+                      VkPipelineStageFlags srcStage,
+                      VkPipelineStageFlags dstStage,
+                      VkImageAspectFlags   aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                      uint32_t             baseMip    = 0,
+                      uint32_t             mipCount   = 1,
+                      uint32_t             baseLayer  = 0,
+                      uint32_t             layerCount = 1) noexcept;
     /**
      * @brief Ensure a HOST_VISIBLE upload/staging buffer has at least @p bytes capacity.
      *

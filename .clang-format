@@ -76,7 +76,7 @@ AllowAllConstructorInitializersOnNextLine:      false
 BinPackParameters:                      false
 BinPackArguments:                       false
 AllowAllArgumentsOnNextLine:            false
-AllowShortFunctionsOnASingleLine:       None
+AllowShortFunctionsOnASingleLine:       InlineOnly
 AllowShortIfStatementsOnASingleLine:    false
 AllowShortLoopsOnASingleLine:           false
 AllowShortCaseLabelsOnASingleLine:      false

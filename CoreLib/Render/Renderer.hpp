@@ -22,6 +22,7 @@
 #include "GridRendererVK.hpp"
 #include "Material.hpp"
 #include "OverlayHandler.hpp"
+#include "RenderGeometry.hpp" // for render::geom.. revise
 #include "RtPipeline.hpp"
 #include "RtSbt.hpp"
 #include "VulkanContext.hpp"
@@ -30,6 +31,7 @@ class Scene;
 class SceneMesh;
 class TextureHandler;
 class Viewport;
+class MeshGpuResources;
 
 constexpr uint32_t kMaxTextureCount = 512;
 
@@ -147,41 +149,6 @@ public:
         std::vector<DescriptorSet> uboSets;
     };
 
-    struct RtMeshGeometry
-    {
-        VkBuffer buildPosBuffer = VK_NULL_HANDLE;
-        uint32_t buildPosCount  = 0;
-
-        VkBuffer buildIndexBuffer = VK_NULL_HANDLE;
-        uint32_t buildIndexCount  = 0;
-
-        VkBuffer shadePosBuffer = VK_NULL_HANDLE;
-        uint32_t shadePosCount  = 0;
-
-        VkBuffer shadeNrmBuffer = VK_NULL_HANDLE;
-        uint32_t shadeNrmCount  = 0;
-
-        VkBuffer shadeUvBuffer = VK_NULL_HANDLE;
-        uint32_t shadeUvCount  = 0;
-
-        VkBuffer shaderIndexBuffer = VK_NULL_HANDLE;
-        uint32_t shaderTriCount    = 0;
-
-        bool valid() const noexcept
-        {
-            return buildPosBuffer != VK_NULL_HANDLE && buildPosCount > 0 &&
-                   buildIndexBuffer != VK_NULL_HANDLE && buildIndexCount > 0;
-        }
-
-        bool shaderValid() const noexcept
-        {
-            return shadePosBuffer != VK_NULL_HANDLE && shadePosCount > 0 &&
-                   shaderIndexBuffer != VK_NULL_HANDLE && shaderTriCount > 0 &&
-                   shadeNrmBuffer != VK_NULL_HANDLE && shadeNrmCount > 0 &&
-                   shadeUvBuffer != VK_NULL_HANDLE && shadeUvCount > 0;
-        }
-    };
-
 private:
     // ------------------------------------------------------------
     // Helpers: lifetime
@@ -266,7 +233,7 @@ private:
     bool ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept;
     void writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept;
 
-    bool ensureMeshBlas(Viewport* vp, SceneMesh* sm, const RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept;
+    bool ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept;
 
     void destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept;
     void destroyAllRtBlas() noexcept;
@@ -275,8 +242,6 @@ private:
     void destroyAllRtTlasFrames() noexcept;
 
     void renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
-
-    RtMeshGeometry selectRtGeometry(SceneMesh* sm) noexcept;
 
     bool ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
 
@@ -341,9 +306,7 @@ private:
     // PER-VIEWPORT RT state
     std::unordered_map<Viewport*, RtViewportState> m_rtViewports;
 
-    // RT scratch reused for BLAS/TLAS builds
-    // GpuBuffer    m_rtScratch     = {};
-    // VkDeviceSize m_rtScratchSize = 0;
+    static constexpr uint32_t kMaxViewports = 8;
 
     // ------------------------------------------------------------
     // Descriptors (raster)
@@ -418,4 +381,7 @@ private:
     SysMonitor    m_rtTlasChangeMonitor;
 
     std::unordered_set<class SysMesh*> m_rtTlasLinkedMeshes;
+
+    template<typename Fn>
+    void forEachVisibleMesh(class Scene* scene, Fn&& fn);
 };

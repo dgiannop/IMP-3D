@@ -82,6 +82,52 @@ namespace vkutil
         std::cerr << "[Vulkan] " << where << " -> " << name << " (" << int(r) << ")\n";
     }
 
+    void imageBarrier(VkCommandBuffer      cmd,
+                      VkImage              image,
+                      VkImageLayout        oldLayout,
+                      VkImageLayout        newLayout,
+                      VkAccessFlags        srcAccess,
+                      VkAccessFlags        dstAccess,
+                      VkPipelineStageFlags srcStage,
+                      VkPipelineStageFlags dstStage,
+                      VkImageAspectFlags   aspectMask,
+                      uint32_t             baseMip,
+                      uint32_t             mipCount,
+                      uint32_t             baseLayer,
+                      uint32_t             layerCount) noexcept
+    {
+        if (!cmd || image == VK_NULL_HANDLE)
+            return;
+
+        assert(mipCount != 0 && layerCount != 0);
+
+        VkImageMemoryBarrier b{};
+        b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout                       = oldLayout;
+        b.newLayout                       = newLayout;
+        b.srcAccessMask                   = srcAccess;
+        b.dstAccessMask                   = dstAccess;
+        b.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        b.image                           = image;
+        b.subresourceRange.aspectMask     = aspectMask;
+        b.subresourceRange.baseMipLevel   = baseMip;
+        b.subresourceRange.levelCount     = mipCount;
+        b.subresourceRange.baseArrayLayer = baseLayer;
+        b.subresourceRange.layerCount     = layerCount;
+
+        vkCmdPipelineBarrier(cmd,
+                             srcStage,
+                             dstStage,
+                             0,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr,
+                             1,
+                             &b);
+    }
+
     // ============================================================================
     // Upload helpers (frame-cmd path)
     // ============================================================================

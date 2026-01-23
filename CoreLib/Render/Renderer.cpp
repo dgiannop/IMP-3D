@@ -1,6 +1,3 @@
-//============================================================
-// Renderer.cpp
-//============================================================
 #include "Renderer.hpp"
 
 #include <Sysmesh.hpp>
@@ -8,7 +5,6 @@
 #include <array>
 #include <cassert>
 #include <filesystem>
-#include <glm/vec3.hpp>
 #include <iostream>
 #include <vector>
 
@@ -16,69 +12,13 @@
 #include "GpuResources/MeshGpuResources.hpp"
 #include "GpuResources/TextureHandler.hpp"
 #include "GridRendererVK.hpp"
-#include "MeshGpuResources.hpp"
+#include "RenderGeometry.hpp"
 #include "Scene.hpp"
 #include "SceneMesh.hpp"
 #include "ShaderStage.hpp"
 #include "Viewport.hpp"
 #include "VkPipelineHelpers.hpp"
 #include "VkUtilities.hpp"
-
-namespace
-{
-    static void imageBarrier(VkCommandBuffer      cmd,
-                             VkImage              image,
-                             VkImageLayout        oldLayout,
-                             VkImageLayout        newLayout,
-                             VkAccessFlags        srcAccess,
-                             VkAccessFlags        dstAccess,
-                             VkPipelineStageFlags srcStage,
-                             VkPipelineStageFlags dstStage)
-    {
-        VkImageMemoryBarrier b{};
-        b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.oldLayout                       = oldLayout;
-        b.newLayout                       = newLayout;
-        b.srcAccessMask                   = srcAccess;
-        b.dstAccessMask                   = dstAccess;
-        b.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        b.image                           = image;
-        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        b.subresourceRange.baseMipLevel   = 0;
-        b.subresourceRange.levelCount     = 1;
-        b.subresourceRange.baseArrayLayer = 0;
-        b.subresourceRange.layerCount     = 1;
-
-        vkCmdPipelineBarrier(cmd,
-                             srcStage,
-                             dstStage,
-                             0,
-                             0,
-                             nullptr,
-                             0,
-                             nullptr,
-                             1,
-                             &b);
-    }
-
-    constexpr bool kRtRebuildAsEveryFrame = false;
-
-    constexpr uint32_t kMaxViewports = 8;
-
-} // namespace
-
-// namespace
-// {
-//     struct AsLeak
-//     {
-//         VkAccelerationStructureKHR as = VK_NULL_HANDLE;
-//         GpuBuffer                  backing; // holds the AS storage buffer alive
-//     };
-
-//     static std::vector<AsLeak> s_leakedBlas;
-//     static std::vector<AsLeak> s_leakedTlas;
-// } // namespace
 
 //==================================================================
 // RtViewportState destruction
@@ -94,7 +34,7 @@ void Renderer::RtViewportState::destroyDeviceResources(const VulkanContext& ctx)
         b.destroy();
     instanceDataBuffers.clear();
 
-    // NEW: per-viewport scratch
+    // Per-viewport scratch
     for (GpuBuffer& b : scratchBuffers)
         b.destroy();
     scratchBuffers.clear();
@@ -204,36 +144,6 @@ void Renderer::destroySwapchainResources() noexcept
     destroyPipelines();
 }
 
-// namespace
-// {
-//     static void cleanupLeakedAs(const VulkanContext& ctx) noexcept
-//     {
-//         if (!ctx.device || !ctx.rtDispatch)
-//             return;
-
-//         // GPU must be idle before we destroy these.
-//         vkDeviceWaitIdle(ctx.device);
-
-//         auto destroyList = [&](std::vector<AsLeak>& list) noexcept {
-//             for (AsLeak& L : list)
-//             {
-//                 if (L.as != VK_NULL_HANDLE)
-//                 {
-//                     ctx.rtDispatch->vkDestroyAccelerationStructureKHR(ctx.device, L.as, nullptr);
-//                     L.as = VK_NULL_HANDLE;
-//                 }
-
-//                 // Backing buffer must be destroyed after AS handle is destroyed
-//                 L.backing.destroy();
-//             }
-//             list.clear();
-//         };
-
-//         destroyList(s_leakedBlas);
-//         destroyList(s_leakedTlas);
-//     }
-// } // namespace
-
 void Renderer::shutdown() noexcept
 {
     if (m_ctx.device)
@@ -269,8 +179,6 @@ void Renderer::shutdown() noexcept
 
     m_rtSbt.destroy();
     m_rtPipeline.destroy();
-
-    // REMOVED: m_rtScratch + m_rtScratchSize
 
     m_rtPool.destroy();
     m_rtSetLayout.destroy();
@@ -738,96 +646,7 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t w, uint32_t h)
 }
 
 //==================================================================
-// RT geometry selection (UNCHANGED from your current file)
-//==================================================================
-
-Renderer::RtMeshGeometry Renderer::selectRtGeometry(SceneMesh* sm) noexcept
-{
-    RtMeshGeometry out = {};
-
-    if (!sm || !sm->gpu())
-        return out;
-
-    MeshGpuResources* gpu = sm->gpu();
-    if (!gpu)
-        return out;
-
-    const bool useSubdiv = (sm->subdivisionLevel() > 0);
-
-    if (!useSubdiv)
-    {
-        if (gpu->uniqueVertCount() == 0 || !gpu->uniqueVertBuffer().valid())
-            return out;
-        if (gpu->coarseTriIndexCount() == 0 || !gpu->coarseTriIndexBuffer().valid())
-            return out;
-
-        if (gpu->coarseRtPosCount() == 0 || !gpu->coarseRtPosBuffer().valid())
-            return out;
-        if (gpu->coarseRtCornerNrmCount() == 0 || !gpu->coarseRtCornerNrmBuffer().valid())
-            return out;
-        if (gpu->coarseRtCornerUvCount() == 0 || !gpu->coarseRtCornerUvBuffer().valid())
-            return out;
-        if (gpu->coarseRtTriCount() == 0 || !gpu->coarseRtTriIndexBuffer().valid())
-            return out;
-
-        out.buildPosBuffer = gpu->uniqueVertBuffer().buffer();
-        out.buildPosCount  = gpu->uniqueVertCount();
-
-        out.buildIndexBuffer = gpu->coarseTriIndexBuffer().buffer();
-        out.buildIndexCount  = gpu->coarseTriIndexCount();
-
-        out.shadePosBuffer = gpu->coarseRtPosBuffer().buffer();
-        out.shadePosCount  = gpu->coarseRtPosCount();
-
-        out.shadeNrmBuffer = gpu->coarseRtCornerNrmBuffer().buffer();
-        out.shadeNrmCount  = gpu->coarseRtCornerNrmCount();
-
-        out.shadeUvBuffer = gpu->coarseRtCornerUvBuffer().buffer();
-        out.shadeUvCount  = gpu->coarseRtCornerUvCount();
-
-        out.shaderIndexBuffer = gpu->coarseRtTriIndexBuffer().buffer();
-        out.shaderTriCount    = gpu->coarseRtTriCount();
-
-        return out;
-    }
-
-    if (gpu->subdivSharedVertCount() == 0 || !gpu->subdivSharedVertBuffer().valid())
-        return out;
-    if (gpu->subdivSharedTriIndexCount() == 0 || !gpu->subdivSharedTriIndexBuffer().valid())
-        return out;
-
-    if (gpu->subdivRtPosCount() == 0 || !gpu->subdivRtPosBuffer().valid())
-        return out;
-    if (gpu->subdivRtCornerNrmCount() == 0 || !gpu->subdivRtCornerNrmBuffer().valid())
-        return out;
-    if (gpu->subdivRtCornerUvCount() == 0 || !gpu->subdivRtCornerUvBuffer().valid())
-        return out;
-    if (gpu->subdivRtTriCount() == 0 || !gpu->subdivRtTriIndexBuffer().valid())
-        return out;
-
-    out.buildPosBuffer = gpu->subdivSharedVertBuffer().buffer();
-    out.buildPosCount  = gpu->subdivSharedVertCount();
-
-    out.buildIndexBuffer = gpu->subdivSharedTriIndexBuffer().buffer();
-    out.buildIndexCount  = gpu->subdivSharedTriIndexCount();
-
-    out.shadePosBuffer = gpu->subdivRtPosBuffer().buffer();
-    out.shadePosCount  = gpu->subdivRtPosCount();
-
-    out.shadeNrmBuffer = gpu->subdivRtCornerNrmBuffer().buffer();
-    out.shadeNrmCount  = gpu->subdivRtCornerNrmCount();
-
-    out.shadeUvBuffer = gpu->subdivRtCornerUvBuffer().buffer();
-    out.shadeUvCount  = gpu->subdivRtCornerUvCount();
-
-    out.shaderIndexBuffer = gpu->subdivRtTriIndexBuffer().buffer();
-    out.shaderTriCount    = gpu->subdivRtTriCount();
-
-    return out;
-}
-
-//==================================================================
-// Materials (UNCHANGED from your current file)
+// Materials
 //==================================================================
 
 void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
@@ -1579,7 +1398,7 @@ void Renderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noe
     }
     else
     {
-        // Fallback (ideally shouldn't happen in your normal flow)
+        // Fallback (ideally shouldn't happen)
         if (m_ctx.rtDispatch && m_ctx.device && oldAs != VK_NULL_HANDLE)
             m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, oldAs, nullptr);
 
@@ -1597,8 +1416,6 @@ void Renderer::destroyAllRtBlas() noexcept
 
     for (auto& [sm, b] : m_rtBlas)
     {
-        // vkDeviceWaitIdle(m_ctx.device);
-
         if (b.as != VK_NULL_HANDLE)
             m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
 
@@ -1659,22 +1476,11 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
     // ------------------------------------------------------------
     // 1) Update ALL MeshGpuResources here (outside render pass)
     // ------------------------------------------------------------
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm || !sm->visible())
-            continue;
-
-        if (!sm->gpu())
-            sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
-
-        MeshGpuResources* gpu = sm->gpu();
-        if (!gpu)
-            continue;
-
+    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
         // IMPORTANT: update() records transfer/barrier commands.
         // Must be done BEFORE the render pass begins.
         gpu->update(fc);
-    }
+    });
 
     // ------------------------------------------------------------
     // 2) RT dispatch (still here, also outside render pass)
@@ -1817,7 +1623,8 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         VkPipeline triPipe = isShaded ? m_pipelineShaded : m_pipelineSolid;
 
-        if (scene->materialHandler() && m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
+        if (scene->materialHandler() &&
+            m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
         {
             const auto& mats = scene->materialHandler()->materials();
             for (uint32_t i = 0; i < m_ctx.framesInFlight; ++i)
@@ -1844,20 +1651,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, triPipe);
 
-            for (SceneMesh* sm : scene->sceneMeshes())
-            {
-                if (!sm || !sm->visible())
-                    continue;
-
-                if (!sm->gpu())
-                    sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
-
-                auto* gpu = sm->gpu();
-                if (!gpu)
-                    continue;
-
-                const bool useSubdiv = (sm->subdivisionLevel() > 0);
-
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 PushConstants pc{};
                 pc.model = sm->model();
                 pc.color = glm::vec4(0, 0, 0, 1);
@@ -1869,55 +1663,16 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                    sizeof(PushConstants),
                                    &pc);
 
-                if (!useSubdiv)
-                {
-                    if (gpu->vertexCount() == 0)
-                        continue;
+                const render::geom::GfxMeshGeometry geo = render::geom::selectGfxGeometry(sm, gpu);
+                if (!geo.valid())
+                    return;
 
-                    if (!gpu->polyVertBuffer().valid() ||
-                        !gpu->polyNormBuffer().valid() ||
-                        !gpu->polyUvPosBuffer().valid() ||
-                        !gpu->polyMatIdBuffer().valid())
-                    {
-                        continue;
-                    }
+                VkBuffer     bufs[4] = {geo.posBuffer, geo.nrmBuffer, geo.uvBuffer, geo.matBuffer};
+                VkDeviceSize offs[4] = {0, 0, 0, 0};
 
-                    VkBuffer bufs[4] = {
-                        gpu->polyVertBuffer().buffer(),
-                        gpu->polyNormBuffer().buffer(),
-                        gpu->polyUvPosBuffer().buffer(),
-                        gpu->polyMatIdBuffer().buffer(),
-                    };
-                    VkDeviceSize offs[4] = {0, 0, 0, 0};
-
-                    vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
-                    vkCmdDraw(cmd, gpu->vertexCount(), 1, 0, 0);
-                }
-                else
-                {
-                    if (gpu->subdivPolyVertexCount() == 0)
-                        continue;
-
-                    if (!gpu->subdivPolyVertBuffer().valid() ||
-                        !gpu->subdivPolyNormBuffer().valid() ||
-                        !gpu->subdivPolyUvBuffer().valid() ||
-                        !gpu->subdivPolyMatIdBuffer().valid())
-                    {
-                        continue;
-                    }
-
-                    VkBuffer bufs[4] = {
-                        gpu->subdivPolyVertBuffer().buffer(),
-                        gpu->subdivPolyNormBuffer().buffer(),
-                        gpu->subdivPolyUvBuffer().buffer(),
-                        gpu->subdivPolyMatIdBuffer().buffer(),
-                    };
-                    VkDeviceSize offs[4] = {0, 0, 0, 0};
-
-                    vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
-                    vkCmdDraw(cmd, gpu->subdivPolyVertexCount(), 1, 0, 0);
-                }
-            }
+                vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
+                vkCmdDraw(cmd, geo.vertexCount, 1, 0, 0);
+            });
         }
 
         constexpr bool drawEdgesInSolid = true;
@@ -1925,18 +1680,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineEdgeDepthBias);
 
-            for (SceneMesh* sm : scene->sceneMeshes())
-            {
-                if (!sm || !sm->visible())
-                    continue;
-
-                if (!sm->gpu())
-                    sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
-
-                auto* gpu = sm->gpu();
-                if (!gpu)
-                    continue;
-
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
                 PushConstants pc{};
@@ -1950,37 +1694,18 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                    sizeof(PushConstants),
                                    &pc);
 
-                if (!useSubdiv)
-                {
-                    if (gpu->edgeIndexCount() == 0)
-                        continue;
+                // =========================================================
+                // REPLACED: duplicated base/subdiv edge bind+draw
+                // =========================================================
+                const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
+                if (!wgeo.valid())
+                    return;
 
-                    if (!gpu->uniqueVertBuffer().valid() || !gpu->edgeIndexBuffer().valid())
-                        continue;
-
-                    VkBuffer     vbuf = gpu->uniqueVertBuffer().buffer();
-                    VkDeviceSize voff = 0;
-                    vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
-
-                    vkCmdBindIndexBuffer(cmd, gpu->edgeIndexBuffer().buffer(), 0, VK_INDEX_TYPE_UINT32);
-                    vkCmdDrawIndexed(cmd, gpu->edgeIndexCount(), 1, 0, 0, 0);
-                }
-                else
-                {
-                    if (gpu->subdivPrimaryEdgeIndexCount() == 0)
-                        continue;
-
-                    if (!gpu->subdivSharedVertBuffer().valid() || !gpu->subdivPrimaryEdgeIndexBuffer().valid())
-                        continue;
-
-                    VkBuffer     vbuf = gpu->subdivSharedVertBuffer().buffer();
-                    VkDeviceSize voff = 0;
-                    vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
-
-                    vkCmdBindIndexBuffer(cmd, gpu->subdivPrimaryEdgeIndexBuffer().buffer(), 0, VK_INDEX_TYPE_UINT32);
-                    vkCmdDrawIndexed(cmd, gpu->subdivPrimaryEdgeIndexCount(), 1, 0, 0, 0);
-                }
-            }
+                VkDeviceSize voff = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &wgeo.posVb, &voff);
+                vkCmdBindIndexBuffer(cmd, wgeo.idxIb, 0, wgeo.idxType);
+                vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
+            });
         }
     }
     // ------------------------------------------------------------
@@ -1993,20 +1718,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineDepthOnly);
 
-            for (SceneMesh* sm : scene->sceneMeshes())
-            {
-                if (!sm || !sm->visible())
-                    continue;
-
-                if (!sm->gpu())
-                    sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
-
-                auto* gpu = sm->gpu();
-                if (!gpu)
-                    continue;
-
-                const bool useSubdiv = (sm->subdivisionLevel() > 0);
-
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 PushConstants pc{};
                 pc.model = sm->model();
                 pc.color = glm::vec4(0, 0, 0, 0);
@@ -2020,55 +1732,16 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                    sizeof(PushConstants),
                                    &pc);
 
-                if (!useSubdiv)
-                {
-                    if (gpu->vertexCount() == 0)
-                        continue;
+                const render::geom::GfxMeshGeometry geo = render::geom::selectGfxGeometry(sm, gpu);
+                if (!geo.valid())
+                    return;
 
-                    if (!gpu->polyVertBuffer().valid() ||
-                        !gpu->polyNormBuffer().valid() ||
-                        !gpu->polyUvPosBuffer().valid() ||
-                        !gpu->polyMatIdBuffer().valid())
-                    {
-                        continue;
-                    }
+                VkBuffer     bufs[4] = {geo.posBuffer, geo.nrmBuffer, geo.uvBuffer, geo.matBuffer};
+                VkDeviceSize offs[4] = {0, 0, 0, 0};
 
-                    VkBuffer bufs[4] = {
-                        gpu->polyVertBuffer().buffer(),
-                        gpu->polyNormBuffer().buffer(),
-                        gpu->polyUvPosBuffer().buffer(),
-                        gpu->polyMatIdBuffer().buffer(),
-                    };
-                    VkDeviceSize offs[4] = {0, 0, 0, 0};
-
-                    vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
-                    vkCmdDraw(cmd, gpu->vertexCount(), 1, 0, 0);
-                }
-                else
-                {
-                    if (gpu->subdivPolyVertexCount() == 0)
-                        continue;
-
-                    if (!gpu->subdivPolyVertBuffer().valid() ||
-                        !gpu->subdivPolyNormBuffer().valid() ||
-                        !gpu->subdivPolyUvBuffer().valid() ||
-                        !gpu->subdivPolyMatIdBuffer().valid())
-                    {
-                        continue;
-                    }
-
-                    VkBuffer bufs[4] = {
-                        gpu->subdivPolyVertBuffer().buffer(),
-                        gpu->subdivPolyNormBuffer().buffer(),
-                        gpu->subdivPolyUvBuffer().buffer(),
-                        gpu->subdivPolyMatIdBuffer().buffer(),
-                    };
-                    VkDeviceSize offs[4] = {0, 0, 0, 0};
-
-                    vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
-                    vkCmdDraw(cmd, gpu->subdivPolyVertexCount(), 1, 0, 0);
-                }
-            }
+                vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
+                vkCmdDraw(cmd, geo.vertexCount, 1, 0, 0);
+            });
         }
 
         auto drawEdges = [&](VkPipeline pipeline, const glm::vec4& color) {
@@ -2077,18 +1750,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-            for (SceneMesh* sm : scene->sceneMeshes())
-            {
-                if (!sm || !sm->visible())
-                    continue;
-
-                if (!sm->gpu())
-                    sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
-
-                auto* gpu = sm->gpu();
-                if (!gpu)
-                    continue;
-
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
                 PushConstants pc{};
@@ -2102,37 +1764,18 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                    sizeof(PushConstants),
                                    &pc);
 
-                if (!useSubdiv)
-                {
-                    if (gpu->edgeIndexCount() == 0)
-                        continue;
+                // =========================================================
+                // REPLACED: duplicated base/subdiv edge bind+draw
+                // =========================================================
+                const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
+                if (!wgeo.valid())
+                    return;
 
-                    if (!gpu->uniqueVertBuffer().valid() || !gpu->edgeIndexBuffer().valid())
-                        continue;
-
-                    VkBuffer     vbuf = gpu->uniqueVertBuffer().buffer();
-                    VkDeviceSize voff = 0;
-                    vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
-
-                    vkCmdBindIndexBuffer(cmd, gpu->edgeIndexBuffer().buffer(), 0, VK_INDEX_TYPE_UINT32);
-                    vkCmdDrawIndexed(cmd, gpu->edgeIndexCount(), 1, 0, 0, 0);
-                }
-                else
-                {
-                    if (gpu->subdivPrimaryEdgeIndexCount() == 0)
-                        continue;
-
-                    if (!gpu->subdivSharedVertBuffer().valid() || !gpu->subdivPrimaryEdgeIndexBuffer().valid())
-                        continue;
-
-                    VkBuffer     vbuf = gpu->subdivSharedVertBuffer().buffer();
-                    VkDeviceSize voff = 0;
-                    vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
-
-                    vkCmdBindIndexBuffer(cmd, gpu->subdivPrimaryEdgeIndexBuffer().buffer(), 0, VK_INDEX_TYPE_UINT32);
-                    vkCmdDrawIndexed(cmd, gpu->subdivPrimaryEdgeIndexCount(), 1, 0, 0, 0);
-                }
-            }
+                VkDeviceSize voff = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &wgeo.posVb, &voff);
+                vkCmdBindIndexBuffer(cmd, wgeo.idxIb, 0, wgeo.idxType);
+                vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
+            });
         };
 
         // 2) hidden edges (GREATER) dim
@@ -2153,7 +1796,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 }
 
 //==================================================================
-// RT dispatch (now fully per-viewport)
+// RT dispatch (per-viewport)
 //==================================================================
 
 void Renderer::writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
@@ -2176,7 +1819,7 @@ void Renderer::writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
 }
 
 //==================================================================
-// RT dispatch (remove redundant gpu->update(cmd) here; prepass does it)
+// RT dispatch
 //==================================================================
 
 void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
@@ -2223,58 +1866,50 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
 
         if (out.needsInit)
         {
-            imageBarrier(fc.cmd,
-                         out.image,
-                         VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_GENERAL,
-                         0,
-                         VK_ACCESS_TRANSFER_WRITE_BIT,
-                         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            vkutil::imageBarrier(fc.cmd,
+                                 out.image,
+                                 VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_GENERAL,
+                                 0,
+                                 VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT);
 
             out.needsInit = false;
         }
         else
         {
-            imageBarrier(fc.cmd,
-                         out.image,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_IMAGE_LAYOUT_GENERAL,
-                         VK_ACCESS_SHADER_READ_BIT,
-                         VK_ACCESS_TRANSFER_WRITE_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            vkutil::imageBarrier(fc.cmd,
+                                 out.image,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_GENERAL,
+                                 VK_ACCESS_SHADER_READ_BIT,
+                                 VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT);
         }
 
         vkCmdClearColorImage(fc.cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
 
-        imageBarrier(fc.cmd,
-                     out.image,
-                     VK_IMAGE_LAYOUT_GENERAL,
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_ACCESS_TRANSFER_WRITE_BIT,
-                     VK_ACCESS_SHADER_READ_BIT,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        vkutil::imageBarrier(fc.cmd,
+                             out.image,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_ACCESS_TRANSFER_WRITE_BIT,
+                             VK_ACCESS_SHADER_READ_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     }
 
     // Build BLAS for visible meshes (assumes MeshGpuResources already updated in renderPrePass)
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm || !sm->visible())
-            continue;
-
-        MeshGpuResources* gpu = sm->gpu();
-        if (!gpu)
-            continue;
-
-        const RtMeshGeometry geo = selectRtGeometry(sm);
+    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* /*gpu*/) {
+        const render::geom::RtMeshGeometry geo = render::geom::selectRtGeometry(sm);
         if (!geo.valid())
-            continue;
+            return;
 
         if (!ensureMeshBlas(vp, sm, geo, fc))
-            continue;
-    }
+            return;
+    });
 
     if (!ensureSceneTlas(vp, scene, fc))
         return;
@@ -2303,7 +1938,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
             if (b.as == VK_NULL_HANDLE || b.address == 0)
                 continue;
 
-            const RtMeshGeometry geo = selectRtGeometry(sm);
+            const render::geom::RtMeshGeometry geo = render::geom::selectRtGeometry(sm);
             if (!geo.valid() || !geo.shaderValid())
                 continue;
 
@@ -2352,14 +1987,14 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     }
 
     // Transition for raygen writes
-    imageBarrier(fc.cmd,
-                 out.image,
-                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                 VK_IMAGE_LAYOUT_GENERAL,
-                 VK_ACCESS_SHADER_READ_BIT,
-                 VK_ACCESS_SHADER_WRITE_BIT,
-                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+    vkutil::imageBarrier(fc.cmd,
+                         out.image,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_GENERAL,
+                         VK_ACCESS_SHADER_READ_BIT,
+                         VK_ACCESS_SHADER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
     vkCmdBindPipeline(fc.cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
 
@@ -2389,20 +2024,17 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
                                         1);
 
     // Transition back for present sampling
-    imageBarrier(fc.cmd,
-                 out.image,
-                 VK_IMAGE_LAYOUT_GENERAL,
-                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                 VK_ACCESS_SHADER_WRITE_BIT,
-                 VK_ACCESS_SHADER_READ_BIT,
-                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    vkutil::imageBarrier(fc.cmd,
+                         out.image,
+                         VK_IMAGE_LAYOUT_GENERAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_ACCESS_SHADER_WRITE_BIT,
+                         VK_ACCESS_SHADER_READ_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 }
 
-bool Renderer::ensureMeshBlas(Viewport*                 vp,
-                              SceneMesh*                sm,
-                              const RtMeshGeometry&     geo,
-                              const RenderFrameContext& fc) noexcept
+bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept
 {
     if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !vp || !sm || !fc.cmd)
         return false;
@@ -2433,7 +2065,7 @@ bool Renderer::ensureMeshBlas(Viewport*                 vp,
 
     RtBlas& b = m_rtBlas[sm];
 
-    if (!kRtRebuildAsEveryFrame && b.as != VK_NULL_HANDLE && b.buildKey == key)
+    if (b.as != VK_NULL_HANDLE && b.buildKey == key)
         return true;
 
     // ------------------------------------------------------------
@@ -2618,53 +2250,52 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
     // Use your change counter as the TLAS rebuild key.
     uint64_t key = m_rtTlasChangeCounter ? m_rtTlasChangeCounter->value() : 1ull;
 
+    // ------------------------------------------------------------
+    // Helper: iterate visible meshes that have a valid BLAS (no GPU creation!)
+    // ------------------------------------------------------------
+    auto forEachVisibleBlasMesh = [&](auto&& fn) {
+        for (SceneMesh* sm : scene->sceneMeshes())
+        {
+            if (!sm || !sm->visible())
+                continue;
+
+            auto it = m_rtBlas.find(sm);
+            if (it == m_rtBlas.end())
+                continue;
+
+            const RtBlas& b = it->second;
+            if (b.as == VK_NULL_HANDLE || b.address == 0)
+                continue;
+
+            fn(*sm, b);
+        }
+    };
+
+    // ------------------------------------------------------------
     // Also rebuild TLAS if any BLAS changed (subdiv level change rebuilds BLAS)
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm || !sm->visible())
-            continue;
-
-        auto it = m_rtBlas.find(sm);
-        if (it == m_rtBlas.end())
-            continue;
-
-        const RtBlas& b = it->second;
-        if (b.as == VK_NULL_HANDLE || b.address == 0)
-            continue;
-
+    // ------------------------------------------------------------
+    forEachVisibleBlasMesh([&](SceneMesh& /*sm*/, const RtBlas& b) {
         // Hash-combine b.buildKey into TLAS key
         key ^= (b.buildKey + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2));
-    }
+    });
 
-    if (!kRtRebuildAsEveryFrame && t.as != VK_NULL_HANDLE && t.buildKey == key)
+    if (t.as != VK_NULL_HANDLE && t.buildKey == key)
         return true;
 
+    // ------------------------------------------------------------
     // Gather instances (must match the order used for RtInstanceData upload!)
+    // ------------------------------------------------------------
     std::vector<VkAccelerationStructureInstanceKHR> instances;
     instances.reserve(scene->sceneMeshes().size());
 
-    // Also gather BLAS refs in the same order for any debugging/consistency checks
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm || !sm->visible())
-            continue;
-
-        auto it = m_rtBlas.find(sm);
-        if (it == m_rtBlas.end())
-            continue;
-
-        const RtBlas& b = it->second;
-        if (b.as == VK_NULL_HANDLE || b.address == 0)
-            continue;
-
+    forEachVisibleBlasMesh([&](SceneMesh& /*sm*/, const RtBlas& b) {
         VkAccelerationStructureInstanceKHR inst{};
         // Row-major 3x4; identity (no transforms yet)
         inst.transform.matrix[0][0] = 1.0f;
         inst.transform.matrix[1][1] = 1.0f;
         inst.transform.matrix[2][2] = 1.0f;
 
-        // These must match your shader's instance indexing assumptions:
-        // customIndex typically maps to "instanceId" used in closest hit.
+        // Must match shader instance indexing assumptions
         inst.instanceCustomIndex                    = static_cast<uint32_t>(instances.size());
         inst.mask                                   = 0xFF;
         inst.instanceShaderBindingTableRecordOffset = 0; // 1 hit group for now
@@ -2672,7 +2303,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
         inst.accelerationStructureReference         = b.address;
 
         instances.push_back(inst);
-    }
+    });
 
     if (instances.empty())
     {
@@ -2836,10 +2467,6 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
     if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
         return false;
 
-    buildInfo.dstAccelerationStructure  = t.as;
-    if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
-        return false;
-
     RtViewportState& rts     = ensureRtViewportState(vp);
     GpuBuffer&       scratch = rts.scratchBuffers[fc.frameIndex];
 
@@ -2892,7 +2519,6 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
 
 //==================================================================
 // drawOverlays / drawSelection / drawSceneGrid / ensureOverlayVertexCapacity
-// NOTE: Keep these from your current file unchanged.
 //==================================================================
 
 void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays)
@@ -2990,7 +2616,7 @@ void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
 }
 
 //==================================================================
-// drawSelection (NO MeshGpuResources::update(cmd) calls here anymore)
+// drawSelection (NO MeshGpuResources::update(cmd) calls here)
 //==================================================================
 
 void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
@@ -3008,9 +2634,9 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
 
     const bool showOccluded = (vp->drawMode() == DrawMode::WIREFRAME);
 
-    auto pushPC = [&](SceneMesh* sm, const glm::vec4& color) {
+    auto pushPC = [&](SceneMesh& sm, const glm::vec4& color) {
         PushConstants pc = {};
-        pc.model         = sm->model();
+        pc.model         = sm.model();
         pc.color         = color;
 
         vkCmdPushConstants(cmd,
@@ -3021,7 +2647,7 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
                            &pc);
     };
 
-    auto drawHidden = [&](SceneMesh* sm, VkPipeline pipeline, uint32_t indexCount) {
+    auto drawHidden = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
         if (!showOccluded)
             return;
         if (!pipeline || indexCount == 0)
@@ -3033,7 +2659,7 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
         vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
     };
 
-    auto drawVisible = [&](SceneMesh* sm, VkPipeline pipeline, uint32_t indexCount) {
+    auto drawVisible = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
         if (!pipeline || indexCount == 0)
             return;
 
@@ -3043,119 +2669,32 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
         vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
     };
 
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm->visible())
-            continue;
+    const render::geom::SelPipelines pipes{
+        .vertVis = m_pipelineSelVert,
+        .vertHid = m_pipelineSelVertHidden,
+        .edgeVis = m_pipelineSelEdge,
+        .edgeHid = m_pipelineSelEdgeHidden,
+        .polyVis = m_pipelineSelPoly,
+        .polyHid = m_pipelineSelPolyHidden,
+    };
 
-        if (!sm->gpu())
-            sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
+    const SelectionMode mode = scene->selectionMode();
 
-        MeshGpuResources* gpu = sm->gpu();
-        if (!gpu)
-            continue;
-
+    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
         const bool useSubdiv = (sm->subdivisionLevel() > 0);
 
-        VkBuffer   posVb    = VK_NULL_HANDLE;
-        uint32_t   selCount = 0;
-        VkBuffer   selIb    = VK_NULL_HANDLE;
-        VkPipeline pipeVis  = VK_NULL_HANDLE;
-        VkPipeline pipeHid  = VK_NULL_HANDLE;
+        const render::geom::SelDrawGeo geo =
+            render::geom::selectSelGeometry(gpu, useSubdiv, mode, pipes);
 
-        const SelectionMode mode = scene->selectionMode();
+        if (!geo.valid())
+            return;
 
-        if (!useSubdiv)
-        {
-            if (gpu->uniqueVertCount() == 0 || !gpu->uniqueVertBuffer().valid())
-                continue;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &geo.posVb, &zeroOffset);
+        vkCmdBindIndexBuffer(cmd, geo.selIb, 0, VK_INDEX_TYPE_UINT32);
 
-            posVb = gpu->uniqueVertBuffer().buffer();
-
-            if (mode == SelectionMode::VERTS)
-            {
-                if (gpu->selVertIndexCount() == 0 || !gpu->selVertIndexBuffer().valid())
-                    continue;
-
-                selCount = gpu->selVertIndexCount();
-                selIb    = gpu->selVertIndexBuffer().buffer();
-                pipeVis  = m_pipelineSelVert;
-                pipeHid  = m_pipelineSelVertHidden;
-            }
-            else if (mode == SelectionMode::EDGES)
-            {
-                if (gpu->selEdgeIndexCount() == 0 || !gpu->selEdgeIndexBuffer().valid())
-                    continue;
-
-                selCount = gpu->selEdgeIndexCount();
-                selIb    = gpu->selEdgeIndexBuffer().buffer();
-                pipeVis  = m_pipelineSelEdge;
-                pipeHid  = m_pipelineSelEdgeHidden;
-            }
-            else if (mode == SelectionMode::POLYS)
-            {
-                if (gpu->selPolyIndexCount() == 0 || !gpu->selPolyIndexBuffer().valid())
-                    continue;
-
-                selCount = gpu->selPolyIndexCount();
-                selIb    = gpu->selPolyIndexBuffer().buffer();
-                pipeVis  = m_pipelineSelPoly;
-                pipeHid  = m_pipelineSelPolyHidden;
-            }
-            else
-            {
-                continue;
-            }
-        }
-        else
-        {
-            if (gpu->subdivSharedVertCount() == 0 || !gpu->subdivSharedVertBuffer().valid())
-                continue;
-
-            posVb = gpu->subdivSharedVertBuffer().buffer();
-
-            if (mode == SelectionMode::VERTS)
-            {
-                if (gpu->subdivSelVertIndexCount() == 0 || !gpu->subdivSelVertIndexBuffer().valid())
-                    continue;
-
-                selCount = gpu->subdivSelVertIndexCount();
-                selIb    = gpu->subdivSelVertIndexBuffer().buffer();
-                pipeVis  = m_pipelineSelVert;
-                pipeHid  = m_pipelineSelVertHidden;
-            }
-            else if (mode == SelectionMode::EDGES)
-            {
-                if (gpu->subdivSelEdgeIndexCount() == 0 || !gpu->subdivSelEdgeIndexBuffer().valid())
-                    continue;
-
-                selCount = gpu->subdivSelEdgeIndexCount();
-                selIb    = gpu->subdivSelEdgeIndexBuffer().buffer();
-                pipeVis  = m_pipelineSelEdge;
-                pipeHid  = m_pipelineSelEdgeHidden;
-            }
-            else if (mode == SelectionMode::POLYS)
-            {
-                if (gpu->subdivSelPolyIndexCount() == 0 || !gpu->subdivSelPolyIndexBuffer().valid())
-                    continue;
-
-                selCount = gpu->subdivSelPolyIndexCount();
-                selIb    = gpu->subdivSelPolyIndexBuffer().buffer();
-                pipeVis  = m_pipelineSelPoly;
-                pipeHid  = m_pipelineSelPolyHidden;
-            }
-            else
-            {
-                continue;
-            }
-        }
-
-        vkCmdBindVertexBuffers(cmd, 0, 1, &posVb, &zeroOffset);
-        vkCmdBindIndexBuffer(cmd, selIb, 0, VK_INDEX_TYPE_UINT32);
-
-        drawHidden(sm, pipeHid, selCount);
-        drawVisible(sm, pipeVis, selCount);
-    }
+        drawHidden(*sm, geo.pipeHid, geo.selCount);
+        drawVisible(*sm, geo.pipeVis, geo.selCount);
+    });
 
     vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
 }
@@ -3174,52 +2713,7 @@ void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     if (m_pipelineLayout == VK_NULL_HANDLE)
         return;
 
-    // ------------------------------------------------------------
-    // Orient the grid depending on the viewport view mode.
-    // Grid geometry is authored on XZ (Y=0) as a floor.
-    // For FRONT/LEFT/etc we rotate it so it becomes XY or YZ.
-    // ------------------------------------------------------------
-    glm::mat4 gridModel = glm::mat4(1.0f);
-
-    const float halfPi = glm::half_pi<float>();
-
-    switch (vp->viewMode())
-    {
-        case ViewMode::TOP:
-            // XZ plane (default)
-            gridModel = glm::mat4(1.0f);
-            break;
-
-        case ViewMode::BOTTOM:
-            // still XZ, but flip it
-            gridModel = glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
-            break;
-
-        case ViewMode::FRONT:
-            // want XY plane -> rotate XZ around +X by -90°
-            gridModel = glm::rotate(glm::mat4(1.0f), -halfPi, glm::vec3(1.0f, 0.0f, 0.0f));
-            break;
-
-        case ViewMode::BACK:
-            // XY plane, opposite
-            gridModel = glm::rotate(glm::mat4(1.0f), +halfPi, glm::vec3(1.0f, 0.0f, 0.0f));
-            break;
-
-        case ViewMode::LEFT:
-            // want YZ plane -> rotate XZ around +Z by +90°
-            gridModel = glm::rotate(glm::mat4(1.0f), +halfPi, glm::vec3(0.0f, 0.0f, 1.0f));
-            break;
-
-        case ViewMode::RIGHT:
-            // YZ plane, opposite
-            gridModel = glm::rotate(glm::mat4(1.0f), -halfPi, glm::vec3(0.0f, 0.0f, 1.0f));
-            break;
-
-        default:
-            // Perspective / other: treat as floor grid
-            gridModel = glm::mat4(1.0f);
-            break;
-    }
+    glm::mat4 gridModel = render::geom::gridModelFor(vp->viewMode());
 
     PushConstants pc{};
     pc.model = gridModel;
@@ -3233,4 +2727,26 @@ void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
                        &pc);
 
     m_grid->render(cmd);
+}
+
+template<typename Fn>
+void Renderer::forEachVisibleMesh(Scene* scene, Fn&& fn)
+{
+    if (!scene)
+        return;
+
+    for (SceneMesh* sm : scene->sceneMeshes())
+    {
+        if (!sm || !sm->visible())
+            continue;
+
+        if (!sm->gpu())
+            sm->gpu(std::make_unique<MeshGpuResources>(&m_ctx, sm));
+
+        MeshGpuResources* gpu = sm->gpu();
+        if (!gpu)
+            continue;
+
+        fn(sm, gpu);
+    }
 }

@@ -124,7 +124,7 @@ void MeshGpuResources::updateOrRecreate(const RenderFrameContext& fc,
             s_leakedDeviceLocal.push_back(std::move(buffer));
         }
 
-        buffer = {};
+        buffer = {}; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     }
 
     buffer = vkutil::createDeviceLocalBufferEmpty(*m_ctx, capacity, finalUsage, deviceAddress);

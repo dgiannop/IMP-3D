@@ -34,26 +34,11 @@ public:
     // ---------------------------------------------------------
     // Coarse solid (corner-expanded triangle list, no indices)
     // ---------------------------------------------------------
-    const GpuBuffer& polyVertBuffer() const
-    {
-        return m_polyVertBuffer;
-    } // binding 0, vec3
-    const GpuBuffer& polyNormBuffer() const
-    {
-        return m_polyNormBuffer;
-    } // binding 1, vec3
-    const GpuBuffer& polyUvPosBuffer() const
-    {
-        return m_polyUvBuffer;
-    } // binding 2, vec2
-    const GpuBuffer& polyMatIdBuffer() const
-    {
-        return m_polyMatIdBuffer;
-    } // binding 3, uint32_t
-    uint32_t vertexCount() const
-    {
-        return m_polyVertexCount;
-    } // triCount*3
+    const GpuBuffer& polyVertBuffer() const { return m_polyVertBuffer; }   // binding 0, vec3
+    const GpuBuffer& polyNormBuffer() const { return m_polyNormBuffer; }   // binding 1, vec3
+    const GpuBuffer& polyUvPosBuffer() const { return m_polyUvBuffer; }    // binding 2, vec2
+    const GpuBuffer& polyMatIdBuffer() const { return m_polyMatIdBuffer; } // binding 3, uint32_t
+    uint32_t         vertexCount() const { return m_polyVertexCount; }     // triCount*3
 
     // ---------------------------------------------------------
     // Coarse unique verts + edges
@@ -62,23 +47,11 @@ public:
     //  - 1:1 with SysMesh vertex slot indices (0..vert_buffer_size-1).
     //  - Includes "holes" (invalid slots) filled with (0,0,0) for stable indexing.
     // ---------------------------------------------------------
-    const GpuBuffer& uniqueVertBuffer() const
-    {
-        return m_uniqueVertBuffer;
-    } // vec3, index = SysMesh vertex index
-    uint32_t uniqueVertCount() const
-    {
-        return m_uniqueVertCount;
-    }
+    const GpuBuffer& uniqueVertBuffer() const { return m_uniqueVertBuffer; } // vec3, index = SysMesh vertex index
+    uint32_t         uniqueVertCount() const { return m_uniqueVertCount; }
 
-    const GpuBuffer& edgeIndexBuffer() const
-    {
-        return m_edgeIndexBuffer;
-    } // uint32 indices into uniqueVertBuffer
-    uint32_t edgeIndexCount() const
-    {
-        return m_edgeIndexCount;
-    } // lineCount*2
+    const GpuBuffer& edgeIndexBuffer() const { return m_edgeIndexBuffer; } // uint32 indices into uniqueVertBuffer
+    uint32_t         edgeIndexCount() const { return m_edgeIndexCount; }   // lineCount*2
 
     // ---------------------------------------------------------
     // Coarse RT triangles (shared)
@@ -87,14 +60,8 @@ public:
     //  - Vertex buffer: uniqueVertBuffer (shared vertex slots)
     //  - Index buffer:  coarseTriIndexBuffer (3 indices per triangle)
     // ---------------------------------------------------------
-    const GpuBuffer& coarseTriIndexBuffer() const
-    {
-        return m_coarseTriIndexBuffer;
-    }
-    uint32_t coarseTriIndexCount() const
-    {
-        return m_coarseTriIndexCount;
-    } // triCount*3
+    const GpuBuffer& coarseTriIndexBuffer() const { return m_coarseTriIndexBuffer; }
+    uint32_t         coarseTriIndexCount() const { return m_coarseTriIndexCount; } // triCount*3
 
     // ---------------------------------------------------------
     // Coarse RT triangles (shader-readable padded)
@@ -105,127 +72,58 @@ public:
     // This buffer is NOT used for BLAS builds.
     // It is only for closest-hit shading that wants to fetch triangle indices.
     // ---------------------------------------------------------
-    const GpuBuffer& coarseRtTriIndexBuffer() const
-    {
-        return m_coarseRtTriIndexBuffer;
-    }
-    uint32_t coarseRtTriCount() const
-    {
-        return m_coarseRtTriCount;
-    } // triCount (not *3)
+    const GpuBuffer& coarseRtTriIndexBuffer() const { return m_coarseRtTriIndexBuffer; }
+    uint32_t         coarseRtTriCount() const { return m_coarseRtTriCount; } // triCount (not *3)
 
     // ---------------------------------------------------------
     // Selection buffers (indexed into uniqueVertBuffer)
     // ---------------------------------------------------------
-    const GpuBuffer& selVertIndexBuffer() const
-    {
-        return m_selVertIndexBuffer;
-    }
-    uint32_t selVertIndexCount() const
-    {
-        return m_selVertIndexCount;
-    }
+    const GpuBuffer& selVertIndexBuffer() const { return m_selVertIndexBuffer; }
+    uint32_t         selVertIndexCount() const { return m_selVertIndexCount; }
 
-    const GpuBuffer& selEdgeIndexBuffer() const
-    {
-        return m_selEdgeIndexBuffer;
-    }
-    uint32_t selEdgeIndexCount() const
-    {
-        return m_selEdgeIndexCount;
-    }
+    const GpuBuffer& selEdgeIndexBuffer() const { return m_selEdgeIndexBuffer; }
+    uint32_t         selEdgeIndexCount() const { return m_selEdgeIndexCount; }
 
-    const GpuBuffer& selPolyIndexBuffer() const
-    {
-        return m_selPolyIndexBuffer;
-    }
-    uint32_t selPolyIndexCount() const
-    {
-        return m_selPolyIndexCount;
-    }
+    const GpuBuffer& selPolyIndexBuffer() const { return m_selPolyIndexBuffer; }
+    uint32_t         selPolyIndexCount() const { return m_selPolyIndexCount; }
 
     // ---------------------------------------------------------
     // Subdiv solid (SysMesh-style: corner-expanded triangle list, no indices)
     // ---------------------------------------------------------
-    const GpuBuffer& subdivPolyVertBuffer() const
-    {
-        return m_subdivPolyVertBuffer;
-    }
-    const GpuBuffer& subdivPolyNormBuffer() const
-    {
-        return m_subdivPolyNormBuffer;
-    }
-    const GpuBuffer& subdivPolyUvBuffer() const
-    {
-        return m_subdivPolyUvBuffer;
-    }
-    const GpuBuffer& subdivPolyMatIdBuffer() const
-    {
-        return m_subdivPolyMatIdBuffer;
-    }
-    uint32_t subdivPolyVertexCount() const
-    {
-        return m_subdivPolyVertexCount;
-    } // triCount*3 (corner-expanded)
+    const GpuBuffer& subdivPolyVertBuffer() const { return m_subdivPolyVertBuffer; }
+    const GpuBuffer& subdivPolyNormBuffer() const { return m_subdivPolyNormBuffer; }
+    const GpuBuffer& subdivPolyUvBuffer() const { return m_subdivPolyUvBuffer; }
+    const GpuBuffer& subdivPolyMatIdBuffer() const { return m_subdivPolyMatIdBuffer; }
+    uint32_t         subdivPolyVertexCount() const { return m_subdivPolyVertexCount; } // triCount*3 (corner-expanded)
 
     // ---------------------------------------------------------
     // Subdiv shared representation (aux/debug/compute – NOT used for solid shading)
     // ---------------------------------------------------------
-    const GpuBuffer& subdivSharedVertBuffer() const
-    {
-        return m_subdivSharedVertBuffer;
-    }
-    uint32_t subdivSharedVertCount() const
-    {
-        return m_subdivSharedVertCount;
-    }
+    const GpuBuffer& subdivSharedVertBuffer() const { return m_subdivSharedVertBuffer; }
+    uint32_t         subdivSharedVertCount() const { return m_subdivSharedVertCount; }
 
-    const GpuBuffer& subdivSharedTriIndexBuffer() const
-    {
-        return m_subdivSharedTriIndexBuffer;
-    }
-    uint32_t subdivSharedTriIndexCount() const
-    {
-        return m_subdivSharedTriIndexCount;
-    }
+    const GpuBuffer& subdivSharedTriIndexBuffer() const { return m_subdivSharedTriIndexBuffer; }
+    uint32_t         subdivSharedTriIndexCount() const { return m_subdivSharedTriIndexCount; }
 
     // ---------------------------------------------------------
     // Subdiv RT triangles (shader-readable padded)
     // ---------------------------------------------------------
-    const GpuBuffer& subdivRtTriIndexBuffer() const
-    {
-        return m_subdivRtTriIndexBuffer;
-    }
-    uint32_t subdivRtTriCount() const
-    {
-        return m_subdivRtTriCount;
-    }
+    const GpuBuffer& subdivRtTriIndexBuffer() const { return m_subdivRtTriIndexBuffer; }
+    uint32_t         subdivRtTriCount() const { return m_subdivRtTriCount; }
 
     // ---------------------------------------------------------
     // Coarse RT positions (shader-readable padded vec4)
     //  - 1:1 with SysMesh vertex slot indices (same indexing as uniqueVertBuffer)
     // ---------------------------------------------------------
-    const GpuBuffer& coarseRtPosBuffer() const
-    {
-        return m_coarseRtPosBuffer;
-    }
-    uint32_t coarseRtPosCount() const
-    {
-        return m_coarseRtPosCount;
-    }
+    const GpuBuffer& coarseRtPosBuffer() const { return m_coarseRtPosBuffer; }
+    uint32_t         coarseRtPosCount() const { return m_coarseRtPosCount; }
 
     // ---------------------------------------------------------
     // Subdiv RT positions (shader-readable padded vec4)
     //  - 1:1 with subdiv shared vertex indices (same indexing as subdivSharedVertBuffer)
     // ---------------------------------------------------------
-    const GpuBuffer& subdivRtPosBuffer() const
-    {
-        return m_subdivRtPosBuffer;
-    }
-    uint32_t subdivRtPosCount() const
-    {
-        return m_subdivRtPosCount;
-    }
+    const GpuBuffer& subdivRtPosBuffer() const { return m_subdivRtPosBuffer; }
+    uint32_t         subdivRtPosCount() const { return m_subdivRtPosCount; }
 
     // ---------------------------------------------------------
     // Coarse RT CORNER normals (shader-readable padded vec4)
@@ -233,14 +131,8 @@ public:
     //  - Index: corner = primId*3 + c
     //  - Count = coarseRtTriCount()*3
     // ---------------------------------------------------------
-    const GpuBuffer& coarseRtCornerNrmBuffer() const
-    {
-        return m_coarseRtCornerNrmBuffer;
-    }
-    uint32_t coarseRtCornerNrmCount() const
-    {
-        return m_coarseRtCornerNrmCount;
-    }
+    const GpuBuffer& coarseRtCornerNrmBuffer() const { return m_coarseRtCornerNrmBuffer; }
+    uint32_t         coarseRtCornerNrmCount() const { return m_coarseRtCornerNrmCount; }
 
     // ---------------------------------------------------------
     // Subdiv RT CORNER normals (shader-readable padded vec4)
@@ -248,75 +140,33 @@ public:
     //  - Index: corner = primId*3 + c
     //  - Count = subdivRtTriCount()*3
     // ---------------------------------------------------------
-    const GpuBuffer& subdivRtCornerNrmBuffer() const
-    {
-        return m_subdivRtCornerNrmBuffer;
-    }
-    uint32_t subdivRtCornerNrmCount() const
-    {
-        return m_subdivRtCornerNrmCount;
-    }
+    const GpuBuffer& subdivRtCornerNrmBuffer() const { return m_subdivRtCornerNrmBuffer; }
+    uint32_t         subdivRtCornerNrmCount() const { return m_subdivRtCornerNrmCount; }
 
     // ---------------------------------------------------------
     // Subdiv primary edges (coarse-derived), line-list indices
     // (Renderer decides which position buffer to use; usually subdivSharedVertBuffer)
     // ---------------------------------------------------------
-    const GpuBuffer& subdivPrimaryEdgeIndexBuffer() const
-    {
-        return m_subdivPrimaryEdgeIndexBuffer;
-    }
-    uint32_t subdivPrimaryEdgeIndexCount() const
-    {
-        return m_subdivPrimaryEdgeIndexCount;
-    }
+    const GpuBuffer& subdivPrimaryEdgeIndexBuffer() const { return m_subdivPrimaryEdgeIndexBuffer; }
+    uint32_t         subdivPrimaryEdgeIndexCount() const { return m_subdivPrimaryEdgeIndexCount; }
 
-    const GpuBuffer& coarseRtCornerUvBuffer() const
-    {
-        return m_coarseRtCornerUvBuffer;
-    }
-    uint32_t coarseRtCornerUvCount() const
-    {
-        return m_coarseRtCornerUvCount;
-    }
+    const GpuBuffer& coarseRtCornerUvBuffer() const { return m_coarseRtCornerUvBuffer; }
+    uint32_t         coarseRtCornerUvCount() const { return m_coarseRtCornerUvCount; }
 
-    const GpuBuffer& subdivRtCornerUvBuffer() const
-    {
-        return m_subdivRtCornerUvBuffer;
-    }
-    uint32_t subdivRtCornerUvCount() const
-    {
-        return m_subdivRtCornerUvCount;
-    }
+    const GpuBuffer& subdivRtCornerUvBuffer() const { return m_subdivRtCornerUvBuffer; }
+    uint32_t         subdivRtCornerUvCount() const { return m_subdivRtCornerUvCount; }
 
     // ---------------------------------------------------------
     // Subdiv selection (indices into subdivSharedVertBuffer)
     // ---------------------------------------------------------
-    const GpuBuffer& subdivSelVertIndexBuffer() const
-    {
-        return m_subdivSelVertIndexBuffer;
-    }
-    uint32_t subdivSelVertIndexCount() const
-    {
-        return m_subdivSelVertIndexCount;
-    }
+    const GpuBuffer& subdivSelVertIndexBuffer() const { return m_subdivSelVertIndexBuffer; }
+    uint32_t         subdivSelVertIndexCount() const { return m_subdivSelVertIndexCount; }
 
-    const GpuBuffer& subdivSelEdgeIndexBuffer() const
-    {
-        return m_subdivSelEdgeIndexBuffer;
-    }
-    uint32_t subdivSelEdgeIndexCount() const
-    {
-        return m_subdivSelEdgeIndexCount;
-    }
+    const GpuBuffer& subdivSelEdgeIndexBuffer() const { return m_subdivSelEdgeIndexBuffer; }
+    uint32_t         subdivSelEdgeIndexCount() const { return m_subdivSelEdgeIndexCount; }
 
-    const GpuBuffer& subdivSelPolyIndexBuffer() const
-    {
-        return m_subdivSelPolyIndexBuffer;
-    }
-    uint32_t subdivSelPolyIndexCount() const
-    {
-        return m_subdivSelPolyIndexCount;
-    }
+    const GpuBuffer& subdivSelPolyIndexBuffer() const { return m_subdivSelPolyIndexBuffer; }
+    uint32_t         subdivSelPolyIndexCount() const { return m_subdivSelPolyIndexCount; }
 
 private:
     VulkanContext* m_ctx   = nullptr;
