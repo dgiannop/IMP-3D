@@ -123,10 +123,11 @@ public:
 
     struct alignas(16) RtCameraUBO
     {
-        glm::mat4 invViewProj;
-        glm::vec4 camPos;
+        glm::mat4 invViewProj; // 64
+        glm::vec4 camPos;      // 16  (xyz = position)
+        glm::vec4 clearColor;  // 16  (rgba)
     };
-    static_assert(sizeof(RtCameraUBO) == 80);
+    static_assert(sizeof(RtCameraUBO) == 96);
 
     struct RtInstanceData
     {

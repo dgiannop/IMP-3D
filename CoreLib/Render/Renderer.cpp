@@ -1178,8 +1178,9 @@ bool Renderer::initRayTracingResources()
 
     bindings[2].binding = 2;
     bindings[2].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[2].stages  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    bindings[2].count   = 1;
+    // IMPORTANT: camera UBO must be visible to MISS if rmiss reads it.
+    bindings[2].stages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+    bindings[2].count  = 1;
 
     bindings[3].binding = 3;
     bindings[3].type    = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -1853,7 +1854,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     if (!out.image || !out.view)
         return;
 
-    // Clear RT output to viewport background
+    // Clear RT output to viewport background (optional now, but fine to keep)
     {
         const VkClearColorValue clear = vkutil::toVkClearColor(vp->clearColor());
 
@@ -1907,8 +1908,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
         if (!geo.valid())
             return;
 
-        if (!ensureMeshBlas(vp, sm, geo, fc))
-            return;
+        (void)ensureMeshBlas(vp, sm, geo, fc);
     });
 
     if (!ensureSceneTlas(vp, scene, fc))
@@ -1983,6 +1983,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
         RtCameraUBO cam = {};
         cam.invViewProj = glm::inverse(vp->projection() * vp->view());
         cam.camPos      = glm::vec4(vp->cameraPosition(), 1.0f);
+        cam.clearColor  = vp->clearColor(); // IMPORTANT: used by rmiss
         rtv.cameraBuffers[fc.frameIndex].upload(&cam, sizeof(cam));
     }
 

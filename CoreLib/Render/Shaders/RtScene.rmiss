@@ -3,6 +3,25 @@
 
 layout(location = 0) rayPayloadInEXT vec4 payload;
 
+layout(set = 0, binding = 2) uniform CameraUBO
+{
+    mat4 invViewProj;
+    vec4 camPos;
+    vec4 clearColor;
+} cam;
+
+void main()
+{
+    payload = cam.clearColor;
+}
+
+
+/*
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+layout(location = 0) rayPayloadInEXT vec4 payload;
+
 void main()
 {
     // Simple sky-ish gradient based on ray direction
@@ -12,3 +31,4 @@ void main()
 
     payload = vec4(sky, 1.0);
 }
+*/

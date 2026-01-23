@@ -61,17 +61,7 @@ void main()
 {
     const uint instId = gl_InstanceCustomIndexEXT;
     RtInstanceData d = u_inst.inst[instId];
-/*
-uint i = gl_InstanceCustomIndexEXT;
-payload = vec4(float(i & 1u), float((i >> 1u) & 1u), float((i >> 2u) & 1u), 1.0);
-return;
 
-// Color-code missing pieces (pick any scheme you like)
-if (d.posAdr == 0ul) { payload = vec4(1,0,0,1); return; } // red = no positions
-if (d.idxAdr == 0ul) { payload = vec4(0,1,0,1); return; } // green = no indices
-if (d.nrmAdr == 0ul) { payload = vec4(0,0,1,1); return; } // blue = no normals
-payload = vec4(1,1,0,1); return; // yellow = addresses look non-zero
-*/
     if (d.posAdr == 0ul || d.idxAdr == 0ul || d.nrmAdr == 0ul /*|| d.uvAdr == 0ul*/ || d.triCount == 0u)
     {
         payload = vec4(1.0, 0.0, 1.0, 1.0); // magenta = invalid instance

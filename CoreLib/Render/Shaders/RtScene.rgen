@@ -12,6 +12,7 @@ layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
     vec4 camPos; // xyz = camera position
+    vec4 clearColor;
 } u_cam;
 
 struct RtInstanceData
