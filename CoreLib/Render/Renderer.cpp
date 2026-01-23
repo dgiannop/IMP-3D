@@ -316,12 +316,12 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
 
     matBindings[0].binding = 0;
     matBindings[0].type    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    matBindings[0].stages  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    matBindings[0].stages  = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
     matBindings[0].count   = 1;
 
     matBindings[1].binding = 1;
     matBindings[1].type    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    matBindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    matBindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
     matBindings[1].count   = kMaxTextureCount;
 
     if (!m_materialSetLayout.create(device, std::span{matBindings, 2}))
@@ -1178,9 +1178,8 @@ bool Renderer::initRayTracingResources()
 
     bindings[2].binding = 2;
     bindings[2].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    // IMPORTANT: camera UBO must be visible to MISS if rmiss reads it.
-    bindings[2].stages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
-    bindings[2].count  = 1;
+    bindings[2].stages  = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+    bindings[2].count   = 1;
 
     bindings[3].binding = 3;
     bindings[3].type    = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -1233,7 +1232,16 @@ bool Renderer::initRayTracingResources()
         }
     }
 
-    if (!m_rtPipeline.createScenePipeline(m_ctx, m_rtSetLayout.layout()))
+    // ------------------------------------------------------------
+    // KEY CHANGE: RT scene pipeline uses BOTH set layouts
+    // set=0 (rt), set=1 (materials)
+    // ------------------------------------------------------------
+    VkDescriptorSetLayout setLayouts[2] = {
+        m_rtSetLayout.layout(),
+        m_materialSetLayout.layout(),
+    };
+
+    if (!m_rtPipeline.createScenePipeline(m_ctx, setLayouts, 2))
     {
         std::cerr << "RendererVK: Failed to create RT scene pipeline.\n";
         return false;
@@ -1867,14 +1875,21 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     if (!ensureRtOutputImages(rtv, w, h))
         return;
 
-    if (fc.frameIndex >= rtv.images.size() || fc.frameIndex >= rtv.cameraBuffers.size())
+    if (fc.frameIndex >= rtv.images.size() ||
+        fc.frameIndex >= rtv.cameraBuffers.size() ||
+        fc.frameIndex >= rtv.instanceDataBuffers.size() ||
+        fc.frameIndex >= rtv.sets.size())
+    {
         return;
+    }
 
     RtImagePerFrame& out = rtv.images[fc.frameIndex];
     if (!out.image || !out.view)
         return;
 
-    // Clear RT output to viewport background (optional now, but fine to keep)
+    // ------------------------------------------------------------
+    // Clear RT output to viewport background (optional but fine)
+    // ------------------------------------------------------------
     {
         const VkClearColorValue clear = vkutil::toVkClearColor(vp->clearColor());
 
@@ -1922,7 +1937,9 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     }
 
-    // Build BLAS for visible meshes (assumes MeshGpuResources already updated in renderPrePass)
+    // ------------------------------------------------------------
+    // Build BLAS for visible meshes
+    // ------------------------------------------------------------
     forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* /*gpu*/) {
         const render::geom::RtMeshGeometry geo = render::geom::selectRtGeometry(sm);
         if (!geo.valid())
@@ -1934,13 +1951,18 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     if (!ensureSceneTlas(vp, scene, fc))
         return;
 
-    if (fc.frameIndex >= m_rtTlasFrames.size() || m_rtTlasFrames[fc.frameIndex].as == VK_NULL_HANDLE)
+    if (fc.frameIndex >= m_rtTlasFrames.size() ||
+        m_rtTlasFrames[fc.frameIndex].as == VK_NULL_HANDLE)
+    {
         return;
+    }
 
     // Bind TLAS into THIS viewport’s RT set for this frame
     writeRtTlasDescriptor(vp, fc.frameIndex);
 
-    // Upload per-instance shader data
+    // ------------------------------------------------------------
+    // Upload per-instance shader data (includes matIdAdr)
+    // ------------------------------------------------------------
     {
         std::vector<RtInstanceData> instData;
         instData.reserve(scene->sceneMeshes().size());
@@ -1966,10 +1988,18 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
             if (primCount == 0)
                 continue;
 
+            // Ensure primitive order streams match what RT will shade
             if (geo.shaderTriCount != primCount)
                 continue;
 
             if (geo.shadeNrmCount != primCount * 3u)
+                continue;
+
+            if (geo.shadeUvCount != primCount * 3u)
+                continue;
+
+            // NEW: one material id per triangle
+            if (geo.shadeMatIdCount != primCount)
                 continue;
 
             RtInstanceData d = {};
@@ -1977,9 +2007,10 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
             d.idxAdr         = vkutil::bufferDeviceAddress(m_ctx.device, geo.shaderIndexBuffer);
             d.nrmAdr         = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadeNrmBuffer);
             d.uvAdr          = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadeUvBuffer);
+            d.matIdAdr       = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadeMatIdBuffer);
             d.triCount       = geo.shaderTriCount;
 
-            if (d.posAdr == 0 || d.idxAdr == 0 || d.nrmAdr == 0 || d.triCount == 0)
+            if (d.posAdr == 0 || d.idxAdr == 0 || d.nrmAdr == 0 || d.uvAdr == 0 || d.matIdAdr == 0 || d.triCount == 0)
                 continue;
 
             instData.push_back(d);
@@ -1988,26 +2019,47 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
         if (!instData.empty())
         {
             const VkDeviceSize bytes = VkDeviceSize(instData.size() * sizeof(RtInstanceData));
+
             rtv.instanceDataBuffers[fc.frameIndex].upload(instData.data(), bytes);
 
             rtv.sets[fc.frameIndex].writeStorageBuffer(m_ctx.device,
-                                                       4,
+                                                       4, // binding = instance data
                                                        rtv.instanceDataBuffers[fc.frameIndex].buffer(),
                                                        bytes,
                                                        0);
         }
     }
 
+    // ------------------------------------------------------------
     // Update RT camera UBO (per viewport)
+    // ------------------------------------------------------------
     {
         RtCameraUBO cam = {};
         cam.invViewProj = glm::inverse(vp->projection() * vp->view());
         cam.camPos      = glm::vec4(vp->cameraPosition(), 1.0f);
-        cam.clearColor  = vp->clearColor(); // IMPORTANT: used by rmiss
+        cam.clearColor  = vp->clearColor(); // used by rmiss
         rtv.cameraBuffers[fc.frameIndex].upload(&cam, sizeof(cam));
     }
 
+    // ------------------------------------------------------------
+    // Ensure material table is up to date for RT
+    // (kept as you wrote it)
+    // ------------------------------------------------------------
+    if (scene->materialHandler() &&
+        m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
+    {
+        const auto& mats = scene->materialHandler()->materials();
+        for (uint32_t i = 0; i < m_ctx.framesInFlight; ++i)
+        {
+            uploadMaterialsToGpu(mats, *scene->textureHandler(), i);
+            updateMaterialTextureTable(*scene->textureHandler(), i);
+        }
+        m_curMaterialCounter = scene->materialHandler()->changeCounter()->value();
+    }
+
+    // ------------------------------------------------------------
     // Transition for raygen writes
+    // ------------------------------------------------------------
     vkutil::imageBarrier(fc.cmd,
                          out.image,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2017,15 +2069,23 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
+    // ------------------------------------------------------------
+    // Bind RT pipeline + descriptor sets
+    // ------------------------------------------------------------
     vkCmdBindPipeline(fc.cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
 
-    VkDescriptorSet set0 = rtv.sets[fc.frameIndex].set();
+    // bind BOTH set=0 (RT) and set=1 (materials)
+    VkDescriptorSet sets[2] = {
+        rtv.sets[fc.frameIndex].set(),      // set 0 : RT
+        m_materialSets[fc.frameIndex].set() // set 1 : materials
+    };
+
     vkCmdBindDescriptorSets(fc.cmd,
                             VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                             m_rtPipeline.layout(),
                             0,
-                            1,
-                            &set0,
+                            2,
+                            sets,
                             0,
                             nullptr);
 
@@ -2035,16 +2095,11 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     VkStridedDeviceAddressRegionKHR call = {};
     m_rtSbt.regions(m_ctx, rgen, miss, hit, call);
 
-    m_ctx.rtDispatch->vkCmdTraceRaysKHR(fc.cmd,
-                                        &rgen,
-                                        &miss,
-                                        &hit,
-                                        &call,
-                                        w,
-                                        h,
-                                        1);
+    m_ctx.rtDispatch->vkCmdTraceRaysKHR(fc.cmd, &rgen, &miss, &hit, &call, w, h, 1);
 
+    // ------------------------------------------------------------
     // Transition back for present sampling
+    // ------------------------------------------------------------
     vkutil::imageBarrier(fc.cmd,
                          out.image,
                          VK_IMAGE_LAYOUT_GENERAL,

@@ -196,6 +196,12 @@ void MeshGpuResources::destroy() noexcept
     m_subdivRtCornerNrmBuffer.destroy();
     m_subdivRtCornerNrmCount = 0;
 
+    m_coarseRtMatIdBuffer.destroy();
+    m_coarseRtMatIdCount = 0;
+
+    m_subdivRtMatIdBuffer.destroy();
+    m_subdivRtMatIdCount = 0;
+
     // Selection (coarse)
     m_selVertIndexBuffer.destroy();
     m_selEdgeIndexBuffer.destroy();
@@ -425,7 +431,6 @@ void MeshGpuResources::fullRebuild(const RenderFrameContext& fc, const SysMesh* 
     if (m_coarseRtTriCount > 0)
     {
         // We assume extractMeshData() outputs tri streams in the same triangle order as extractMeshTriIndices().
-        // Validate sizes so we never read stale buffers in RT.
         if (tri.norms.size() == triIdx.size())
         {
             std::vector<glm::vec4> nrm4(tri.norms.size());
@@ -459,12 +464,42 @@ void MeshGpuResources::fullRebuild(const RenderFrameContext& fc, const SysMesh* 
         }
     }
 
+    // ---------------------------------------------------------
+    // NEW: RT per-triangle material IDs (uint32, indexed by primId)
+    // We derive it from corner-expanded tri.matIds (one id per triangle).
+    // ---------------------------------------------------------
+    m_coarseRtMatIdCount = 0;
+
+    if (m_coarseRtTriCount > 0)
+    {
+        const size_t triCount        = size_t(m_coarseRtTriCount);
+        const size_t expectedCorners = triCount * 3ull;
+
+        if (tri.matIds.size() == expectedCorners)
+        {
+            std::vector<uint32_t> matPerTri;
+            matPerTri.resize(triCount);
+
+            for (size_t t = 0; t < triCount; ++t)
+                matPerTri[t] = tri.matIds[t * 3ull + 0ull];
+
+            m_coarseRtMatIdCount = static_cast<uint32_t>(matPerTri.size());
+
+            updateOrRecreate(fc,
+                             m_coarseRtMatIdBuffer,
+                             matPerTri,
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             kCapacity64KiB,
+                             /*deviceAddress*/ true);
+        }
+    }
+
     // --------------------------------------------------------------------
     // Barriers:
     //  - solid/unique vertex streams are read by vertex input
     //  - edge/tri indices are read by vertex input
     //  - BLAS build reads unique verts + tri indices
-    //  - RT shaders read storage buffers (pos/tri/nrm/uv)
+    //  - RT shaders read storage buffers (pos/tri/nrm/uv/mat)
     // --------------------------------------------------------------------
     vkutil::barrierTransferToVertexAttributeRead(fc.cmd);
     vkutil::barrierTransferToIndexRead(fc.cmd);
@@ -741,6 +776,30 @@ void MeshGpuResources::fullRebuildSubdiv(const RenderFrameContext& fc, const Sys
     }
 
     // ---------------------------------------------------------
+    // NEW: RT per-triangle material IDs (uint32, indexed by primId)
+    // ---------------------------------------------------------
+    m_subdivRtMatIdCount = 0;
+
+    if (m_subdivRtTriCount > 0)
+    {
+        const auto triMat = subdiv->triangleMaterialIds();
+        if (triMat.size() == size_t(m_subdivRtTriCount))
+        {
+            std::vector<uint32_t> tmp;
+            tmp.assign(triMat.begin(), triMat.end());
+
+            m_subdivRtMatIdCount = static_cast<uint32_t>(tmp.size());
+
+            updateOrRecreate(fc,
+                             m_subdivRtMatIdBuffer,
+                             tmp,
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             kCapacity64KiB,
+                             /*deviceAddress*/ true);
+        }
+    }
+
+    // ---------------------------------------------------------
     // B) Subdiv solid representation (corner-expanded pos/nrm/uv/mat)
     // ---------------------------------------------------------
     {
@@ -823,7 +882,7 @@ void MeshGpuResources::fullRebuildSubdiv(const RenderFrameContext& fc, const Sys
     //  - subdiv solid/shared vertex streams are vertex-input reads
     //  - subdiv shared/primary edge indices are vertex-input reads
     //  - BLAS build reads shared vert + shared tri index
-    //  - RT shaders read storage buffers
+    //  - RT shaders read storage buffers (pos/tri/nrm/uv/mat)
     vkutil::barrierTransferToVertexAttributeRead(fc.cmd);
     vkutil::barrierTransferToIndexRead(fc.cmd);
 

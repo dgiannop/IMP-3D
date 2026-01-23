@@ -6,11 +6,9 @@
 
 #include "ShaderStage.hpp"
 #include "VkPipelineHelpers.hpp"
-#include "VkUtilities.hpp"
 
 namespace
 {
-
     static VkPipelineShaderStageCreateInfo makeStage(VkShaderModule        mod,
                                                      VkShaderStageFlagBits stage) noexcept
     {
@@ -80,7 +78,7 @@ namespace vkrt
     }
 
     // ------------------------------------------------------------
-    // Create gradient RT pipeline
+    // Create gradient RT pipeline (single set layout)
     // ------------------------------------------------------------
 
     bool RtPipeline::createGradientPipeline(const VulkanContext&  ctx,
@@ -93,9 +91,6 @@ namespace vkrt
 
         m_device = ctx.device;
 
-        // ------------------------------------------------------------
-        // Pipeline layout (set = RT descriptor set only)
-        // ------------------------------------------------------------
         VkPipelineLayoutCreateInfo pl{};
         pl.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pl.setLayoutCount = 1;
@@ -106,9 +101,6 @@ namespace vkrt
 
         const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
-        // ------------------------------------------------------------
-        // Load RT shaders using existing ShaderStage system
-        // ------------------------------------------------------------
         ShaderStage rgen =
             vkutil::loadStage(ctx.device, shaderDir, "RtGradient.rgen.spv", VK_SHADER_STAGE_RAYGEN_BIT_KHR);
 
@@ -127,12 +119,8 @@ namespace vkrt
             rmiss.stageInfo(),
         };
 
-        // ------------------------------------------------------------
-        // Shader groups
-        // ------------------------------------------------------------
         VkRayTracingShaderGroupCreateInfoKHR groups[2]{};
 
-        // Raygen group
         groups[0].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
         groups[0].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
         groups[0].generalShader      = 0;
@@ -140,7 +128,6 @@ namespace vkrt
         groups[0].anyHitShader       = VK_SHADER_UNUSED_KHR;
         groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-        // Miss group
         groups[1].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
         groups[1].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
         groups[1].generalShader      = 1;
@@ -148,9 +135,6 @@ namespace vkrt
         groups[1].anyHitShader       = VK_SHADER_UNUSED_KHR;
         groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-        // ------------------------------------------------------------
-        // RT pipeline create
-        // ------------------------------------------------------------
         VkRayTracingPipelineCreateInfoKHR ci{};
         ci.sType                        = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
         ci.stageCount                   = 2;
@@ -182,31 +166,34 @@ namespace vkrt
         return true;
     }
 
-    bool RtPipeline::createScenePipeline(const VulkanContext& ctx, VkDescriptorSetLayout rtSetLayout)
+    // ------------------------------------------------------------
+    // Create scene RT pipeline (MULTI SET LAYOUT)
+    // ------------------------------------------------------------
+
+    bool RtPipeline::createScenePipeline(const VulkanContext&         ctx,
+                                         const VkDescriptorSetLayout* setLayouts,
+                                         uint32_t                     setLayoutCount)
     {
         destroy();
 
-        if (!rtReady(ctx) || !ctx.device || !ctx.rtDispatch)
+        if (!rtReady(ctx) || !ctx.device || !ctx.rtDispatch || !setLayouts || setLayoutCount == 0)
             return false;
 
         m_device = ctx.device;
 
         // ------------------------------------------------------------
-        // Pipeline layout (set = RT descriptor set only)
+        // Pipeline layout (set 0 = RT, set 1 = materials)
         // ------------------------------------------------------------
-        VkPipelineLayoutCreateInfo pl = {};
-        pl.sType                      = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pl.setLayoutCount             = 1;
-        pl.pSetLayouts                = &rtSetLayout;
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = setLayoutCount;
+        pl.pSetLayouts    = setLayouts;
 
         if (vkCreatePipelineLayout(ctx.device, &pl, nullptr, &m_layout) != VK_SUCCESS)
             return false;
 
         const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
-        // ------------------------------------------------------------
-        // Load RT shaders
-        // ------------------------------------------------------------
         ShaderStage rgen =
             vkutil::loadStage(ctx.device, shaderDir, "RtScene.rgen.spv", VK_SHADER_STAGE_RAYGEN_BIT_KHR);
 
@@ -229,15 +216,7 @@ namespace vkrt
             rchit.stageInfo(), // index 2
         };
 
-        // ------------------------------------------------------------
-        // Shader groups
-        //
-        // IMPORTANT:
-        // - Any unused shader index fields MUST be VK_SHADER_UNUSED_KHR.
-        // - Even though we zero-init the structs, 0 is a VALID stage index,
-        //   so leaving fields at 0 produces validation errors.
-        // ------------------------------------------------------------
-        VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
+        VkRayTracingShaderGroupCreateInfoKHR groups[3]{};
 
         for (auto& g : groups)
         {
@@ -248,31 +227,26 @@ namespace vkrt
             g.intersectionShader = VK_SHADER_UNUSED_KHR;
         }
 
-        // 0: raygen (general)
+        // Raygen
         groups[0].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
         groups[0].generalShader = 0;
 
-        // 1: miss (general)
+        // Miss
         groups[1].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
         groups[1].generalShader = 1;
 
-        // 2: triangles hit group (closest hit only)
+        // Closest hit (triangles)
         groups[2].type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
         groups[2].closestHitShader = 2;
-        // groups[2].anyHitShader stays VK_SHADER_UNUSED_KHR
-        // groups[2].intersectionShader stays VK_SHADER_UNUSED_KHR (required for TRIANGLES_HIT_GROUP)
 
-        // ------------------------------------------------------------
-        // RT pipeline create
-        // ------------------------------------------------------------
-        VkRayTracingPipelineCreateInfoKHR ci = {};
-        ci.sType                             = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-        ci.stageCount                        = 3;
-        ci.pStages                           = stages;
-        ci.groupCount                        = 3;
-        ci.pGroups                           = groups;
-        ci.maxPipelineRayRecursionDepth      = 1;
-        ci.layout                            = m_layout;
+        VkRayTracingPipelineCreateInfoKHR ci{};
+        ci.sType                        = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
+        ci.stageCount                   = 3;
+        ci.pStages                      = stages;
+        ci.groupCount                   = 3;
+        ci.pGroups                      = groups;
+        ci.maxPipelineRayRecursionDepth = 1;
+        ci.layout                       = m_layout;
 
         VkPipeline pipe = VK_NULL_HANDLE;
         VkResult   res =

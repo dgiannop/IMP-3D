@@ -1,18 +1,21 @@
+// ============================================================
+// RtScene.rmiss
+// ============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
 
 layout(location = 0) rayPayloadInEXT vec4 payload;
 
-layout(set = 0, binding = 2) uniform CameraUBO
+layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
     vec4 camPos;
     vec4 clearColor;
-} cam;
+} u_cam;
 
 void main()
 {
-    payload = cam.clearColor;
+    payload = u_cam.clearColor;
 }
 
 

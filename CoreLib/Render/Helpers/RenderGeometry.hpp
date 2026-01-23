@@ -76,6 +76,7 @@ namespace render::geom
         VkBuffer buildIndexBuffer = VK_NULL_HANDLE;
         uint32_t buildIndexCount  = 0;
 
+        // --- Shader streams (expanded, face-varying) ---
         VkBuffer shadePosBuffer = VK_NULL_HANDLE;
         uint32_t shadePosCount  = 0;
 
@@ -85,6 +86,11 @@ namespace render::geom
         VkBuffer shadeUvBuffer = VK_NULL_HANDLE;
         uint32_t shadeUvCount  = 0;
 
+        // NEW: per-triangle material IDs (uint32[triCount])
+        VkBuffer shadeMatIdBuffer = VK_NULL_HANDLE;
+        uint32_t shadeMatIdCount  = 0; // should equal shaderTriCount
+
+        // Padded uvec4 index buffer (3 indices per tri in .xyz)
         VkBuffer shaderIndexBuffer = VK_NULL_HANDLE;
         uint32_t shaderTriCount    = 0;
 
@@ -99,7 +105,8 @@ namespace render::geom
             return shadePosBuffer != VK_NULL_HANDLE && shadePosCount > 0 &&
                    shaderIndexBuffer != VK_NULL_HANDLE && shaderTriCount > 0 &&
                    shadeNrmBuffer != VK_NULL_HANDLE && shadeNrmCount > 0 &&
-                   shadeUvBuffer != VK_NULL_HANDLE && shadeUvCount > 0;
+                   shadeUvBuffer != VK_NULL_HANDLE && shadeUvCount > 0 &&
+                   shadeMatIdBuffer != VK_NULL_HANDLE && shadeMatIdCount > 0;
         }
     };
 

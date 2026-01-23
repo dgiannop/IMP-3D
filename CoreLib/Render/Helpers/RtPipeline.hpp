@@ -3,18 +3,19 @@
 #include <cstdint>
 #include <vulkan/vulkan.h>
 
-#include "VulkanContext.hpp"
+struct VulkanContext;
 
 namespace vkrt
 {
     /**
-     * @brief Minimal RT pipeline wrapper (gradient test).
+     * @brief Minimal RT pipeline wrapper.
      *
      * Creates:
-     *  - VkPipelineLayout (set 0 = RT descriptor set layout)
-     *  - VkPipeline (raygen + miss, no hit groups yet)
+     *  - VkPipelineLayout (set 0 = RT descriptor set layout,
+     *                      set 1 = material descriptor set layout)
+     *  - VkPipeline (raygen + miss + closest hit)
      *
-     * Used by Step 7 SBT build + vkCmdTraceRaysKHR.
+     * Used by SBT build + vkCmdTraceRaysKHR.
      */
     class RtPipeline final
     {
@@ -30,9 +31,14 @@ namespace vkrt
 
         void destroy() noexcept;
 
-        bool createGradientPipeline(const VulkanContext& ctx, VkDescriptorSetLayout rtSetLayout);
+        // Gradient test pipeline (still single set = RT only)
+        bool createGradientPipeline(const VulkanContext&  ctx,
+                                    VkDescriptorSetLayout rtSetLayout);
 
-        bool createScenePipeline(const VulkanContext& ctx, VkDescriptorSetLayout rtSetLayout);
+        // Scene pipeline (supports multiple descriptor sets)
+        bool createScenePipeline(const VulkanContext&         ctx,
+                                 const VkDescriptorSetLayout* setLayouts,
+                                 uint32_t                     setLayoutCount);
 
         [[nodiscard]] VkPipeline pipeline() const noexcept
         {
@@ -50,12 +56,12 @@ namespace vkrt
         }
 
         // Group counts for this pipeline layout (used by SBT creation).
-        // Gradient pipeline: raygen=1, miss=1, hit=0, callable=0.
         static constexpr uint32_t kRaygenCount   = 1;
         static constexpr uint32_t kMissCount     = 1;
         static constexpr uint32_t kHitCount      = 1;
         static constexpr uint32_t kCallableCount = 0;
-        static constexpr uint32_t kGroupCount    = kRaygenCount + kMissCount + kHitCount + kCallableCount;
+        static constexpr uint32_t kGroupCount =
+            kRaygenCount + kMissCount + kHitCount + kCallableCount;
 
     private:
         void moveFrom(RtPipeline&& other) noexcept;

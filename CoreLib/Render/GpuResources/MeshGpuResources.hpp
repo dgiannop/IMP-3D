@@ -76,6 +76,22 @@ public:
     uint32_t         coarseRtTriCount() const { return m_coarseRtTriCount; } // triCount (not *3)
 
     // ---------------------------------------------------------
+    // Coarse RT per-triangle material IDs (shader-readable, uint32)
+    //  - Index: primId (0..coarseRtTriCount-1)
+    //  - Count = coarseRtTriCount()
+    // ---------------------------------------------------------
+    const GpuBuffer& coarseRtMatIdBuffer() const { return m_coarseRtMatIdBuffer; }
+    uint32_t         coarseRtMatIdCount() const { return m_coarseRtMatIdCount; }
+
+    // ---------------------------------------------------------
+    // Subdiv RT per-triangle material IDs (shader-readable, uint32)
+    //  - Index: primId (0..subdivRtTriCount-1)
+    //  - Count = subdivRtTriCount()
+    // ---------------------------------------------------------
+    const GpuBuffer& subdivRtMatIdBuffer() const { return m_subdivRtMatIdBuffer; }
+    uint32_t         subdivRtMatIdCount() const { return m_subdivRtMatIdCount; }
+
+    // ---------------------------------------------------------
     // Selection buffers (indexed into uniqueVertBuffer)
     // ---------------------------------------------------------
     const GpuBuffer& selVertIndexBuffer() const { return m_selVertIndexBuffer; }
@@ -195,6 +211,12 @@ private:
     // ---------------------------------------------------------
     GpuBuffer m_coarseTriIndexBuffer; // uint32 indices (3 per tri)
     uint32_t  m_coarseTriIndexCount = 0;
+
+    GpuBuffer m_coarseRtMatIdBuffer;
+    uint32_t  m_coarseRtMatIdCount = 0;
+
+    GpuBuffer m_subdivRtMatIdBuffer;
+    uint32_t  m_subdivRtMatIdCount = 0;
 
     // ---------------------------------------------------------
     // Selection buffers (indexed into uniqueVertBuffer)

@@ -123,26 +123,29 @@ public:
 
     struct alignas(16) RtCameraUBO
     {
-        glm::mat4 invViewProj; // 64
-        glm::vec4 camPos;      // 16  (xyz = position)
-        glm::vec4 clearColor;  // 16  (rgba)
+        glm::mat4 invViewProj = {}; // 64
+        glm::vec4 camPos      = {}; // 16
+        glm::vec4 clearColor  = {}; // 16
     };
     static_assert(sizeof(RtCameraUBO) == 96);
+    static_assert(alignof(RtCameraUBO) == 16);
 
-    struct RtInstanceData
+    struct alignas(8) RtInstanceData
     {
-        uint64_t posAdr;
-        uint64_t idxAdr;
-        uint64_t nrmAdr;
-        uint64_t uvAdr;
+        uint64_t posAdr   = 0;
+        uint64_t idxAdr   = 0;
+        uint64_t nrmAdr   = 0;
+        uint64_t uvAdr    = 0;
+        uint64_t matIdAdr = 0;
 
-        uint32_t triCount;
-        uint32_t pad0;
-        uint32_t pad1;
-        uint32_t pad2;
+        uint32_t triCount = 0;
+        uint32_t _pad0    = 0;
+        uint32_t _pad1    = 0;
+        uint32_t _pad2    = 0;
     };
-    static_assert(sizeof(RtInstanceData) == 48);
-    static_assert(alignof(RtInstanceData) == alignof(uint64_t));
+
+    static_assert(sizeof(RtInstanceData) == 56);
+    static_assert(alignof(RtInstanceData) == 8);
 
     struct ViewportUboState
     {

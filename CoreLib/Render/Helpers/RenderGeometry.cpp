@@ -109,6 +109,10 @@ namespace render::geom
             if (gpu->coarseRtTriCount() == 0 || !gpu->coarseRtTriIndexBuffer().valid())
                 return out;
 
+            // NEW: per-triangle material ids
+            if (gpu->coarseRtMatIdCount() == 0 || !gpu->coarseRtMatIdBuffer().valid())
+                return out;
+
             out.buildPosBuffer = gpu->uniqueVertBuffer().buffer();
             out.buildPosCount  = gpu->uniqueVertCount();
 
@@ -126,6 +130,9 @@ namespace render::geom
 
             out.shaderIndexBuffer = gpu->coarseRtTriIndexBuffer().buffer();
             out.shaderTriCount    = gpu->coarseRtTriCount();
+
+            out.shadeMatIdBuffer = gpu->coarseRtMatIdBuffer().buffer();
+            out.shadeMatIdCount  = gpu->coarseRtMatIdCount();
 
             return out;
         }
@@ -150,6 +157,10 @@ namespace render::geom
         if (gpu->subdivRtTriCount() == 0 || !gpu->subdivRtTriIndexBuffer().valid())
             return out;
 
+        // NEW: per-triangle material ids
+        if (gpu->subdivRtMatIdCount() == 0 || !gpu->subdivRtMatIdBuffer().valid())
+            return out;
+
         out.buildPosBuffer = gpu->subdivSharedVertBuffer().buffer();
         out.buildPosCount  = gpu->subdivSharedVertCount();
 
@@ -167,6 +178,9 @@ namespace render::geom
 
         out.shaderIndexBuffer = gpu->subdivRtTriIndexBuffer().buffer();
         out.shaderTriCount    = gpu->subdivRtTriCount();
+
+        out.shadeMatIdBuffer = gpu->subdivRtMatIdBuffer().buffer();
+        out.shadeMatIdCount  = gpu->subdivRtMatIdCount();
 
         return out;
     }

@@ -1,3 +1,6 @@
+// ============================================================
+// RtScene.rgen
+// ============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
@@ -5,28 +8,14 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(set = 0, binding = 0, rgba8) uniform image2D u_out;
-
 layout(set = 0, binding = 3) uniform accelerationStructureEXT u_tlas;
 
 layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
-    vec4 camPos; // xyz = camera position
-    vec4 clearColor;
+    vec4 camPos;      // xyz = camera position
+    vec4 clearColor;  // used by miss
 } u_cam;
-
-struct RtInstanceData
-{
-    uint64_t posAdr;   // device address of vec4 position buffer
-    uint64_t idxAdr;   // device address of uint index buffer (3 per tri)
-    uint     triCount; // number of triangles in idx buffer
-    uint     pad0;
-};
-
-layout(set = 0, binding = 4, std430) readonly buffer Instances
-{
-    RtInstanceData inst[];
-} u_inst;
 
 layout(location = 0) rayPayloadEXT vec4 payload;
 
@@ -35,21 +24,18 @@ void main()
     const ivec2 pix  = ivec2(gl_LaunchIDEXT.xy);
     const ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
 
-    // NDC in [-1,1], pixel center sampling
     vec2 uv  = (vec2(pix) + vec2(0.5)) / vec2(size);
     vec2 ndc = uv * 2.0 - 1.0;
 
-    // Unproject near/far points
     vec4 p0h = u_cam.invViewProj * vec4(ndc, 0.0, 1.0);
     vec4 p1h = u_cam.invViewProj * vec4(ndc, 1.0, 1.0);
     vec3 p0  = p0h.xyz / p0h.w;
     vec3 p1  = p1h.xyz / p1h.w;
 
-    // Works for BOTH perspective and ortho:
     vec3 ro = p0;
     vec3 rd = normalize(p1 - p0);
 
-    payload = vec4(0.0);
+    payload = u_cam.clearColor;
 
     traceRayEXT(
         u_tlas,
@@ -65,4 +51,3 @@ void main()
 
     imageStore(u_out, pix, payload);
 }
-
