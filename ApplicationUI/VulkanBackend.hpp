@@ -59,9 +59,9 @@ struct ViewportSwapchain
 
 struct ViewportFrameContext
 {
-    ViewportFrame* frame      = nullptr; // points into sc->frames[fi]
-    uint32_t       imageIndex = 0;       // acquired swapchain image
-    uint32_t       frameIndex = 0;       // fi (frame-in-flight ring index)
+    ViewportFrame* frame            = nullptr; // points into sc->frames[fi]
+    uint32_t       imageIndex       = 0;       // acquired swapchain image
+    uint32_t       frameIndex       = 0;       // fi (frame-in-flight ring index)
     bool           frameFenceWaited = false;
 };
 

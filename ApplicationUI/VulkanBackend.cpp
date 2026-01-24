@@ -320,6 +320,9 @@ bool VulkanBackend::createDevice()
     if (!f)
         return false;
 
+    // ------------------------------------------------------------
+    // Enumerate physical devices
+    // ------------------------------------------------------------
     uint32_t devCount = 0;
     f->vkEnumeratePhysicalDevices(m_instance, &devCount, nullptr);
     if (devCount == 0)
@@ -328,32 +331,256 @@ bool VulkanBackend::createDevice()
     std::vector<VkPhysicalDevice> devices(devCount);
     f->vkEnumeratePhysicalDevices(m_instance, &devCount, devices.data());
 
-    // Pick device 0 for now.
-    m_physicalDevice = devices[0];
+    // ------------------------------------------------------------
+    // Local helpers (kept inside the function for drop-in)
+    // ------------------------------------------------------------
+    auto versionStr = [](uint32_t v) -> std::string {
+        return std::to_string(VK_VERSION_MAJOR(v)) + "." +
+               std::to_string(VK_VERSION_MINOR(v)) + "." +
+               std::to_string(VK_VERSION_PATCH(v));
+    };
 
-    f->vkGetPhysicalDeviceProperties(m_physicalDevice, &m_deviceProps);
-
-    // Query max MSAA from HW
-    m_sampleCount = getMaxUsableSampleCount(f, m_physicalDevice);
-
-    uint32_t familyCount = 0;
-    f->vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, nullptr);
-
-    std::vector<VkQueueFamilyProperties> props(familyCount);
-    f->vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, props.data());
-
-    bool foundGraphics = false;
-    for (uint32_t i = 0; i < familyCount; ++i)
-    {
-        if (props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+    auto deviceTypeStr = [](VkPhysicalDeviceType t) noexcept -> const char* {
+        switch (t)
         {
-            m_graphicsFamily = i;
-            foundGraphics    = true;
-            break;
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+                return "Discrete";
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+                return "Integrated";
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+                return "Virtual";
+            case VK_PHYSICAL_DEVICE_TYPE_CPU:
+                return "CPU";
+            default:
+                return "Other";
+        }
+    };
+
+    auto vendorStr = [](uint32_t vendorId) noexcept -> const char* {
+        switch (vendorId)
+        {
+            case 0x10DE:
+                return "NVIDIA";
+            case 0x1002:
+                return "AMD";
+            case 0x8086:
+                return "Intel";
+            case 0x13B5:
+                return "ARM";
+            case 0x5143:
+                return "Qualcomm";
+            default:
+                return "Unknown";
+        }
+    };
+
+    auto findGraphicsFamily = [&](VkPhysicalDevice pd, uint32_t& outFamily) noexcept -> bool {
+        outFamily = 0xFFFFFFFFu;
+
+        uint32_t familyCount = 0;
+        f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, nullptr);
+        if (familyCount == 0)
+            return false;
+
+        std::vector<VkQueueFamilyProperties> qprops(familyCount);
+        f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, qprops.data());
+
+        for (uint32_t i = 0; i < familyCount; ++i)
+        {
+            if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            {
+                outFamily = i;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto enumerateDeviceExts = [&](VkPhysicalDevice pd, std::vector<VkExtensionProperties>& outExts) -> void {
+        uint32_t extCount = 0;
+        f->vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, nullptr);
+
+        outExts.clear();
+        outExts.resize(extCount);
+
+        if (extCount)
+            f->vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, outExts.data());
+    };
+
+    auto hasExtInList = [&](const std::vector<VkExtensionProperties>& exts, const char* name) noexcept -> bool {
+        if (!name)
+            return false;
+
+        for (const auto& e : exts)
+        {
+            if (std::strcmp(e.extensionName, name) == 0)
+                return true;
+        }
+        return false;
+    };
+
+    auto scoreDevice = [&](VkPhysicalDevice                    pd,
+                           VkPhysicalDeviceProperties&         outProps,
+                           VkPhysicalDeviceFeatures&           outFeats,
+                           VkPhysicalDeviceFeatures2&          outSupportedCore,
+                           std::vector<VkExtensionProperties>& outExts,
+                           uint32_t&                           outGraphicsFamily,
+                           bool&                               outMeetsHardReqs) -> int {
+        outMeetsHardReqs  = false;
+        outGraphicsFamily = 0xFFFFFFFFu;
+
+        f->vkGetPhysicalDeviceProperties(pd, &outProps);
+        f->vkGetPhysicalDeviceFeatures(pd, &outFeats);
+
+        outSupportedCore       = {};
+        outSupportedCore.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        outSupportedCore.pNext = nullptr;
+        f->vkGetPhysicalDeviceFeatures2(pd, &outSupportedCore);
+
+        enumerateDeviceExts(pd, outExts);
+
+        // Hard requirement: graphics queue
+        if (!findGraphicsFamily(pd, outGraphicsFamily))
+            return -1;
+
+        // Hard requirement: swapchain extension (you always enable it)
+        if (!hasExtInList(outExts, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+            return -1;
+
+        // Hard requirement: you unconditionally enable these features later
+        if (!outFeats.geometryShader || !outFeats.samplerAnisotropy)
+            return -1;
+
+        outMeetsHardReqs = true;
+
+        int score = 0;
+
+        // Prefer discrete
+        switch (outProps.deviceType)
+        {
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+                score += 1000;
+                break;
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+                score += 300;
+                break;
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+                score += 150;
+                break;
+            case VK_PHYSICAL_DEVICE_TYPE_CPU:
+                score += 10;
+                break;
+            default:
+                score += 50;
+                break;
+        }
+
+        // Prefer higher Vulkan API version
+        score += int(VK_VERSION_MAJOR(outProps.apiVersion)) * 100;
+        score += int(VK_VERSION_MINOR(outProps.apiVersion)) * 10;
+
+        // Prefer more MSAA capability (rough heuristic)
+        const VkSampleCountFlags msaa = outProps.limits.framebufferColorSampleCounts &
+                                        outProps.limits.framebufferDepthSampleCounts;
+        if (msaa & VK_SAMPLE_COUNT_64_BIT)
+            score += 60;
+        else if (msaa & VK_SAMPLE_COUNT_32_BIT)
+            score += 50;
+        else if (msaa & VK_SAMPLE_COUNT_16_BIT)
+            score += 40;
+        else if (msaa & VK_SAMPLE_COUNT_8_BIT)
+            score += 30;
+        else if (msaa & VK_SAMPLE_COUNT_4_BIT)
+            score += 20;
+        else if (msaa & VK_SAMPLE_COUNT_2_BIT)
+            score += 10;
+
+        // Prefer bigger texture limits (very rough signal)
+        score += int(outProps.limits.maxImageDimension2D / 1024);
+
+        return score;
+    };
+
+    // ------------------------------------------------------------
+    // Pick best candidate
+    // ------------------------------------------------------------
+    struct Candidate
+    {
+        VkPhysicalDevice                   pd = VK_NULL_HANDLE;
+        VkPhysicalDeviceProperties         props{};
+        VkPhysicalDeviceFeatures           feats{};
+        VkPhysicalDeviceFeatures2          supportedCore{};
+        std::vector<VkExtensionProperties> exts;
+        uint32_t                           graphicsFamily = 0xFFFFFFFFu;
+        int                                score          = -1;
+        bool                               meets          = false;
+    };
+
+    std::cerr << "VulkanBackend: Enumerating physical devices (" << devices.size() << "):\n";
+
+    Candidate best     = {};
+    bool      haveBest = false;
+
+    for (VkPhysicalDevice pd : devices)
+    {
+        Candidate c = {};
+        c.pd        = pd;
+
+        c.score = scoreDevice(pd, c.props, c.feats, c.supportedCore, c.exts, c.graphicsFamily, c.meets);
+
+        std::cerr
+            << "  - " << c.props.deviceName
+            << " | " << vendorStr(c.props.vendorID) << " (0x" << std::hex << c.props.vendorID << std::dec << ")"
+            << " | " << deviceTypeStr(c.props.deviceType)
+            << " | Vulkan " << versionStr(c.props.apiVersion)
+            << " | Driver " << versionStr(c.props.driverVersion)
+            << "\n";
+
+        std::cerr
+            << "      features: geometryShader=" << (c.feats.geometryShader ? "YES" : "no")
+            << " samplerAnisotropy=" << (c.feats.samplerAnisotropy ? "YES" : "no")
+            << " shaderInt64=" << (c.supportedCore.features.shaderInt64 ? "YES" : "no")
+            << "\n";
+
+        const bool hasSwap = hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        std::cerr
+            << "      ext: VK_KHR_swapchain=" << (hasSwap ? "YES" : "no")
+            << "\n";
+
+        if (c.score >= 0)
+            std::cerr << "      score: " << c.score << "\n";
+        else
+            std::cerr << "      score: (rejected)\n";
+
+        if (c.meets && c.score >= 0)
+        {
+            if (!haveBest || c.score > best.score)
+            {
+                best     = std::move(c);
+                haveBest = true;
+            }
         }
     }
-    if (!foundGraphics)
+
+    if (!haveBest || !best.pd)
+    {
+        std::cerr << "VulkanBackend: No suitable Vulkan device found (missing required features/extensions).\n";
         return false;
+    }
+
+    m_physicalDevice = best.pd;
+    m_deviceProps    = best.props;
+
+    std::cerr
+        << "VulkanBackend: Selected device: " << m_deviceProps.deviceName
+        << " (" << deviceTypeStr(m_deviceProps.deviceType) << "), Vulkan "
+        << versionStr(m_deviceProps.apiVersion) << "\n";
+
+    // Query max MSAA from HW (for the selected device)
+    m_sampleCount = getMaxUsableSampleCount(f, m_physicalDevice);
+
+    // Queue families (selected device)
+    m_graphicsFamily = best.graphicsFamily;
 
     // Minimal assumption: present = graphics. We validate per-surface on swapchain creation.
     m_presentFamily = m_graphicsFamily;
@@ -367,25 +594,12 @@ bool VulkanBackend::createDevice()
     qci.pQueuePriorities        = &prio;
 
     // ------------------------------------------------------------
-    // Enumerate device extensions
+    // Extensions available on the selected device
     // ------------------------------------------------------------
-    uint32_t extCount = 0;
-    f->vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, nullptr);
-
-    std::vector<VkExtensionProperties> availExts(extCount);
-    if (extCount)
-        f->vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, availExts.data());
+    const std::vector<VkExtensionProperties>& availExts = best.exts;
 
     auto hasExt = [&](const char* name) noexcept -> bool {
-        if (!name)
-            return false;
-
-        for (const auto& e : availExts)
-        {
-            if (std::strcmp(e.extensionName, name) == 0)
-                return true;
-        }
-        return false;
+        return hasExtInList(availExts, name);
     };
 
     const uint32_t apiMajor = VK_VERSION_MAJOR(m_deviceProps.apiVersion);
@@ -396,9 +610,7 @@ bool VulkanBackend::createDevice()
     // ------------------------------------------------------------
     // Query core features (ALWAYS) - we need shaderInt64 for RT shaders
     // ------------------------------------------------------------
-    VkPhysicalDeviceFeatures2 supportedCore = {};
-    supportedCore.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    f->vkGetPhysicalDeviceFeatures2(m_physicalDevice, &supportedCore);
+    VkPhysicalDeviceFeatures2 supportedCore = best.supportedCore;
 
     // Base extensions (always)
     std::vector<const char*> enabledExts;
@@ -553,7 +765,7 @@ bool VulkanBackend::createDevice()
     }
     else
     {
-        // Not fatal. You can make it fatal if you want.
+        // Not fatal.
         // std::cerr << "VulkanBackend: timeline semaphores not available.\n";
     }
 
