@@ -22,7 +22,7 @@
 #include "GridRendererVK.hpp"
 #include "Material.hpp"
 #include "OverlayHandler.hpp"
-#include "RenderGeometry.hpp" // for render::geom.. revise
+#include "RenderGeometry.hpp" // for render::geom::...
 #include "RtPipeline.hpp"
 #include "RtSbt.hpp"
 #include "VulkanContext.hpp"
@@ -59,8 +59,8 @@ constexpr uint32_t kMaxTextureCount = 512;
  * Usage:
  *  - initDevice(ctx) once after VkDevice is ready
  *  - initSwapchain(renderPass) whenever swapchain (and therefore render pass) changes
- *  - renderPrePass(vp, cmd, scene, frameIndex) BEFORE beginRenderPass (RT dispatch)
- *  - render(cmd, vp, scene, frameIndex) per frame (raster OR RT present)
+ *  - renderPrePass(vp, scene, fc) BEFORE beginRenderPass (RT dispatch + uploads)
+ *  - render(vp, scene, fc) per frame (raster OR RT present)
  *  - destroySwapchainResources() on swapchain teardown / resize
  *  - shutdown() on app shutdown / device teardown
  */
@@ -75,9 +75,9 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     Renderer& operator=(Renderer&&)      = delete;
 
-    // ------------------------------------------------------------
-    // Lifetime
-    // ------------------------------------------------------------
+    // ============================================================
+    // Public API: Lifetime / frame hooks
+    // ============================================================
 
     bool initDevice(const VulkanContext& ctx);
     bool initSwapchain(VkRenderPass renderPass);
@@ -87,25 +87,34 @@ public:
     void idle(Scene* scene);
     void waitDeviceIdle() noexcept;
 
-    // ------------------------------------------------------------
-    // Rendering
-    // ------------------------------------------------------------
+    // ============================================================
+    // Public API: Rendering entry points
+    // ============================================================
 
     void updateMaterialTextureTable(const TextureHandler& textureHandler, uint32_t frameIndex);
+
+    // Pre-pass work that must occur OUTSIDE a render pass (uploads, AS builds, RT dispatch).
     void renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
+
+    // Main pass: raster rendering OR RT present.
     void render(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
+
+    // Overlay draw helpers (called inside raster pass as needed).
     void drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays);
 
-    // ------------------------------------------------------------
-    // Internal structs (host-side)
-    // ------------------------------------------------------------
+public:
+    // ============================================================
+    // Shader-visible structs (must match GLSL/std140/std430 expectations)
+    // ============================================================
 
+    // set=0 binding=0 (raster path)
     struct MvpUBO
     {
         glm::mat4 proj;
         glm::mat4 view;
     };
 
+    // Push constants used by raster + overlays (keep layout stable with shader)
     struct PushConstants
     {
         glm::mat4 model;
@@ -114,13 +123,7 @@ public:
     };
     static_assert(sizeof(PushConstants) == 96);
 
-    struct OverlayVertex
-    {
-        glm::vec3 pos;
-        float     thickness;
-        glm::vec4 color;
-    };
-
+    // set=0 binding=2 (RT path)
     struct alignas(16) RtCameraUBO
     {
         glm::mat4 invViewProj = {}; // 64
@@ -130,6 +133,7 @@ public:
     static_assert(sizeof(RtCameraUBO) == 96);
     static_assert(alignof(RtCameraUBO) == 16);
 
+    // set=0 binding=4 (RT path) - std430 SSBO element
     struct alignas(8) RtInstanceData
     {
         uint64_t posAdr   = 0;
@@ -143,9 +147,20 @@ public:
         uint32_t _pad1    = 0;
         uint32_t _pad2    = 0;
     };
-
     static_assert(sizeof(RtInstanceData) == 56);
     static_assert(alignof(RtInstanceData) == 8);
+
+public:
+    // ============================================================
+    // Host-only structs (CPU-side bookkeeping)
+    // ============================================================
+
+    struct OverlayVertex
+    {
+        glm::vec3 pos;
+        float     thickness;
+        glm::vec4 color;
+    };
 
     struct ViewportUboState
     {
@@ -154,47 +169,32 @@ public:
     };
 
 private:
-    // ------------------------------------------------------------
-    // Helpers: lifetime
-    // ------------------------------------------------------------
+    // ============================================================
+    // Raster helpers
+    // ============================================================
 
-    bool createDescriptors(uint32_t framesInFlight);
     bool createPipelineLayout() noexcept;
 
+    bool createDescriptors(uint32_t framesInFlight);
     bool createPipelines(VkRenderPass renderPass);
     void destroyPipelines() noexcept;
 
-    // ------------------------------------------------------------
-    // Helpers: materials
-    // ------------------------------------------------------------
+    ViewportUboState& ensureViewportUboState(Viewport* vp);
 
+    // Materials (raster path)
     void uploadMaterialsToGpu(const std::vector<Material>& materials,
                               TextureHandler&              texHandler,
                               uint32_t                     frameIndex);
 
-    // ------------------------------------------------------------
-    // Helpers: overlays + selection
-    // ------------------------------------------------------------
-
+    // Grid / overlays / selection (raster path)
+    void drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
     void ensureOverlayVertexCapacity(std::size_t requiredVertexCount);
     void drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
 
-    // ------------------------------------------------------------
-    // Helpers: per-viewport UBO state
-    // ------------------------------------------------------------
-
-    ViewportUboState& ensureViewportUboState(Viewport* vp);
-
-    // ------------------------------------------------------------
-    // Helpers: grid
-    // ------------------------------------------------------------
-
-    void drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
-
 private:
-    // ------------------------------------------------------------
+    // ============================================================
     // RT per-viewport state
-    // ------------------------------------------------------------
+    // ============================================================
 
     struct RtImagePerFrame
     {
@@ -226,18 +226,32 @@ private:
     bool             ensureRtOutputImages(RtViewportState& s, uint32_t w, uint32_t h);
     void             destroyRtOutputImages(RtViewportState& s) noexcept;
 
-    // ------------------------------------------------------------
-    // RT related (device-level + scene-level AS)
-    // ------------------------------------------------------------
+private:
+    // ============================================================
+    // RT: pipelines, descriptors, dispatch
+    // ============================================================
 
     bool initRayTracingResources();
     bool createRtPresentPipeline(VkRenderPass rp);
     void destroyRtPresentPipeline() noexcept;
 
+    void renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
+
+    bool ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
+
+private:
+    // ============================================================
+    // RT: Acceleration structures (scene-level)
+    // ============================================================
+
     bool ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept;
     void writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept;
+    void clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept;
 
-    bool ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept;
+    bool ensureMeshBlas(Viewport*                           vp,
+                        SceneMesh*                          sm,
+                        const render::geom::RtMeshGeometry& geo,
+                        const RenderFrameContext&           fc) noexcept;
 
     void destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept;
     void destroyAllRtBlas() noexcept;
@@ -245,23 +259,18 @@ private:
     void destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffers) noexcept;
     void destroyAllRtTlasFrames() noexcept;
 
-    void clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept;
-
-    void renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
-
-    bool ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
-
 private:
-    // ------------------------------------------------------------
+    // ============================================================
     // Context / frame config
-    // ------------------------------------------------------------
+    // ============================================================
 
     VulkanContext m_ctx{};
     uint32_t      m_framesInFlight = 1;
 
-    // ------------------------------------------------------------
-    // Pipelines / layout
-    // ------------------------------------------------------------
+private:
+    // ============================================================
+    // Raster pipelines / layout (swapchain-level + device-level)
+    // ============================================================
 
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 
@@ -284,9 +293,39 @@ private:
 
     std::unique_ptr<GridRendererVK> m_grid;
 
-    // ------------------------------------------------------------
+private:
+    // ============================================================
+    // Raster descriptors / per-viewport UBOs
+    // ============================================================
+
+    DescriptorSetLayout m_descriptorSetLayout;
+    DescriptorSetLayout m_materialSetLayout;
+    DescriptorPool      m_descriptorPool;
+
+    std::unordered_map<Viewport*, ViewportUboState> m_viewportUbos;
+    std::vector<DescriptorSet>                      m_materialSets;
+
+private:
+    // ============================================================
+    // Materials SSBO
+    // ============================================================
+
+    GpuBuffer     m_materialBuffer;
+    std::uint32_t m_materialCount      = 0;
+    uint64_t      m_curMaterialCounter = 0;
+
+private:
+    // ============================================================
+    // Overlay vertex buffer
+    // ============================================================
+
+    GpuBuffer   m_overlayVertexBuffer;
+    std::size_t m_overlayVertexCapacity = 0;
+
+private:
+    // ============================================================
     // Ray tracing (DrawMode::RAY_TRACE)
-    // ------------------------------------------------------------
+    // ============================================================
 
     // RT descriptor set layout (set=0 for RT path only)
     DescriptorSetLayout m_rtSetLayout;
@@ -314,35 +353,10 @@ private:
 
     static constexpr uint32_t kMaxViewports = 8;
 
-    // ------------------------------------------------------------
-    // Descriptors (raster)
-    // ------------------------------------------------------------
-
-    DescriptorSetLayout m_descriptorSetLayout;
-    DescriptorSetLayout m_materialSetLayout;
-    DescriptorPool      m_descriptorPool;
-
-    std::unordered_map<Viewport*, ViewportUboState> m_viewportUbos;
-    std::vector<DescriptorSet>                      m_materialSets;
-
-    // ------------------------------------------------------------
-    // Materials SSBO
-    // ------------------------------------------------------------
-
-    GpuBuffer     m_materialBuffer;
-    std::uint32_t m_materialCount      = 0;
-    uint64_t      m_curMaterialCounter = 0;
-
-    // ------------------------------------------------------------
-    // Overlay vertex buffer
-    // ------------------------------------------------------------
-
-    GpuBuffer   m_overlayVertexBuffer;
-    std::size_t m_overlayVertexCapacity = 0;
-
-    // ------------------------------------------------------------
+private:
+    // ============================================================
     // RT Acceleration Structures (BLAS per mesh, TLAS per frame)
-    // ------------------------------------------------------------
+    // ============================================================
 
     struct RtBlas
     {
@@ -379,15 +393,21 @@ private:
     std::unordered_map<SceneMesh*, RtBlas> m_rtBlas = {};
     std::vector<RtTlasFrame>               m_rtTlasFrames;
 
-    // ------------------------------------------------------------
+private:
+    // ============================================================
     // RT change tracking (TLAS invalidation)
-    // ------------------------------------------------------------
+    // ============================================================
 
     SysCounterPtr m_rtTlasChangeCounter;
     SysMonitor    m_rtTlasChangeMonitor;
 
     std::unordered_set<class SysMesh*> m_rtTlasLinkedMeshes;
 
+private:
+    // ============================================================
+    // Misc helpers
+    // ============================================================
+
     template<typename Fn>
-    void forEachVisibleMesh(class Scene* scene, Fn&& fn);
+    void forEachVisibleMesh(Scene* scene, Fn&& fn);
 };

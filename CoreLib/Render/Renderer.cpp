@@ -2285,8 +2285,7 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::R
     b.asBuffer.create(m_ctx.device,
                       m_ctx.physicalDevice,
                       sizeInfo.accelerationStructureSize,
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                       false,
                       true);
@@ -2333,21 +2332,7 @@ bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::R
     m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
 
     // Barrier: BLAS build writes -> RT reads
-    VkMemoryBarrier mb = {};
-    mb.sType           = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    mb.srcAccessMask   = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    mb.dstAccessMask   = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-
-    vkCmdPipelineBarrier(fc.cmd,
-                         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                         0,
-                         1,
-                         &mb,
-                         0,
-                         nullptr,
-                         0,
-                         nullptr);
+    vkutil::barrierAsBuildToTrace(fc.cmd);
 
     VkAccelerationStructureDeviceAddressInfoKHR addrInfo = {};
     addrInfo.sType                                       = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
@@ -2457,8 +2442,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
         t.instanceBuffer.create(m_ctx.device,
                                 m_ctx.physicalDevice,
                                 instanceBytes,
-                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                 false,
@@ -2476,21 +2460,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
     vkCmdCopyBuffer(fc.cmd, t.instanceStaging.buffer(), t.instanceBuffer.buffer(), 1, &cpy);
 
     // Barrier: transfer write -> AS build read
-    VkMemoryBarrier mb0{};
-    mb0.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    mb0.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    mb0.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-
-    vkCmdPipelineBarrier(fc.cmd,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         0,
-                         1,
-                         &mb0,
-                         0,
-                         nullptr,
-                         0,
-                         nullptr);
+    vkutil::barrierTransferToAsBuildRead(fc.cmd);
 
     // Build sizes for TLAS
     VkAccelerationStructureGeometryKHR asGeom{};
@@ -2534,33 +2504,32 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
     {
         if (t.as != VK_NULL_HANDLE || t.buffer.valid())
         {
+            VkAccelerationStructureKHR oldAs      = std::exchange(t.as, VK_NULL_HANDLE);
+            GpuBuffer                  oldBacking = std::exchange(t.buffer, {});
+
             if (fc.deferred)
             {
                 VkDevice device = m_ctx.device;
                 auto*    rt     = m_ctx.rtDispatch;
 
-                VkAccelerationStructureKHR oldAs      = t.as;
-                GpuBuffer                  oldBacking = std::move(t.buffer);
-
-                fc.deferred->enqueue(fc.frameIndex,
-                                     [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
-                                         if (rt && device && oldAs != VK_NULL_HANDLE)
-                                             rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
-                                         backing.destroy();
-                                     });
+                fc.deferred->enqueue(
+                    fc.frameIndex,
+                    [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
+                        if (rt && device && oldAs != VK_NULL_HANDLE)
+                            rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
+                        backing.destroy();
+                    });
             }
             else
             {
-                if (m_ctx.rtDispatch && m_ctx.device && t.as)
-                    m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
-                t.buffer.destroy();
-            }
+                if (m_ctx.rtDispatch && m_ctx.device && oldAs)
+                    m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, oldAs, nullptr);
 
-            t.as     = VK_NULL_HANDLE;
-            t.buffer = {};
+                oldBacking.destroy();
+            }
         }
 
-        t.address = 0;
+        t.address = 0; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
         t.buffer.create(m_ctx.device,
                         m_ctx.physicalDevice,
@@ -2611,21 +2580,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
     m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
 
     // Barrier: TLAS build writes -> RT reads
-    VkMemoryBarrier mb1{};
-    mb1.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    mb1.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    mb1.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-
-    vkCmdPipelineBarrier(fc.cmd,
-                         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                         0,
-                         1,
-                         &mb1,
-                         0,
-                         nullptr,
-                         0,
-                         nullptr);
+    vkutil::barrierAsBuildToTrace(fc.cmd);
 
     VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
     addrInfo.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;

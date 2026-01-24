@@ -247,9 +247,8 @@ void MeshGpuResources::destroy() noexcept
 void MeshGpuResources::update(const RenderFrameContext& fc)
 {
     const SysMesh* sys = m_owner ? m_owner->sysMesh() : nullptr;
-    auto           cmd = fc.cmd; // temp
 
-    if (!sys || !m_ctx || !cmd)
+    if (!sys || !m_ctx || !fc.cmd)
         return;
 
     const int  level        = m_owner->subdivisionLevel();
@@ -358,8 +357,7 @@ void MeshGpuResources::fullRebuild(const RenderFrameContext& fc, const SysMesh* 
     updateOrRecreate(fc,
                      m_uniqueVertBuffer,
                      uniqueVerts,
-                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                      kCapacity64KiB,
                      /*deviceAddress*/ true);
 
@@ -373,8 +371,7 @@ void MeshGpuResources::fullRebuild(const RenderFrameContext& fc, const SysMesh* 
     updateOrRecreate(fc,
                      m_coarseTriIndexBuffer,
                      triIdx,
-                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                      kCapacity64KiB,
                      /*deviceAddress*/ true);
 
