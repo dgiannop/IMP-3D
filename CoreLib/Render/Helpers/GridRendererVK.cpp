@@ -1,8 +1,11 @@
 #include "GridRendererVK.hpp"
 
+#include <cmath>   // std::abs
+#include <cstddef> // offsetof
 #include <filesystem>
 #include <glm/vec3.hpp>
 #include <iostream>
+#include <vector>
 
 #include "ShaderStage.hpp"
 #include "VkPipelineHelpers.hpp"
@@ -70,29 +73,61 @@ void GridRendererVK::createGridData(float halfExtent, float spacing)
     if (!m_ctx)
         return;
 
-    std::vector<glm::vec3> verts;
+    std::vector<GridVert> verts;
     verts.reserve(2000);
 
     const int steps = static_cast<int>((halfExtent * 2.0f) / spacing);
 
+    // Visual tuning (minor / major / axis)
+    const glm::vec4 gridColor{0.13f, 0.13f, 0.14f, 0.18f};
+    const glm::vec4 majorColor{0.19f, 0.19f, 0.20f, 0.24f};
+    const glm::vec4 axisColor{0.24f, 0.24f, 0.26f, 0.60f};
+
+    const float eps       = 1e-6f;
+    const float majorStep = spacing * 10.0f;
+
+    auto isZero = [&](float v) noexcept -> bool {
+        return std::abs(v) < eps;
+    };
+
+    auto isMajor = [&](float v) noexcept -> bool {
+        // "Major" lines at multiples of majorStep.
+        // Using fmod on abs() keeps it symmetric around 0.
+        const float m = std::fmod(std::abs(v), majorStep);
+        return m < eps || std::abs(m - majorStep) < eps;
+    };
+
+    auto lineColor = [&](float v) noexcept -> glm::vec4 {
+        if (isZero(v))
+            return axisColor;
+        if (isMajor(v))
+            return majorColor;
+        return gridColor;
+    };
+
     // Lines parallel to Z (varying X)
     for (int i = 0; i <= steps; ++i)
     {
-        const float x = -halfExtent + i * spacing;
-        verts.emplace_back(x, 0.0f, -halfExtent);
-        verts.emplace_back(x, 0.0f, halfExtent);
+        const float     x = -halfExtent + i * spacing;
+        const glm::vec4 c = lineColor(x);
+
+        verts.push_back({glm::vec3{x, 0.0f, -halfExtent}, c});
+        verts.push_back({glm::vec3{x, 0.0f, halfExtent}, c});
     }
 
     // Lines parallel to X (varying Z)
     for (int i = 0; i <= steps; ++i)
     {
-        const float z = -halfExtent + i * spacing;
-        verts.emplace_back(-halfExtent, 0.0f, z);
-        verts.emplace_back(halfExtent, 0.0f, z);
+        const float     z = -halfExtent + i * spacing;
+        const glm::vec4 c = lineColor(z);
+
+        verts.push_back({glm::vec3{-halfExtent, 0.0f, z}, c});
+        verts.push_back({glm::vec3{halfExtent, 0.0f, z}, c});
     }
 
-    m_vertexCount                = static_cast<uint32_t>(verts.size());
-    const VkDeviceSize sizeBytes = static_cast<VkDeviceSize>(verts.size() * sizeof(glm::vec3));
+    m_vertexCount = static_cast<uint32_t>(verts.size());
+    const VkDeviceSize sizeBytes =
+        static_cast<VkDeviceSize>(verts.size() * sizeof(GridVert));
 
     // HOST_VISIBLE so upload() is allowed (simple path)
     m_vertexBuffer.create(
@@ -151,11 +186,35 @@ bool GridRendererVK::createPipeline(VkRenderPass     renderPass,
         frag.stageInfo(),
     };
 
-    // Vertex input: pos-only, binding 0, location 0
-    VkVertexInputBindingDescription      binding{};
-    VkVertexInputAttributeDescription    attr{};
+    // -----------------------------------------------------
+    // Vertex input: interleaved pos + color
+    // binding 0:
+    //   location 0 -> vec3 position
+    //   location 1 -> vec4 color
+    // -----------------------------------------------------
+    VkVertexInputBindingDescription binding{};
+    binding.binding   = 0;
+    binding.stride    = sizeof(GridVert);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrs[2]{};
+
+    attrs[0].location = 0;
+    attrs[0].binding  = 0;
+    attrs[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[0].offset   = static_cast<uint32_t>(offsetof(GridVert, pos));
+
+    attrs[1].location = 1;
+    attrs[1].binding  = 0;
+    attrs[1].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrs[1].offset   = static_cast<uint32_t>(offsetof(GridVert, color));
+
     VkPipelineVertexInputStateCreateInfo vi{};
-    vkutil::makeLineVertexInput(vi, binding, attr);
+    vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount   = 1;
+    vi.pVertexBindingDescriptions      = &binding;
+    vi.vertexAttributeDescriptionCount = 2;
+    vi.pVertexAttributeDescriptions    = attrs;
 
     // Input assembly: lines
     VkPipelineInputAssemblyStateCreateInfo ia{};

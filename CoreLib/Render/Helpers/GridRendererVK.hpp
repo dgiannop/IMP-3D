@@ -39,6 +39,12 @@ public:
     void render(VkCommandBuffer cmd);
 
 private:
+    struct GridVert
+    {
+        glm::vec3 pos;
+        glm::vec4 color;
+    };
+
     VulkanContext* m_ctx = nullptr;
 
     GpuBuffer m_vertexBuffer;
@@ -46,5 +52,5 @@ private:
 
     VkPipeline m_pipeline = VK_NULL_HANDLE;
 
-    void createGridData(float halfExtent = 20.f, float spacing = 0.5f);
+    void createGridData(float halfExtent = 40.f, float spacing = 0.5f);
 };
