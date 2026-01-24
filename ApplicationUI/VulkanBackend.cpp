@@ -4,6 +4,7 @@
 
 #include "VulkanBackend.hpp"
 
+#include <QMessageBox>
 #include <QVulkanDeviceFunctions>
 #include <QVulkanFunctions>
 #include <QWindow>
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 
 #include "VkDebugNames.hpp"
 
@@ -332,7 +334,7 @@ bool VulkanBackend::createDevice()
     f->vkEnumeratePhysicalDevices(m_instance, &devCount, devices.data());
 
     // ------------------------------------------------------------
-    // Local helpers (kept inside the function for drop-in)
+    // Local helpers (kept inside the function for true drop-in)
     // ------------------------------------------------------------
     auto versionStr = [](uint32_t v) -> std::string {
         return std::to_string(VK_VERSION_MAJOR(v)) + "." +
@@ -374,26 +376,21 @@ bool VulkanBackend::createDevice()
         }
     };
 
-    auto findGraphicsFamily = [&](VkPhysicalDevice pd, uint32_t& outFamily) noexcept -> bool {
-        outFamily = 0xFFFFFFFFu;
+    auto queryInstanceVulkanVersion = [&](QVulkanInstance* qvk) noexcept -> uint32_t {
+        if (!qvk)
+            return VK_API_VERSION_1_0;
 
-        uint32_t familyCount = 0;
-        f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, nullptr);
-        if (familyCount == 0)
-            return false;
+        auto fp = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+            qvk->getInstanceProcAddr("vkEnumerateInstanceVersion"));
 
-        std::vector<VkQueueFamilyProperties> qprops(familyCount);
-        f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, qprops.data());
+        if (!fp)
+            return VK_API_VERSION_1_0;
 
-        for (uint32_t i = 0; i < familyCount; ++i)
-        {
-            if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-            {
-                outFamily = i;
-                return true;
-            }
-        }
-        return false;
+        uint32_t v = VK_API_VERSION_1_0;
+        if (fp(&v) != VK_SUCCESS)
+            return VK_API_VERSION_1_0;
+
+        return v;
     };
 
     auto enumerateDeviceExts = [&](VkPhysicalDevice pd, std::vector<VkExtensionProperties>& outExts) -> void {
@@ -419,6 +416,28 @@ bool VulkanBackend::createDevice()
         return false;
     };
 
+    auto findGraphicsFamily = [&](VkPhysicalDevice pd, uint32_t& outFamily) noexcept -> bool {
+        outFamily = 0xFFFFFFFFu;
+
+        uint32_t familyCount = 0;
+        f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, nullptr);
+        if (familyCount == 0)
+            return false;
+
+        std::vector<VkQueueFamilyProperties> qprops(familyCount);
+        f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, qprops.data());
+
+        for (uint32_t i = 0; i < familyCount; ++i)
+        {
+            if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            {
+                outFamily = i;
+                return true;
+            }
+        }
+        return false;
+    };
+
     auto scoreDevice = [&](VkPhysicalDevice                    pd,
                            VkPhysicalDeviceProperties&         outProps,
                            VkPhysicalDeviceFeatures&           outFeats,
@@ -434,7 +453,6 @@ bool VulkanBackend::createDevice()
 
         outSupportedCore       = {};
         outSupportedCore.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        outSupportedCore.pNext = nullptr;
         f->vkGetPhysicalDeviceFeatures2(pd, &outSupportedCore);
 
         enumerateDeviceExts(pd, outExts);
@@ -480,8 +498,10 @@ bool VulkanBackend::createDevice()
         score += int(VK_VERSION_MINOR(outProps.apiVersion)) * 10;
 
         // Prefer more MSAA capability (rough heuristic)
-        const VkSampleCountFlags msaa = outProps.limits.framebufferColorSampleCounts &
-                                        outProps.limits.framebufferDepthSampleCounts;
+        const VkSampleCountFlags msaa =
+            outProps.limits.framebufferColorSampleCounts &
+            outProps.limits.framebufferDepthSampleCounts;
+
         if (msaa & VK_SAMPLE_COUNT_64_BIT)
             score += 60;
         else if (msaa & VK_SAMPLE_COUNT_32_BIT)
@@ -502,7 +522,7 @@ bool VulkanBackend::createDevice()
     };
 
     // ------------------------------------------------------------
-    // Pick best candidate
+    // Candidate selection
     // ------------------------------------------------------------
     struct Candidate
     {
@@ -515,6 +535,12 @@ bool VulkanBackend::createDevice()
         int                                score          = -1;
         bool                               meets          = false;
     };
+
+    // Instance Vulkan version (loader/runtime)
+    m_instanceVulkanVersion = queryInstanceVulkanVersion(m_qvk);
+
+    std::vector<Candidate> cands;
+    cands.reserve(devices.size());
 
     std::cerr << "VulkanBackend: Enumerating physical devices (" << devices.size() << "):\n";
 
@@ -542,9 +568,8 @@ bool VulkanBackend::createDevice()
             << " shaderInt64=" << (c.supportedCore.features.shaderInt64 ? "YES" : "no")
             << "\n";
 
-        const bool hasSwap = hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         std::cerr
-            << "      ext: VK_KHR_swapchain=" << (hasSwap ? "YES" : "no")
+            << "      ext: VK_KHR_swapchain=" << (hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ? "YES" : "no")
             << "\n";
 
         if (c.score >= 0)
@@ -552,11 +577,13 @@ bool VulkanBackend::createDevice()
         else
             std::cerr << "      score: (rejected)\n";
 
+        cands.push_back(c);
+
         if (c.meets && c.score >= 0)
         {
             if (!haveBest || c.score > best.score)
             {
-                best     = std::move(c);
+                best     = c;
                 haveBest = true;
             }
         }
@@ -564,26 +591,60 @@ bool VulkanBackend::createDevice()
 
     if (!haveBest || !best.pd)
     {
-        std::cerr << "VulkanBackend: No suitable Vulkan device found (missing required features/extensions).\n";
+        // Show a friendly UI error in the UI layer and fail init gracefully.
+        // NOTE: requires #include <QMessageBox> and #include <sstream> at top of VulkanBackend.cpp
+        uint32_t maxDevVulkan = VK_API_VERSION_1_0;
+
+        std::ostringstream oss;
+        oss << "IMP3D could not find a Vulkan device suitable for rendering.\n\n";
+        oss << "Vulkan loader (instance) version: " << versionStr(m_instanceVulkanVersion) << "\n\n";
+        oss << "Detected GPUs:\n";
+
+        for (const auto& c : cands)
+        {
+            maxDevVulkan = std::max(maxDevVulkan, c.props.apiVersion);
+
+            const bool hasSwap = hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            const bool hasGfx  = (c.graphicsFamily != 0xFFFFFFFFu);
+
+            oss << "  - " << c.props.deviceName
+                << " (" << deviceTypeStr(c.props.deviceType) << ")"
+                << " Vulkan " << versionStr(c.props.apiVersion)
+                << " Swapchain=" << (hasSwap ? "YES" : "no")
+                << " GraphicsQueue=" << (hasGfx ? "YES" : "no")
+                << " Aniso=" << (c.feats.samplerAnisotropy ? "YES" : "no")
+                << " GeomShader=" << (c.feats.geometryShader ? "YES" : "no")
+                << "\n";
+        }
+
+        oss << "\nMax Vulkan supported by any detected GPU: " << versionStr(maxDevVulkan) << "\n";
+
+        QMessageBox::critical(nullptr,
+                              "Vulkan device not supported",
+                              QString::fromStdString(oss.str()));
+
         return false;
     }
 
+    // ------------------------------------------------------------
+    // Selected physical device
+    // ------------------------------------------------------------
     m_physicalDevice = best.pd;
     m_deviceProps    = best.props;
+
+    // Queue family
+    m_graphicsFamily = best.graphicsFamily;
+
+    // Minimal assumption: present = graphics. We validate per-surface on swapchain creation.
+    m_presentFamily = m_graphicsFamily;
 
     std::cerr
         << "VulkanBackend: Selected device: " << m_deviceProps.deviceName
         << " (" << deviceTypeStr(m_deviceProps.deviceType) << "), Vulkan "
         << versionStr(m_deviceProps.apiVersion) << "\n";
 
-    // Query max MSAA from HW (for the selected device)
+    // Query max MSAA from HW (selected device)
     m_sampleCount = getMaxUsableSampleCount(f, m_physicalDevice);
-
-    // Queue families (selected device)
-    m_graphicsFamily = best.graphicsFamily;
-
-    // Minimal assumption: present = graphics. We validate per-surface on swapchain creation.
-    m_presentFamily = m_graphicsFamily;
 
     const float prio = 1.0f;
 
@@ -639,8 +700,6 @@ bool VulkanBackend::createDevice()
     const bool timelineOk =
         timelineAvailable && (supportedTimeline.timelineSemaphore == VK_TRUE);
 
-    // If you want it to be mandatory, you can fail here instead.
-    // For now we enable it if available.
     if (needTimelineExtEnable)
         enabledExts.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
 
@@ -711,6 +770,10 @@ bool VulkanBackend::createDevice()
         enabledExts.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
         enabledExts.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
     }
+    else
+    {
+        std::cerr << "VulkanBackend: Ray tracing not available; RT draw mode will be disabled.\n";
+    }
 
     // ------------------------------------------------------------
     // Features (use Features2 so we can optionally chain RT features)
@@ -752,7 +815,6 @@ bool VulkanBackend::createDevice()
         asFeat.accelerationStructure = VK_TRUE;
         rtFeat.rayTracingPipeline    = VK_TRUE;
 
-        // Chain order doesn't matter; keep it simple
         chain(rtFeat);
         chain(asFeat);
         chain(bda);
@@ -762,11 +824,6 @@ bool VulkanBackend::createDevice()
     {
         timelineFeat.timelineSemaphore = VK_TRUE;
         chain(timelineFeat);
-    }
-    else
-    {
-        // Not fatal.
-        // std::cerr << "VulkanBackend: timeline semaphores not available.\n";
     }
 
     feats2.pNext = pNextChain;

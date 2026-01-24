@@ -124,6 +124,9 @@ public:
         return (m_qvk && m_device) ? m_qvk->deviceFunctions(m_device) : nullptr;
     }
 
+    [[nodiscard]] bool     supportsRayTracing() const noexcept { return m_supportsRayTracing; }
+    [[nodiscard]] uint32_t instanceVulkanVersion() const noexcept { return m_instanceVulkanVersion; }
+
 private:
     bool createDevice();
     void ensureContext() noexcept;
@@ -141,9 +144,10 @@ private:
 private:
     QVulkanInstance* m_qvk = nullptr;
 
-    VkInstance       m_instance       = VK_NULL_HANDLE;
-    VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-    VkDevice         m_device         = VK_NULL_HANDLE;
+    VkInstance       m_instance              = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physicalDevice        = VK_NULL_HANDLE;
+    VkDevice         m_device                = VK_NULL_HANDLE;
+    uint32_t         m_instanceVulkanVersion = VK_API_VERSION_1_0;
 
     uint32_t m_graphicsFamily = 0;
     uint32_t m_presentFamily  = 0;

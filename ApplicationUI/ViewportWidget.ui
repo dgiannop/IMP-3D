@@ -213,6 +213,18 @@ QComboBox::indicator {
     height: 8px;
     background-color: transparent; /* To remove indicator styling */
 }
+
+/* Disabled items (e.g., Ray Trace) */
+QComboBox QAbstractItemView::item:disabled {
+    color: rgba(255, 255, 255, 90);
+    background-color: transparent;
+}
+
+/* Optional: if you want disabled to look &quot;separated&quot; */
+QComboBox QAbstractItemView::item:disabled {
+    font-style: italic;
+}
+
 </string>
          </property>
          <property name="currentIndex">

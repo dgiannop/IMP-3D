@@ -4,7 +4,6 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <cmath>
-#include <iostream>
 
 #include "ViewportRenderWindow.hpp"
 #include "VulkanBackend.hpp"
@@ -17,6 +16,27 @@ ViewportWidget::ViewportWidget(QWidget* parent, Core* core, VulkanBackend* backe
     ui(new Ui::ViewportWidget)
 {
     ui->setupUi(this);
+
+    // Disable Ray Trace draw mode if backend does not support it
+    if (m_backend && !m_backend->supportsRayTracing())
+    {
+        const int rtIndex = static_cast<int>(DrawMode::RAY_TRACE);
+
+        ui->cmbDrawType->setItemData(
+            rtIndex,
+            QVariant(0),
+            Qt::UserRole - 1 // disables the item
+        );
+
+        ui->cmbDrawType->setItemData(
+            rtIndex,
+            "Ray tracing is not supported by the current GPU / driver.",
+            Qt::ToolTipRole);
+
+        // If Ray Trace was somehow selected, fall back to SHADED
+        if (ui->cmbDrawType->currentIndex() == rtIndex)
+            ui->cmbDrawType->setCurrentIndex(static_cast<int>(DrawMode::SHADED));
+    }
 
     if (m_core)
     {
