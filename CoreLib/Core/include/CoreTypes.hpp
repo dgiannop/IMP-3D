@@ -35,11 +35,6 @@ enum class DrawMode
     SOLID,
     SHADED,
     RAY_TRACE,
-    // FLAT,
-    // SHADED,
-    // TEXTURE,
-    // AO_SHADER,
-    // UV
 };
 
 struct CoreEvent
