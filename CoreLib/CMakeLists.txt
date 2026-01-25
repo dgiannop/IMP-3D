@@ -68,6 +68,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+# Fetch KTX image lib
+FetchContent_Declare(
+  ktx
+  GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+  GIT_TAG        v4.3.2
+)
+
+# No tools/tests/docs
+set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_DOC  OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_VULKAN ON CACHE BOOL "" FORCE) #for glTF KTX2/Basis
+FetchContent_MakeAvailable(ktx)
+
+
 # Fetch TinyGLTF (header-only)
 FetchContent_Declare(
   tinygltf
@@ -229,6 +244,7 @@ target_link_libraries(CoreLib
         MeshLib
         osd_static_cpu
         embree
+        ktx
         Vulkan::Vulkan
         "${TBB_LIBRARY}")
 
