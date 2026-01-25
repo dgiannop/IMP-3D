@@ -15,7 +15,6 @@ enum class SelectionMode
     VERTS,
     EDGES,
     POLYS,
-    // MATERIAL
 };
 
 enum class ViewMode
@@ -75,6 +74,6 @@ struct SceneStats
 
 enum class GpuBackend
 {
-    OpenGL,
+    OpenGL, // Not implemented anymore
     Vulkan
 };
