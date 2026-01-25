@@ -79,7 +79,8 @@ FetchContent_Declare(
 set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_DOC  OFF CACHE BOOL "" FORCE)
-set(KTX_FEATURE_VULKAN ON CACHE BOOL "" FORCE) #for glTF KTX2/Basis
+set(KTX_FEATURE_VULKAN ON CACHE BOOL "" FORCE) # For glTF KTX2/Basis
+set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE) # Static lib
 FetchContent_MakeAvailable(ktx)
 
 
@@ -208,6 +209,8 @@ target_include_directories(CoreLib PUBLIC
     ${glm_SOURCE_DIR}
     ${glad_SOURCE_DIR}/include
     ${stb_SOURCE_DIR}
+    ${ktx_SOURCE_DIR}/include
+    ${ktx_BINARY_DIR}/include  # sometimes needed for generated headers
     ${tinygltf_SOURCE_DIR}
     ${opensubdiv_SOURCE_DIR}
     ${EMBREE_INCLUDE_DIR}

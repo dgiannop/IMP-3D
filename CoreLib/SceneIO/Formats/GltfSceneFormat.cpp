@@ -107,6 +107,47 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------
+    // TinyGLTF image loader override:
+    // Store encoded bytes (PNG/JPG/KTX2/etc) and do NOT stb-decode.
+    // This prevents "Unknown image format. STB cannot decode..." for KTX2.
+    // ------------------------------------------------------------
+    static bool storeEncodedImageLoader(tinygltf::Image*     image,
+                                        const int            image_idx,
+                                        std::string*         err,
+                                        std::string*         warn,
+                                        int                  req_width,
+                                        int                  req_height,
+                                        const unsigned char* bytes,
+                                        int                  size,
+                                        void*                user_data)
+    {
+        (void)image_idx;
+        (void)warn;
+        (void)req_width;
+        (void)req_height;
+        (void)user_data;
+
+        if (!image || !bytes || size <= 0)
+        {
+            if (err)
+                *err = "glTF: invalid image bytes.";
+            return false;
+        }
+
+        // Always store the encoded payload.
+        // We deliberately mark width/height/component as 0 so caller knows it's NOT decoded pixels.
+        image->image.assign(bytes, bytes + size);
+        image->width     = 0;
+        image->height    = 0;
+        image->component = 0;
+        image->bits      = 0;
+
+        // Keep mimeType if present; if absent, it may still decode fine via stb/ktx later.
+        // No failure here; decoding happens in ImageHandler/Image later.
+        return true;
+    }
+
     static bool readAccessorVec3Float(const tinygltf::Model&    model,
                                       const tinygltf::Accessor& accessor,
                                       std::vector<glm::vec3>&   out,
@@ -348,6 +389,47 @@ namespace
         }
     }
 
+    static bool getExtensionSourceImageIndex(const tinygltf::Texture& tex, const char* extName, int& outImageIndex)
+    {
+        const auto it = tex.extensions.find(extName);
+        if (it == tex.extensions.end())
+            return false;
+
+        const tinygltf::Value& ext = it->second;
+        if (!ext.IsObject())
+            return false;
+
+        const auto& obj = ext.Get<tinygltf::Value::Object>();
+        const auto  itS = obj.find("source");
+        if (itS == obj.end())
+            return false;
+
+        const tinygltf::Value& v = itS->second;
+        if (!v.IsInt())
+            return false;
+
+        outImageIndex = v.Get<int>();
+        return true;
+    }
+
+    static int resolveTextureImageIndex(const tinygltf::Model& model, const tinygltf::Texture& tex)
+    {
+        // Normal glTF path
+        if (tex.source >= 0 && tex.source < static_cast<int>(model.images.size()))
+            return tex.source;
+
+        // KTX2 via KHR_texture_basisu
+        int idx = -1;
+        if (getExtensionSourceImageIndex(tex, "KHR_texture_basisu", idx))
+            return idx;
+
+        // WebP via EXT_texture_webp
+        if (getExtensionSourceImageIndex(tex, "EXT_texture_webp", idx))
+            return idx;
+
+        return -1;
+    }
+
     // ------------------------------------------------------------
     // Texture cache + importer
     // ------------------------------------------------------------
@@ -383,19 +465,15 @@ namespace
 
         const tinygltf::Texture& tex = model.textures[textureIndex];
 
-        if (tex.source < 0 || tex.source >= static_cast<int>(model.images.size()))
+        const int imgIndex = resolveTextureImageIndex(model, tex);
+        if (imgIndex < 0 || imgIndex >= static_cast<int>(model.images.size()))
         {
-            report.warning("glTF: texture has invalid image source index.");
+            report.warning("glTF: texture has invalid image source index (no tex.source and no supported extension source).");
             return kInvalidImageId;
         }
 
-        const tinygltf::Image& img      = model.images[tex.source];
-        const std::string      nameHint = makeName(img.name, tex.source, "Image_");
-
-        // NOTE:
-        // We currently pass flipY=true when creating textures. That means we *should not*
-        // also flip UVs here unless the rest of your pipeline expects it.
-        // If you later decide UVs need flipping, flip them at import (see below).
+        const tinygltf::Image& img      = model.images[imgIndex];
+        const std::string      nameHint = makeName(img.name, imgIndex, "Image_");
 
         // 1) External path URI
         if (!img.uri.empty())
@@ -450,7 +528,26 @@ namespace
             }
         }
 
-        // 3) Decoded pixels (TinyGLTF may decode for you into img.image + width/height/component)
+        // 3) Encoded bytes stored by our TinyGLTF image loader override
+        //    (img.image contains encoded payload, img.width/img.height == 0)
+        if (!img.image.empty() && (img.width <= 0 || img.height <= 0))
+        {
+            const ImageId id = ih->loadFromEncodedMemory(
+                std::span<const unsigned char>(img.image.data(), img.image.size()),
+                nameHint,
+                /*flipY=*/true);
+
+            if (id != kInvalidImageId)
+            {
+                cache.texToImage[textureIndex] = id;
+                return id;
+            }
+
+            report.warning("glTF: failed to decode encoded image bytes: " + nameHint);
+            return kInvalidImageId;
+        }
+
+        // 4) Decoded pixels (if TinyGLTF decoded somehow into img.image + width/height/component)
         if (!img.image.empty() && img.width > 0 && img.height > 0 && img.component > 0)
         {
             const ImageId id =
@@ -682,6 +779,11 @@ bool GltfSceneFormat::load(Scene*                       scene,
     std::string        err;
     std::string        warn;
 
+    // IMPORTANT:
+    // Override TinyGLTF image decoding so stb isn't used (stb can't decode KTX2).
+    // We store encoded image bytes and decode ourselves via ImageHandler (stb + libktx).
+    loader.SetImageLoader(storeEncodedImageLoader, nullptr);
+
     bool ok = false;
     if (isGlb)
         ok = loader.LoadBinaryFromFile(&model, &err, &warn, filePath.string());
@@ -889,7 +991,13 @@ bool GltfSceneFormat::load(Scene*                       scene,
             // Material
             uint32_t matIndex = 0;
             if (prim.material >= 0)
-                matIndex = resolveMaterialIndex(scene, model, prim.material, baseDir, matCache, texCache, report);
+                matIndex = resolveMaterialIndex(scene,
+                                                model,
+                                                prim.material,
+                                                baseDir,
+                                                matCache,
+                                                texCache,
+                                                report);
 
             // Create SysMesh verts for this primitive (no dedupe; simple & correct)
             std::vector<int32_t> vRemap;
