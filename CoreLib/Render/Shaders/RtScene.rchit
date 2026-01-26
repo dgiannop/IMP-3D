@@ -41,6 +41,35 @@ layout(set = 0, binding = 4, std430) readonly buffer Instances
 } u_inst;
 
 // ------------------------------------------------------------
+// Camera (now includes view matrix)
+// ------------------------------------------------------------
+layout(set = 0, binding = 2, std140) uniform RtCameraUBO
+{
+    mat4 invViewProj;
+    mat4 view;        // NEW
+    vec4 camPos;      // world
+    vec4 clearColor;
+} u_cam;
+
+// ------------------------------------------------------------
+// Lights (same semantics as raster: VIEW-SPACE)
+// ------------------------------------------------------------
+struct GpuLight
+{
+    vec4 pos_type;        // w = type
+    vec4 dir_range;       // xyz = (surface -> light) in VIEW SPACE
+    vec4 color_intensity; // rgb = color, a = intensity
+    vec4 spot_params;
+};
+
+layout(set = 0, binding = 5, std140) uniform LightsUBO
+{
+    uvec4   info;         // x = lightCount
+    vec4    ambient;      // rgb, a
+    GpuLight lights[64];
+} uLights;
+
+// ------------------------------------------------------------
 // Materials + textures (MATCH raster bindings)
 // ------------------------------------------------------------
 struct GpuMaterial
@@ -124,10 +153,9 @@ void main()
     MatIdBuf mid = MatIdBuf(d.matIdAdr);
 
     // -----------------------------
-    // World-space hit point + view
+    // World-space hit point
     // -----------------------------
     vec3 P = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
-    vec3 V = normalize(gl_WorldRayOriginEXT - P);
 
     // -----------------------------
     // Triangle data
@@ -146,21 +174,28 @@ void main()
     const float b2 = attribs.y;
     const float b0 = 1.0 - b1 - b2;
 
-    // Per-corner normals/uvs
+    // Per-corner normals/uvs (assumed WORLD SPACE, as uploaded)
     const uint base3 = prim * 3u;
 
     vec3 n0 = nrm.n[base3 + 0u].xyz;
     vec3 n1 = nrm.n[base3 + 1u].xyz;
     vec3 n2 = nrm.n[base3 + 2u].xyz;
 
-    vec3 N = normalize(n0 * b0 + n1 * b1 + n2 * b2);
-    if (any(isnan(N)) || dot(N, N) < 1e-20)
-        N = normalize(cross(b - a, c - a));
+    vec3 Nw = normalize(n0 * b0 + n1 * b1 + n2 * b2);
+    if (any(isnan(Nw)) || dot(Nw, Nw) < 1e-20)
+        Nw = normalize(cross(b - a, c - a));
 
     vec2 uv0 = uvb.uv[base3 + 0u].xy;
     vec2 uv1 = uvb.uv[base3 + 1u].xy;
     vec2 uv2 = uvb.uv[base3 + 2u].xy;
     vec2 UV  = uv0 * b0 + uv1 * b1 + uv2 * b2;
+
+    // -----------------------------
+    // Convert to VIEW SPACE (to match raster headlight lighting)
+    // -----------------------------
+    vec3 Pv = (u_cam.view * vec4(P, 1.0)).xyz;          // view-space position
+    vec3 Nv = normalize(mat3(u_cam.view) * Nw);         // view-space normal
+    vec3 V  = normalize(-Pv);                           // view-space view vector (camera at origin)
 
     // -----------------------------
     // Material fetch
@@ -176,66 +211,81 @@ void main()
         -1, -1, -1, -1);
 
     // -----------------------------
-    // Base color (albedo) + texture
+    // Base color (albedo)
     // -----------------------------
     vec3 albedo = mat.baseColor;
-
     if (mat.baseColorTexture >= 0)
-    {
-        // Same sampling as raster:
         albedo *= texture(uTextures[mat.baseColorTexture], UV).rgb;
-    }
 
     // -----------------------------
-    // Light (world space)
+    // Material params (+ optional MRAO like raster)
     // -----------------------------
-    vec3 L = normalize(vec3(0.3, 0.7, 0.2)); // pick a world-space light dir
-    vec3 H = normalize(V + L);
-
-    float NdotL = saturate(dot(N, L));
-    float NdotV = saturate(dot(N, V));
-    float NdotH = saturate(dot(N, H));
-    float VdotH = saturate(dot(V, H));
-
-    if (NdotL <= 0.0 || NdotV <= 0.0)
-    {
-        vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;
-        vec3 ambient  = albedo * 0.20;
-        payload = vec4(ambient + emissive, 1.0);
-        return;
-    }
-
     float roughness = clamp(mat.roughness, 0.04, 1.0);
     float metallic  = clamp(mat.metallic,  0.0,  1.0);
-    float alpha     = roughness * roughness;
+    float ao        = 1.0;
+
+    if (mat.mraoTexture >= 0)
+    {
+        vec3 mrao = texture(uTextures[mat.mraoTexture], UV).rgb; // linear
+        ao        = clamp(mrao.r, 0.0, 1.0);
+        roughness = clamp(roughness * mrao.g, 0.04, 1.0);
+        metallic  = clamp(metallic  * mrao.b, 0.0,  1.0);
+    }
+
+    float alpha = roughness * roughness;
 
     float ior = max(mat.ior, 1.0);
     float f0s = pow((ior - 1.0) / (ior + 1.0), 2.0);
     vec3  F0d = vec3(clamp(f0s, 0.02, 0.08));
+    vec3  F0  = mix(F0d, albedo, metallic);
 
-    vec3 F0 = mix(F0d, albedo, metallic);
+    // -----------------------------
+    // Direct lighting from GpuLightsUBO (VIEW SPACE)
+    // -----------------------------
+    vec3 direct = vec3(0.0);
 
-    vec3  F = fresnelSchlick(VdotH, F0);
-    float D = D_GGX(NdotH, alpha);
+    const uint lightCount = uLights.info.x;
+    for (uint i = 0u; i < lightCount; ++i)
+    {
+        vec3 L = normalize(uLights.lights[i].dir_range.xyz); // surface -> light (view space)
+        vec3 H = normalize(V + L);
 
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    float G = G_Smith(NdotV, NdotL, k);
+        float NdotL = saturate(dot(Nv, L));
+        float NdotV = saturate(dot(Nv, V));
+        float NdotH = saturate(dot(Nv, H));
+        float VdotH = saturate(dot(V, H));
 
-    vec3  numerator    = D * G * F;
-    float denom        = max(4.0 * NdotV * NdotL, 1e-7);
-    vec3  specularBRDF = numerator / denom;
+        if (NdotL > 0.0 && NdotV > 0.0)
+        {
+            vec3  F = fresnelSchlick(VdotH, F0);
+            float D = D_GGX(NdotH, alpha);
 
-    vec3 kd          = (vec3(1.0) - F) * (1.0 - metallic);
-    vec3 diffuseBRDF = kd * albedo / 3.14159265;
+            float r = roughness + 1.0;
+            float k = (r * r) / 8.0;
+            float G = G_Smith(NdotV, NdotL, k);
 
-    vec3 radiance = vec3(1.0);
+            vec3  specularBRDF = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
+            vec3  kd           = (vec3(1.0) - F) * (1.0 - metallic);
+            vec3  diffuseBRDF  = kd * albedo / 3.14159265;
 
-    vec3 direct   = (diffuseBRDF + specularBRDF) * radiance * NdotL;
-    vec3 ambient  = albedo * 0.50;
+            vec3 radiance = uLights.lights[i].color_intensity.rgb *
+                            uLights.lights[i].color_intensity.a;
+
+            direct += (diffuseBRDF + specularBRDF) * radiance * NdotL;
+        }
+    }
+
+    // Ambient from UBO (match raster behavior)
+    vec3 ambient = uLights.ambient.rgb * uLights.ambient.a * albedo;
+
+    // Emissive
     vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;
+    if (mat.emissiveTexture >= 0)
+        emissive *= texture(uTextures[mat.emissiveTexture], UV).rgb;
+
+    // AO affects indirect-ish parts (keep it simple here)
+    ambient *= ao;
 
     vec3 color = ambient + direct + emissive;
-
     payload = vec4(color, 1.0);
 }

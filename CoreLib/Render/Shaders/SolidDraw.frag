@@ -30,36 +30,68 @@ layout(std430, set = 1, binding = 0) readonly buffer MaterialBuffer
 };
 
 const int kMaxTextureCount = 512;
-
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
-layout(location = 0) out vec4 fragColor;
+// ------------------------------------------------------------
+// Lights UBO (std140) - set=0 binding=1
+// Matches your C++ GpuLightsUBO layout (vec4-based).
+// ------------------------------------------------------------
+struct GpuLight
+{
+    vec4 pos_type;         // xyz = pos (VS) or unused, w = type
+    vec4 dir_range;        // xyz = dir (VS), w = range/unused
+    vec4 color_intensity;  // rgb = color, a = intensity
+    vec4 spot_params;      // x = innerCos, y = outerCos, zw unused
+};
 
-// Simple view-space directional light (camera-space)
-const vec3 kLightDirView = normalize(vec3(0.3, 0.7, 0.2));
+layout(std140, set = 0, binding = 1) uniform LightsUBO
+{
+    uvec4 info;     // x = lightCount
+    vec4  ambient;  // rgb = ambient, a = ambientStrength (optional)
+    GpuLight lights[64];
+} uLights;
+
+layout(location = 0) out vec4 fragColor;
 
 void main()
 {
     vec3 N = normalize(nrm);
 
-    float NdotL = max(dot(N, kLightDirView), 0.0);
-
-    float ambient = 0.25;
-    float diffuse = NdotL;
-
+    // --- material base ---
     int id = clamp(vMaterialId, 0, int(materials.length()) - 1);
     GpuMaterial mat = materials[id];
 
-    // Start with baseColor from material
     vec3 base = mat.baseColor;
 
-    // If there is a baseColor texture, modulate by it
     if (mat.baseColorTexture >= 0)
-    {
-        // mat.baseColorTexture comes from TextureHandler index
         base *= texture(uTextures[mat.baseColorTexture], vUv).rgb;
+
+    // --- lighting ---
+    float ambientTerm = 0.25; // fallback
+    if (uLights.ambient.a > 0.0)
+        ambientTerm = uLights.ambient.a;
+
+    vec3 lit = base * ambientTerm;
+
+    uint lightCount = uLights.info.x;
+    for (uint i = 0u; i < lightCount; ++i)
+    {
+        // type encoded in pos_type.w
+        uint t = uint(uLights.lights[i].pos_type.w + 0.5);
+
+        // Directional only for now
+        if (t == 0u)
+        {
+            vec3 L = normalize(uLights.lights[i].dir_range.xyz); // VIEW SPACE
+            float NdotL = max(dot(N, L), 0.0);
+            NdotL = pow(NdotL, 0.75); // soften falloff
+
+            vec3  c = uLights.lights[i].color_intensity.rgb;
+            float I = uLights.lights[i].color_intensity.a;
+
+            lit += base * (c * (I * NdotL));
+        }
     }
 
-    vec3 color = base * (ambient + diffuse);
-    fragColor  = vec4(color, 1.0);
+    fragColor = vec4(lit, 1.0);
 }

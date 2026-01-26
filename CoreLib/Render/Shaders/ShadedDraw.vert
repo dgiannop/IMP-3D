@@ -29,7 +29,7 @@ void main()
     vec4 viewPos = ubo.view * worldPos;
     pos = viewPos.xyz;
 
-    // View-space normal (uses view * model)
+    // View-space normal (headlight mode)
     mat3 normMtx = transpose(inverse(mat3(ubo.view * pc.model)));
     nrm = normalize(normMtx * norm);
 
@@ -38,35 +38,3 @@ void main()
 
     gl_Position = ubo.proj * viewPos;
 }
-
-
-// ---------------------------------------------
-// NOTE — Lighting mode reminder for IMP3D
-// ---------------------------------------------
-//
-// ★ Headlight mode (default viewport lighting)
-//
-//   Use view-space normals so light stays fixed to camera.
-//   The model rotates under camera, but shading does NOT change
-//   when viewport rotates → "DCC default headlight".
-//
-//   mat3 normMtx = transpose(inverse(mat3(ubo.view * ubo.model)));
-//   nrm = normalize(normMtx * norm);
-//
-//   Use this only when REAL scene lights are not present.
-//
-// ---------------------------------------------
-//
-// ★ Scene lighting (actual lights in the scene)
-//
-//   Stop using headlight. Compute normals in WORLD space.
-//   Light directions/positions must also be in WORLD space.
-//   View matrix ONLY affects camera, not shading.
-//
-//   mat3 normMtx = transpose(inverse(mat3(ubo.model)));
-//   nrm = normalize(normMtx * norm);
-//
-//   Use this when I add Light objects to Scene and want
-//   light to remain steady while camera orbits.
-//
-// ---------------------------------------------

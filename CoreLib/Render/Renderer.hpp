@@ -1,5 +1,5 @@
 //============================================================
-// Renderer.hpp
+// Renderer.hpp (DROP-IN REPLACEMENT)
 //============================================================
 #pragma once
 
@@ -19,6 +19,7 @@
 #include "DescriptorSet.hpp"
 #include "DescriptorSetLayout.hpp"
 #include "GpuBuffer.hpp"
+#include "GpuLights.hpp"
 #include "GridRendererVK.hpp"
 #include "Material.hpp"
 #include "OverlayHandler.hpp"
@@ -75,6 +76,7 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     Renderer& operator=(Renderer&&)      = delete;
 
+public:
     // ============================================================
     // Public API: Lifetime / frame hooks
     // ============================================================
@@ -87,6 +89,7 @@ public:
     void idle(Scene* scene);
     void waitDeviceIdle() noexcept;
 
+public:
     // ============================================================
     // Public API: Rendering entry points
     // ============================================================
@@ -127,10 +130,12 @@ public:
     struct alignas(16) RtCameraUBO
     {
         glm::mat4 invViewProj = {}; // 64
+        glm::mat4 view        = {}; // 64
         glm::vec4 camPos      = {}; // 16
         glm::vec4 clearColor  = {}; // 16
     };
-    static_assert(sizeof(RtCameraUBO) == 96);
+
+    static_assert(sizeof(RtCameraUBO) == 160);
     static_assert(alignof(RtCameraUBO) == 16);
 
     // set=0 binding=4 (RT path) - std430 SSBO element
@@ -158,13 +163,14 @@ public:
     struct OverlayVertex
     {
         glm::vec3 pos;
-        float     thickness;
-        glm::vec4 color;
+        float     thickness = 1.0f;
+        glm::vec4 color     = glm::vec4(1.0f);
     };
 
     struct ViewportUboState
     {
         std::vector<GpuBuffer>     mvpBuffers;
+        std::vector<GpuBuffer>     lightBuffers; // per-frame Lights UBO buffer
         std::vector<DescriptorSet> uboSets;
     };
 
@@ -190,6 +196,9 @@ private:
     void drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
     void ensureOverlayVertexCapacity(std::size_t requiredVertexCount);
     void drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
+
+    // Lights (shared helper for raster + RT)
+    void updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t frameIndex);
 
 private:
     // ============================================================
@@ -305,6 +314,8 @@ private:
     std::unordered_map<Viewport*, ViewportUboState> m_viewportUbos;
     std::vector<DescriptorSet>                      m_materialSets;
 
+    HeadlightSettings m_headlight = {};
+
 private:
     // ============================================================
     // Materials SSBO
@@ -327,28 +338,20 @@ private:
     // Ray tracing (DrawMode::RAY_TRACE)
     // ============================================================
 
-    // RT descriptor set layout (set=0 for RT path only)
     DescriptorSetLayout m_rtSetLayout;
+    DescriptorPool      m_rtPool;
 
-    // IMPORTANT: pool is shared, sets are per-viewport-per-frame allocated lazily.
-    DescriptorPool m_rtPool;
-
-    // Shared sampler + format
     VkSampler m_rtSampler = VK_NULL_HANDLE;
     VkFormat  m_rtFormat  = VK_FORMAT_R8G8B8A8_UNORM;
 
-    // RT pipeline + SBT
     vkrt::RtPipeline m_rtPipeline;
     vkrt::RtSbt      m_rtSbt;
 
-    // Present (swapchain-level)
     VkPipeline       m_rtPresentPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_rtPresentLayout   = VK_NULL_HANDLE;
 
-    // Upload helpers for SBT
     VkCommandPool m_rtUploadPool = VK_NULL_HANDLE;
 
-    // PER-VIEWPORT RT state
     std::unordered_map<Viewport*, RtViewportState> m_rtViewports;
 
     static constexpr uint32_t kMaxViewports = 8;
@@ -410,4 +413,23 @@ private:
 
     template<typename Fn>
     void forEachVisibleMesh(Scene* scene, Fn&& fn);
+    // {
+    //     if (!scene)
+    //         return;
+
+    //     // Expected contract:
+    //     //  - scene->sceneMeshes() returns std::vector<SceneMesh*>
+    //     //  - sm->gpu() returns MeshGpuResources*
+    //     for (SceneMesh* sm : scene->sceneMeshes())
+    //     {
+    //         if (!sm || !sm->visible())
+    //             continue;
+
+    //         MeshGpuResources* gpu = sm->gpuResources();
+    //         if (!gpu)
+    //             continue;
+
+    //         fn(sm, gpu);
+    //     }
+    // }
 };

@@ -13,7 +13,8 @@ layout(set = 0, binding = 3) uniform accelerationStructureEXT u_tlas;
 layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
-    vec4 camPos;      // xyz = camera position
+    mat4 view;        // NEW: needed for RT lighting to match raster semantics
+    vec4 camPos;      // xyz = camera position (world)
     vec4 clearColor;  // used by miss
 } u_cam;
 
