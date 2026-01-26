@@ -232,7 +232,7 @@ private:
     };
 
     RtViewportState& ensureRtViewportState(Viewport* vp);
-    bool             ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uint32_t w, uint32_t h);
+    bool             ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h);
     void             destroyRtOutputImages(RtViewportState& s) noexcept;
 
 private:
@@ -413,23 +413,4 @@ private:
 
     template<typename Fn>
     void forEachVisibleMesh(Scene* scene, Fn&& fn);
-    // {
-    //     if (!scene)
-    //         return;
-
-    //     // Expected contract:
-    //     //  - scene->sceneMeshes() returns std::vector<SceneMesh*>
-    //     //  - sm->gpu() returns MeshGpuResources*
-    //     for (SceneMesh* sm : scene->sceneMeshes())
-    //     {
-    //         if (!sm || !sm->visible())
-    //             continue;
-
-    //         MeshGpuResources* gpu = sm->gpuResources();
-    //         if (!gpu)
-    //             continue;
-
-    //         fn(sm, gpu);
-    //     }
-    // }
 };

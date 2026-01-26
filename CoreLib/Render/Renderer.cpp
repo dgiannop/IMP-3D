@@ -644,7 +644,7 @@ void Renderer::destroyRtOutputImages(RtViewportState& s) noexcept
     s.cachedH = 0;
 }
 
-bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uint32_t w, uint32_t h)
+bool Renderer::ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h)
 {
     if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.physicalDevice)
         return false;
@@ -652,6 +652,7 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uin
     if (w == 0 || h == 0)
         return false;
 
+    const uint32_t frameIndex = fc.frameIndex;
     if (frameIndex >= m_framesInFlight)
         return false;
 
@@ -663,7 +664,6 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uin
         const RtImagePerFrame& img = s.images[frameIndex];
         if (img.image && img.view && img.width == w && img.height == h)
         {
-            // Keep cached size up to date (for informational/debugging use).
             s.cachedW = w;
             s.cachedH = h;
             return true;
@@ -672,25 +672,36 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uin
 
     VkDevice device = m_ctx.device;
 
-    // Destroy only this slot's resources (defer if you later want; for now immediate).
+    // -------------------------------------------------------------------------
+    // Destroy only this slot's resources (DEFERRED if available).
+    // -------------------------------------------------------------------------
     {
         RtImagePerFrame& img = s.images[frameIndex];
 
-        if (img.view)
+        const VkImageView    oldView = img.view;
+        const VkImage        oldImg  = img.image;
+        const VkDeviceMemory oldMem  = img.memory;
+
+        if (oldView || oldImg || oldMem)
         {
-            vkDestroyImageView(device, img.view, nullptr);
-            img.view = VK_NULL_HANDLE;
+            auto destroyOld = [device, oldView, oldImg, oldMem]() noexcept {
+                if (oldView)
+                    vkDestroyImageView(device, oldView, nullptr);
+                if (oldImg)
+                    vkDestroyImage(device, oldImg, nullptr);
+                if (oldMem)
+                    vkFreeMemory(device, oldMem, nullptr);
+            };
+
+            if (fc.deferred)
+                fc.deferred->enqueue(frameIndex, std::move(destroyOld));
+            else
+                destroyOld();
         }
-        if (img.image)
-        {
-            vkDestroyImage(device, img.image, nullptr);
-            img.image = VK_NULL_HANDLE;
-        }
-        if (img.memory)
-        {
-            vkFreeMemory(device, img.memory, nullptr);
-            img.memory = VK_NULL_HANDLE;
-        }
+
+        img.view   = VK_NULL_HANDLE;
+        img.image  = VK_NULL_HANDLE;
+        img.memory = VK_NULL_HANDLE;
 
         img.width     = 0;
         img.height    = 0;
@@ -736,18 +747,27 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uin
 
     const uint32_t typeIndex = findDeviceLocalType(req.memoryTypeBits);
     if (typeIndex == UINT32_MAX)
+    {
+        vkDestroyImage(device, newImg.image, nullptr);
         return false;
+    }
 
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     mai.allocationSize  = req.size;
     mai.memoryTypeIndex = typeIndex;
 
-    // No special flags needed here; keep pNext null.
     if (vkAllocateMemory(device, &mai, nullptr, &newImg.memory) != VK_SUCCESS)
+    {
+        vkDestroyImage(device, newImg.image, nullptr);
         return false;
+    }
 
     if (vkBindImageMemory(device, newImg.image, newImg.memory, 0) != VK_SUCCESS)
+    {
+        vkFreeMemory(device, newImg.memory, nullptr);
+        vkDestroyImage(device, newImg.image, nullptr);
         return false;
+    }
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vci.image                           = newImg.image;
@@ -760,7 +780,11 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uin
     vci.subresourceRange.layerCount     = 1;
 
     if (vkCreateImageView(device, &vci, nullptr, &newImg.view) != VK_SUCCESS)
+    {
+        vkFreeMemory(device, newImg.memory, nullptr);
+        vkDestroyImage(device, newImg.image, nullptr);
         return false;
+    }
 
     newImg.width     = w;
     newImg.height    = h;
@@ -1767,7 +1791,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         RtViewportState& rtv = ensureRtViewportState(vp);
 
-        if (!ensureRtOutputImages(rtv, frameIdx, w, h))
+        if (!ensureRtOutputImages(rtv, fc, w, h))
             return;
 
         if (!m_rtPresentPipeline || !m_rtPresentLayout)
@@ -2039,7 +2063,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     if (w == 0 || h == 0)
         return;
 
-    if (!ensureRtOutputImages(rtv, fc.frameIndex, w, h))
+    if (!ensureRtOutputImages(rtv, fc, w, h))
         return;
 
     if (fc.frameIndex >= rtv.images.size() ||
