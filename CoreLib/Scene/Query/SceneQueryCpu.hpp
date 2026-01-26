@@ -4,11 +4,11 @@
 
 #include "SceneQuery.hpp"
 
-// Forward declarations
 class Scene;
 class SceneMesh;
 class Viewport;
 struct MeshHit;
+
 namespace un
 {
     struct ray;
@@ -53,4 +53,3 @@ public:
                                     const Scene*    scene,
                                     const un::ray&  ray) const override;
 };
-

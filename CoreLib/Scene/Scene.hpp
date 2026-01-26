@@ -15,6 +15,7 @@
 #include "VulkanContext.hpp"
 
 class Viewport;
+class Renderer;
 
 /**
  * @brief Scene-level container and coordinator.
@@ -216,7 +217,7 @@ public:
      * @param fc Command buffer
      * @param frameIndex Frame-in-flight index
      */
-    void render(class Viewport* vp, const RenderFrameContext& fc);
+    void render(Viewport* vp, const RenderFrameContext& fc);
 
     /** @brief Scene change counter (topology + selection). */
     [[nodiscard]] SysCounterPtr changeCounter() const noexcept;
@@ -229,7 +230,7 @@ private:
     std::vector<std::unique_ptr<SceneObject>> m_sceneObjects;
 
     /** @brief Renderer instance. */
-    std::unique_ptr<class Renderer> m_renderer;
+    std::unique_ptr<Renderer> m_renderer;
 
     /** @brief Scene change counter. */
     SysCounterPtr m_sceneChangeCounter;

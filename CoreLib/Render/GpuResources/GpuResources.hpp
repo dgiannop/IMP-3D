@@ -18,4 +18,11 @@ public:
     virtual void update()
     {
     } // = 0;
+
+    // TODO. MeshGpuResources now uses this signature
+    // void update(const RenderFrameContext& fc);
+    // That was the reason I made update non-pure virtual.
+    // When I see if its useful for all derivatives will
+    // update this base class. Eg. Replace the no-param update
+    // with the one that takes RenderFrameContext.
 };
