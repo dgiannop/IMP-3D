@@ -644,36 +644,58 @@ void Renderer::destroyRtOutputImages(RtViewportState& s) noexcept
     s.cachedH = 0;
 }
 
-bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t w, uint32_t h)
+bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uint32_t w, uint32_t h)
 {
-    if (!rtReady(m_ctx))
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.physicalDevice)
         return false;
 
     if (w == 0 || h == 0)
         return false;
 
+    if (frameIndex >= m_framesInFlight)
+        return false;
+
     if (s.sets.size() != m_framesInFlight || s.images.size() != m_framesInFlight)
         return false;
 
-    // fast path
-    if (s.cachedW == w && s.cachedH == h)
+    // If THIS slot already matches, we're done.
     {
-        bool ok = true;
-        for (uint32_t i = 0; i < m_framesInFlight; ++i)
+        const RtImagePerFrame& img = s.images[frameIndex];
+        if (img.image && img.view && img.width == w && img.height == h)
         {
-            if (!s.images[i].image || !s.images[i].view || s.images[i].width != w || s.images[i].height != h)
-            {
-                ok = false;
-                break;
-            }
-        }
-        if (ok)
+            // Keep cached size up to date (for informational/debugging use).
+            s.cachedW = w;
+            s.cachedH = h;
             return true;
+        }
     }
 
-    destroyRtOutputImages(s);
-
     VkDevice device = m_ctx.device;
+
+    // Destroy only this slot's resources (defer if you later want; for now immediate).
+    {
+        RtImagePerFrame& img = s.images[frameIndex];
+
+        if (img.view)
+        {
+            vkDestroyImageView(device, img.view, nullptr);
+            img.view = VK_NULL_HANDLE;
+        }
+        if (img.image)
+        {
+            vkDestroyImage(device, img.image, nullptr);
+            img.image = VK_NULL_HANDLE;
+        }
+        if (img.memory)
+        {
+            vkFreeMemory(device, img.memory, nullptr);
+            img.memory = VK_NULL_HANDLE;
+        }
+
+        img.width     = 0;
+        img.height    = 0;
+        img.needsInit = true;
+    }
 
     VkPhysicalDeviceMemoryProperties memProps{};
     vkGetPhysicalDeviceMemoryProperties(m_ctx.physicalDevice, &memProps);
@@ -690,75 +712,70 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, uint32_t w, uint32_t h)
         return UINT32_MAX;
     };
 
-    for (uint32_t i = 0; i < m_framesInFlight; ++i)
-    {
-        RtImagePerFrame img = {};
+    RtImagePerFrame newImg = {};
 
-        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ici.imageType   = VK_IMAGE_TYPE_2D;
-        ici.format      = m_rtFormat;
-        ici.extent      = VkExtent3D{w, h, 1};
-        ici.mipLevels   = 1;
-        ici.arrayLayers = 1;
-        ici.samples     = VK_SAMPLE_COUNT_1_BIT;
-        ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage       = VK_IMAGE_USAGE_STORAGE_BIT |
-                    VK_IMAGE_USAGE_SAMPLED_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType   = VK_IMAGE_TYPE_2D;
+    ici.format      = m_rtFormat;
+    ici.extent      = VkExtent3D{w, h, 1};
+    ici.mipLevels   = 1;
+    ici.arrayLayers = 1;
+    ici.samples     = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage       = VK_IMAGE_USAGE_STORAGE_BIT |
+                VK_IMAGE_USAGE_SAMPLED_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        if (vkCreateImage(device, &ici, nullptr, &img.image) != VK_SUCCESS)
-            return false;
+    if (vkCreateImage(device, &ici, nullptr, &newImg.image) != VK_SUCCESS)
+        return false;
 
-        VkMemoryRequirements req{};
-        vkGetImageMemoryRequirements(device, img.image, &req);
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(device, newImg.image, &req);
 
-        const uint32_t typeIndex = findDeviceLocalType(req.memoryTypeBits);
-        if (typeIndex == UINT32_MAX)
-            return false;
+    const uint32_t typeIndex = findDeviceLocalType(req.memoryTypeBits);
+    if (typeIndex == UINT32_MAX)
+        return false;
 
-        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        mai.allocationSize  = req.size;
-        mai.memoryTypeIndex = typeIndex;
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = typeIndex;
 
-        VkMemoryAllocateFlagsInfo flagsInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-        flagsInfo.flags = 0;
-        mai.pNext       = &flagsInfo;
+    // No special flags needed here; keep pNext null.
+    if (vkAllocateMemory(device, &mai, nullptr, &newImg.memory) != VK_SUCCESS)
+        return false;
 
-        if (vkAllocateMemory(device, &mai, nullptr, &img.memory) != VK_SUCCESS)
-            return false;
+    if (vkBindImageMemory(device, newImg.image, newImg.memory, 0) != VK_SUCCESS)
+        return false;
 
-        if (vkBindImageMemory(device, img.image, img.memory, 0) != VK_SUCCESS)
-            return false;
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image                           = newImg.image;
+    vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format                          = m_rtFormat;
+    vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    vci.subresourceRange.baseMipLevel   = 0;
+    vci.subresourceRange.levelCount     = 1;
+    vci.subresourceRange.baseArrayLayer = 0;
+    vci.subresourceRange.layerCount     = 1;
 
-        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vci.image                           = img.image;
-        vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format                          = m_rtFormat;
-        vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        vci.subresourceRange.baseMipLevel   = 0;
-        vci.subresourceRange.levelCount     = 1;
-        vci.subresourceRange.baseArrayLayer = 0;
-        vci.subresourceRange.layerCount     = 1;
+    if (vkCreateImageView(device, &vci, nullptr, &newImg.view) != VK_SUCCESS)
+        return false;
 
-        if (vkCreateImageView(device, &vci, nullptr, &img.view) != VK_SUCCESS)
-            return false;
+    newImg.width     = w;
+    newImg.height    = h;
+    newImg.needsInit = true;
 
-        img.width     = w;
-        img.height    = h;
-        img.needsInit = true;
+    // Commit into this slot.
+    s.images[frameIndex] = newImg;
 
-        s.images[i] = img;
-
-        // Update per-viewport-per-frame RT descriptor set:
-        s.sets[i].writeStorageImage(m_ctx.device, 0, s.images[i].view, VK_IMAGE_LAYOUT_GENERAL);
-        s.sets[i].writeCombinedImageSampler(m_ctx.device,
-                                            1,
-                                            m_rtSampler,
-                                            s.images[i].view,
-                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    }
+    // Update only THIS frame slot’s descriptors (set=0 in RT)
+    s.sets[frameIndex].writeStorageImage(device, 0, newImg.view, VK_IMAGE_LAYOUT_GENERAL);
+    s.sets[frameIndex].writeCombinedImageSampler(device,
+                                                 1,
+                                                 m_rtSampler,
+                                                 newImg.view,
+                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     s.cachedW = w;
     s.cachedH = h;
@@ -1750,7 +1767,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         RtViewportState& rtv = ensureRtViewportState(vp);
 
-        if (!ensureRtOutputImages(rtv, w, h))
+        if (!ensureRtOutputImages(rtv, frameIdx, w, h))
             return;
 
         if (!m_rtPresentPipeline || !m_rtPresentLayout)
@@ -2022,7 +2039,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     if (w == 0 || h == 0)
         return;
 
-    if (!ensureRtOutputImages(rtv, w, h))
+    if (!ensureRtOutputImages(rtv, fc.frameIndex, w, h))
         return;
 
     if (fc.frameIndex >= rtv.images.size() ||

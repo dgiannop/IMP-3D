@@ -232,7 +232,7 @@ private:
     };
 
     RtViewportState& ensureRtViewportState(Viewport* vp);
-    bool             ensureRtOutputImages(RtViewportState& s, uint32_t w, uint32_t h);
+    bool             ensureRtOutputImages(RtViewportState& s, uint32_t frameIndex, uint32_t w, uint32_t h);
     void             destroyRtOutputImages(RtViewportState& s) noexcept;
 
 private:
