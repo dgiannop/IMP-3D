@@ -669,7 +669,7 @@ bool HeMesh::insertVertOnPolyEdge(PolyId p, VertId a, VertId b, VertId vNew)
     // If the old edge is now unused, it will be cleaned by removeUnusedEdges().
     // We do NOT auto-remove here because other polygons may still use it.
 
-    (void)flipped; // kept for debugging if you want, not required logically
+    (void)flipped; // kept for debugging if we want, not required logically
     return true;
 }
 

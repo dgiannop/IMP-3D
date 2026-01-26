@@ -46,8 +46,8 @@ void DuplicateTool::activate(Scene* scene)
         return;
 
     // Start a new pending batch and build duplicated geometry immediately.
-    // (Your Scene probably already begins a pending state automatically when tools modify;
-    // if not, you can call scene->beginMeshChanges() here.)
+    // (The Scene probably already begins a pending state automatically when tools modify;
+    // if not, we can call scene->beginMeshChanges() here.)
     beginDuplicate(scene);
     m_active = !m_sets.empty();
 }

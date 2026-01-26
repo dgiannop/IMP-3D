@@ -47,7 +47,7 @@ namespace
     static std::vector<int32_t> collect_maps_to_preserve(const SysMesh* mesh)
     {
         // SysMesh doesn’t expose "all maps", so probe a small range of IDs.
-        // If you have official IDs (UV0, NRM, etc.), replace this with that list.
+        // TODO, We have official IDs (UV0, NRM, etc.), replace this with that list.
         std::vector<int32_t> maps;
         maps.reserve(8);
 

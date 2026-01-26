@@ -465,7 +465,7 @@ bool VulkanBackend::createDevice()
         if (!hasExtInList(outExts, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
             return -1;
 
-        // Hard requirement: you unconditionally enable these features later
+        // Hard requirement: we unconditionally enable these features later
         if (!outFeats.geometryShader || !outFeats.samplerAnisotropy)
             return -1;
 
@@ -1228,7 +1228,7 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
             return false;
         }
 
-        // Note: swapchain VkImage objects are not "owned" images you created,
+        // Note: swapchain VkImage objects are not "owned" images we created,
         // so many tools won't show names for them; naming their views is enough.
         vkutil::name(m_device, sc->views[i], "Viewport.SwapchainView", int32_t(i));
     }

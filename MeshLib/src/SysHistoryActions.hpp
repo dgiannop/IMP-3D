@@ -84,7 +84,7 @@ struct UndoRemoveVertex : public HistoryAction
             for (int32_t vi : p.data.verts)
             {
                 assert(vi >= 0 && "UndoRemoveVertex::undo: poly contains negative vert index");
-                // If you ever allow polys to reference removed verts, this will trip.
+                // If we ever allow polys to reference removed verts, this will trip.
                 assert(mesh->vert_valid(vi) && "UndoRemoveVertex::undo: poly references invalid vert");
 
                 mesh_data->verts[vi].polys.insert_unique(p.index);

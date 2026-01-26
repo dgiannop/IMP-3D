@@ -279,7 +279,7 @@ void MaterialAssignDialog::onAssign()
         return;
 
     // If new material, apply the chosen base color.
-    // (If you want "always apply", remove the existingId check.)
+    // (If we want "always apply", remove the existingId check.)
     if (existingId < 0)
     {
         if (Material* m = me->material(matId))

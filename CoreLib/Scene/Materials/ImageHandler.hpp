@@ -45,7 +45,7 @@ public:
         return m_images;
     }
 
-    // Simple lifetime management (optional: add ref-count later if you want)
+    // Simple lifetime management
     void clear() noexcept;
 
     SysCounterPtr changeCounter() const noexcept;

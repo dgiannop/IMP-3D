@@ -27,7 +27,7 @@ class Scene;
  *
  * Notes:
  *  - Material IDs are currently indices into MaterialHandler's vector.
- *  - This interface can remain stable even if you later move to stable IDs,
+ *  - This interface can remain stable even if we later move to stable IDs,
  *    freelists, or pooled storage.
  */
 class MaterialEditor final

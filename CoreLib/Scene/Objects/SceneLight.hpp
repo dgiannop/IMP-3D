@@ -93,7 +93,7 @@ public:
     // Directional “sun” uses direction (unit vector).
     // Point/spot use position from model() translation.
     //
-    // You can choose either:
+    // We can choose either:
     //  A) author direction explicitly (m_direction), or
     //  B) derive direction from model() orientation.
     //

@@ -171,20 +171,19 @@ namespace
         if (!sys)
             return best;
 
-        // You might want a tolerance based on viewport pixel scale:
+        // We might want a tolerance based on viewport pixel scale:
         // float tolWorld = vp->pixelScale() * someFactor;
         // For now, just use a fixed world-space radius:
         const float tolWorld = 0.05f;
         const float tol2     = tolWorld * tolWorld;
 
-        const int vertCount = sys->num_verts(); // <-- adjust to your API
+        const int vertCount = sys->num_verts();
         for (int vi = 0; vi < vertCount; ++vi)
         {
-            if (!sys->vert_valid(vi)) // <-- if you have vert_valid
+            if (!sys->vert_valid(vi))
                 continue;
 
-            // Assuming SysMesh has vert_pos(int) -> glm::vec3
-            const glm::vec3 p = sys->vert_position(vi); // <-- adjust
+            const glm::vec3 p = sys->vert_position(vi);
 
             RayPointHit rp = closestRayPoint(ray, p);
             if (rp.dist2 > tol2)

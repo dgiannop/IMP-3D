@@ -330,7 +330,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
 
         uboBindings[0].binding = 0;
         uboBindings[0].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        // MVP is used by VS; keep GS if you have a geo stage consuming it.
+        // MVP is used by VS; keep GS if we have a geo stage consuming it.
         uboBindings[0].stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT;
         uboBindings[0].count  = 1;
 
@@ -592,9 +592,7 @@ Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp)
 
 void Renderer::updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t frameIndex)
 {
-    (void)scene;
-
-    if (!vp)
+    if (!vp || !scene)
         return;
 
     if (frameIndex >= m_framesInFlight)
@@ -605,8 +603,11 @@ void Renderer::updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t fram
     if (frameIndex >= ubo.lightBuffers.size())
         return;
 
-    // TODO: fill this from headlight + scene lights once we match your GpuLightsUbo layout.
-    GpuLightsUBO lights = {};
+    if (!ubo.lightBuffers[frameIndex].valid())
+        return;
+
+    GpuLightsUBO lights{};
+    buildGpuLightsUBO(m_headlight, *vp, scene, lights);
     ubo.lightBuffers[frameIndex].upload(&lights, sizeof(lights));
 }
 
@@ -1628,29 +1629,41 @@ void Renderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffe
     }
 }
 
-void Renderer::clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
+// void Renderer::clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
+// {
+//     if (!vp)
+//         return;
+
+//     RtViewportState& rtv = ensureRtViewportState(vp);
+//     if (frameIndex >= rtv.sets.size())
+//         return;
+
+//     VkAccelerationStructureKHR nullAs = VK_NULL_HANDLE;
+
+//     VkWriteDescriptorSetAccelerationStructureKHR asInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+//     asInfo.accelerationStructureCount = 1;
+//     asInfo.pAccelerationStructures    = &nullAs;
+
+//     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+//     w.pNext           = &asInfo;
+//     w.dstSet          = rtv.sets[frameIndex].set();
+//     w.dstBinding      = 3;
+//     w.descriptorCount = 1;
+//     w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+
+//     vkUpdateDescriptorSets(m_ctx.device, 1, &w, 0, nullptr);
+// }
+
+void Renderer::clearRtTlasDescriptor(Viewport* /*vp*/, uint32_t /*frameIndex*/) noexcept
 {
-    if (!vp)
-        return;
-
-    RtViewportState& rtv = ensureRtViewportState(vp);
-    if (frameIndex >= rtv.sets.size())
-        return;
-
-    VkAccelerationStructureKHR nullAs = VK_NULL_HANDLE;
-
-    VkWriteDescriptorSetAccelerationStructureKHR asInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-    asInfo.accelerationStructureCount = 1;
-    asInfo.pAccelerationStructures    = &nullAs;
-
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.pNext           = &asInfo;
-    w.dstSet          = rtv.sets[frameIndex].set();
-    w.dstBinding      = 3;
-    w.descriptorCount = 1;
-    w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-
-    vkUpdateDescriptorSets(m_ctx.device, 1, &w, 0, nullptr);
+    // Intentionally does nothing unless nullDescriptor is enabled.
+    //
+    // Without nullDescriptor, writing VK_NULL_HANDLE to an
+    // ACCELERATION_STRUCTURE_KHR descriptor is invalid and produces
+    // validation errors.
+    //
+    // When TLAS is missing, the RT path exits before vkCmdTraceRaysKHR,
+    // so the previous binding is never consumed by shaders.
 }
 
 void Renderer::destroyAllRtTlasFrames() noexcept

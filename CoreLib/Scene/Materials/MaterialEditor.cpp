@@ -38,8 +38,6 @@ MaterialHandler* MaterialEditor::handler() noexcept
 
     // Preferred: provide a non-const overload on Scene:
     //   MaterialHandler* materialHandler() noexcept;
-    //
-    // If you haven't added it yet, add it (recommended), then this compiles cleanly:
     return m_scene->materialHandler();
 }
 

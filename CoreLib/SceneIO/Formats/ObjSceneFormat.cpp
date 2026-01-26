@@ -298,7 +298,7 @@ bool ObjSceneFormat::loadMaterialLibrary(Scene* scene, const std::filesystem::pa
     std::ifstream file(filePath);
     if (!file)
     {
-        // You can route this through SceneIOReport if you prefer
+        // Add this to SceneIOReport later
         // std::cerr << "Could not open material file: " << filePath << "\n";
         return false;
     }

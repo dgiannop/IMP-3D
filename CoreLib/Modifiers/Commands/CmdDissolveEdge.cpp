@@ -162,7 +162,7 @@
 //             if (oep.edges.empty())
 //                 continue;
 
-//             // ---- cube test: do ONE edge only (exactly like you did) ----
+//             // ---- cube test: do ONE edge only (exactly like we did) ----
 //             IndexPair edge = oep.edges.back();
 
 //             if (!mesh->vert_valid(edge.first) || !mesh->vert_valid(edge.second))

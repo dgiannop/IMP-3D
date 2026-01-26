@@ -919,7 +919,7 @@ namespace ops::sys
             }
 
             // NOTE:
-            // We do not remove original vertex v. If you want cleanup later:
+            // We do not remove original vertex v. If we want cleanup later:
             // - if mesh->vert_polys(v).empty() -> remove_vert(v)
         }
     }

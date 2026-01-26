@@ -32,18 +32,13 @@ namespace
 } // namespace
 
 void buildGpuLightsUBO(const HeadlightSettings& headlight,
-                       const Viewport&          vp,
-                       const Scene*             scene,
-                       GpuLightsUBO&            out) noexcept
+                       const Viewport& /*vp*/,
+                       const Scene* /*scene*/,
+                       GpuLightsUBO& out) noexcept
 {
     out         = {};
     out.info    = glm::uvec4(0, 0, 0, 0);
-    out.ambient = glm::vec4(
-        1.0f,
-        1.0f,
-        1.0f,
-        0.25f // intentionally high
-    );
+    out.ambient = glm::vec4(1.f, 1.f, 1.f, 0.25f);
 
     // ------------------------------------------------------------
     // 1) Headlight (VIEW SPACE) - follows camera by design
@@ -59,35 +54,12 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     }
 
     // ------------------------------------------------------------
-    // 2) Scene lights (WORLD -> VIEW) - later
+    // 2) Scene lights (WORLD -> VIEW) - optional
     // ------------------------------------------------------------
-    // When you add lights to Scene, do it like this:
-    //   - SceneLight stores world position/direction
-    //   - Here we transform using vp.viewMatrix()
+    // When SceneLight support is added:
+    //   - SceneLight stores world-space position/direction.
+    //   - Lights are transformed into view space using the viewport view matrix.
+    //   - Direction vectors use the upper-left 3x3 of the view matrix.
+    //   - Positions use the full 4x4 view transform.
     //
-    // Example transformation pattern:
-    //
-    // const glm::mat4 V  = vp.viewMatrix();
-    // const glm::mat3 V3 = glm::mat3(V);
-    //
-    // for (const SceneLight& sl : scene->lights())
-    // {
-    //     GpuLight l{};
-    //     if (sl.type == Directional)
-    //     {
-    //         glm::vec3 dirVS = safeNormalize(V3 * sl.directionWS);
-    //         l.pos_type = vec4(0,0,0,type);
-    //         l.dir_range = vec4(dirVS, 0);
-    //     }
-    //     else
-    //     {
-    //         glm::vec3 posVS = glm::vec3(V * glm::vec4(sl.positionWS, 1));
-    //         l.pos_type = vec4(posVS, type);
-    //         ...
-    //     }
-    //     l.color_intensity = vec4(sl.color, sl.intensity);
-    //     appendLight(out, l);
-    // }
-    (void)vp;
-    (void)scene;
 }

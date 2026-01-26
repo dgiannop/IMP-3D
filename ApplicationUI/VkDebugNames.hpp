@@ -21,10 +21,10 @@ namespace vkutil
 #if VKUTIL_DEBUG_NAMES
 
     // Cache per-process. Fine for a single device (your current case).
-    // If you ever support multiple VkDevice objects, we can extend this to a small map.
+    // If we ever support multiple VkDevice objects, we can extend this to a small map.
     inline PFN_vkSetDebugUtilsObjectNameEXT g_setName = nullptr;
 
-    // Call once after you have VkDevice and a way to get device proc addrs.
+    // Call once after we have VkDevice and a way to get device proc addrs.
     inline void init(PFN_vkGetDeviceProcAddr getDeviceProcAddr, VkDevice device) noexcept
     {
         g_setName = nullptr;

@@ -17,8 +17,8 @@ namespace un
 /**
  * @brief CPU-based implementation of SceneQuery.
  *
- * This class uses your existing ray/geometry math on the CPU,
- * optionally with per-mesh BVHs if you already have them.
+ * This class uses our existing ray/geometry math on the CPU,
+ * optionally with per-mesh BVHs if we already have them.
  */
 class SceneQueryCpu final : public SceneQuery
 {

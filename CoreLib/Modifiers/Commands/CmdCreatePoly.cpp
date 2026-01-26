@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "CoreUtilities.hpp" // un::safe_normalize, un::is_zero (if you have them)
+#include "CoreUtilities.hpp" // un::safe_normalize, un::is_zero
 #include "Scene.hpp"
 #include "SysMesh.hpp"
 

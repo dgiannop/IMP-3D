@@ -77,8 +77,8 @@ namespace
         return {linToSrgb(c.r), linToSrgb(c.g), linToSrgb(c.b)};
     }
 
-    // NOTE: In your old system these packed texture handles (-1 <-> 0) were used.
-    // For now we only need them conceptually; you can hook them to your image manager later.
+    // NOTE: In the old IMP these packed texture handles (-1 <-> 0) were used.
+    // For now we only need them conceptually; we can hook them to your image manager later.
     inline uint32_t packHandle(int h)
     {
         return (h < 0) ? 0u : (static_cast<uint32_t>(h) + 1u);
@@ -100,7 +100,7 @@ namespace
         // Adapt this to actual ImageHandler API
         // e.g. imgHandler->imageInfo(id)->filePath, imgHandler->filePath(id), etc.
         // const ImageInfo*
-        const Image* image = imgHandler->get(id); // or whatever you use
+        const Image* image = imgHandler->get(id);
 
         if (!image)
             return {};
@@ -238,7 +238,7 @@ void fromMTL(Scene* scene, Material& dst, const MtlFields& m, const std::filesys
 
     // Emissive: store color in emissiveColor and drive intensity separately.
     dst.emissiveColor(Ke_lin);
-    dst.emissiveIntensity(1.0f); // you can later pull length(Ke_lin) into intensity if you want
+    dst.emissiveIntensity(1.0f); // Can later pull length(Ke_lin) into intensity if we want
 
     // Alpha mode: simple heuristic – if opacity < 1, use Blend.
     if (opacity < 1.0f)

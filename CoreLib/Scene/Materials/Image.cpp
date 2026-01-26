@@ -47,7 +47,7 @@ namespace
         if (baseTex->classId != ktxTexture2_c)
         {
             // KTX1: no vkFormat field in this libktx build.
-            // You can add a GL-internal-format -> VkFormat mapping later if you need KTX1.
+            // Can add a GL-internal-format -> VkFormat mapping later if you need KTX1.
             outVkFormat = VK_FORMAT_UNDEFINED;
             return true;
         }

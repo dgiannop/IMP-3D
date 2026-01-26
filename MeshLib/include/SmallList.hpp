@@ -8,7 +8,7 @@
 
 namespace un
 {
-    /// Prefer a signed 32-bit size for your use-case; change if you need >2B elements.
+    /// Prefer a signed 32-bit size for our use-case; change if we need >2B elements.
     using sizeType = int32_t;
 
     /**
