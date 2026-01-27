@@ -160,8 +160,6 @@ set(SHADERS
     FullscreenTri.vert
     RtPresent.vert
     RtPresent.frag
-    RtGradient.rgen
-    RtGradient.rmiss
     RtScene.rgen
     RtScene.rmiss
     RtScene.rchit

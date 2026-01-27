@@ -1,3 +1,6 @@
+//============================================================
+// RtPipeline.hpp
+//============================================================
 #pragma once
 
 #include <cstdint>
@@ -8,11 +11,10 @@ struct VulkanContext;
 namespace vkrt
 {
     /**
-     * @brief Minimal RT pipeline wrapper.
+     * @brief Minimal RT pipeline wrapper (scene pipeline only).
      *
      * Creates:
-     *  - VkPipelineLayout (set 0 = RT descriptor set layout,
-     *                      set 1 = material descriptor set layout)
+     *  - VkPipelineLayout (descriptor set layouts provided by caller)
      *  - VkPipeline (raygen + miss + closest hit)
      *
      * Used by SBT build + vkCmdTraceRaysKHR.
@@ -30,10 +32,6 @@ namespace vkrt
         RtPipeline& operator=(RtPipeline&& other) noexcept;
 
         void destroy() noexcept;
-
-        // Gradient test pipeline (still single set = RT only)
-        bool createGradientPipeline(const VulkanContext&  ctx,
-                                    VkDescriptorSetLayout rtSetLayout);
 
         // Scene pipeline (supports multiple descriptor sets)
         bool createScenePipeline(const VulkanContext&         ctx,
@@ -55,7 +53,7 @@ namespace vkrt
             return m_pipeline != VK_NULL_HANDLE && m_layout != VK_NULL_HANDLE;
         }
 
-        // Group counts for this pipeline layout (used by SBT creation).
+        // Group counts for this pipeline (used by SBT creation).
         static constexpr uint32_t kRaygenCount   = 1;
         static constexpr uint32_t kMissCount     = 1;
         static constexpr uint32_t kHitCount      = 1;

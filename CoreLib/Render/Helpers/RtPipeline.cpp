@@ -1,3 +1,6 @@
+//============================================================
+// RtPipeline.cpp
+//============================================================
 #include "RtPipeline.hpp"
 
 #include <filesystem>
@@ -9,6 +12,7 @@
 
 namespace
 {
+    // (Unused right now, but harmless if you want to keep it around)
     static VkPipelineShaderStageCreateInfo makeStage(VkShaderModule        mod,
                                                      VkShaderStageFlagBits stage) noexcept
     {
@@ -78,95 +82,6 @@ namespace vkrt
     }
 
     // ------------------------------------------------------------
-    // Create gradient RT pipeline (single set layout)
-    // ------------------------------------------------------------
-
-    bool RtPipeline::createGradientPipeline(const VulkanContext&  ctx,
-                                            VkDescriptorSetLayout rtSetLayout)
-    {
-        destroy();
-
-        if (!rtReady(ctx) || !ctx.device || !ctx.rtDispatch)
-            return false;
-
-        m_device = ctx.device;
-
-        VkPipelineLayoutCreateInfo pl{};
-        pl.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pl.setLayoutCount = 1;
-        pl.pSetLayouts    = &rtSetLayout;
-
-        if (vkCreatePipelineLayout(ctx.device, &pl, nullptr, &m_layout) != VK_SUCCESS)
-            return false;
-
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
-
-        ShaderStage rgen =
-            vkutil::loadStage(ctx.device, shaderDir, "RtGradient.rgen.spv", VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-
-        ShaderStage rmiss =
-            vkutil::loadStage(ctx.device, shaderDir, "RtGradient.rmiss.spv", VK_SHADER_STAGE_MISS_BIT_KHR);
-
-        if (!rgen.isValid() || !rmiss.isValid())
-        {
-            std::cerr << "RtPipeline: Failed to load RT gradient shaders.\n";
-            destroy();
-            return false;
-        }
-
-        VkPipelineShaderStageCreateInfo stages[2] = {
-            rgen.stageInfo(),
-            rmiss.stageInfo(),
-        };
-
-        VkRayTracingShaderGroupCreateInfoKHR groups[2]{};
-
-        groups[0].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-        groups[0].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        groups[0].generalShader      = 0;
-        groups[0].closestHitShader   = VK_SHADER_UNUSED_KHR;
-        groups[0].anyHitShader       = VK_SHADER_UNUSED_KHR;
-        groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-        groups[1].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-        groups[1].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        groups[1].generalShader      = 1;
-        groups[1].closestHitShader   = VK_SHADER_UNUSED_KHR;
-        groups[1].anyHitShader       = VK_SHADER_UNUSED_KHR;
-        groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-        VkRayTracingPipelineCreateInfoKHR ci{};
-        ci.sType                        = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-        ci.stageCount                   = 2;
-        ci.pStages                      = stages;
-        ci.groupCount                   = 2;
-        ci.pGroups                      = groups;
-        ci.maxPipelineRayRecursionDepth = 1;
-        ci.layout                       = m_layout;
-
-        VkPipeline pipe = VK_NULL_HANDLE;
-        VkResult   res =
-            ctx.rtDispatch->vkCreateRayTracingPipelinesKHR(
-                ctx.device,
-                VK_NULL_HANDLE,
-                VK_NULL_HANDLE,
-                1,
-                &ci,
-                nullptr,
-                &pipe);
-
-        if (res != VK_SUCCESS || pipe == VK_NULL_HANDLE)
-        {
-            std::cerr << "RtPipeline: vkCreateRayTracingPipelinesKHR failed.\n";
-            destroy();
-            return false;
-        }
-
-        m_pipeline = pipe;
-        return true;
-    }
-
-    // ------------------------------------------------------------
     // Create scene RT pipeline (MULTI SET LAYOUT)
     // ------------------------------------------------------------
 
@@ -182,7 +97,7 @@ namespace vkrt
         m_device = ctx.device;
 
         // ------------------------------------------------------------
-        // Pipeline layout (set 0 = RT, set 1 = materials)
+        // Pipeline layout (set layouts provided by caller)
         // ------------------------------------------------------------
         VkPipelineLayoutCreateInfo pl{};
         pl.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
