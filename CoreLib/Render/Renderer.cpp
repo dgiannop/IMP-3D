@@ -120,8 +120,12 @@ bool Renderer::initSwapchain(VkRenderPass renderPass)
     if (!createPipelines(renderPass))
         return false;
 
-    if (m_grid && !m_grid->createPipeline(renderPass, m_pipelineLayout))
-        return false;
+    if (m_grid)
+    {
+        m_grid->destroySwapchainResources();
+        if (!m_grid->createPipelines(renderPass, m_pipelineLayout))
+            return false;
+    }
 
     if (rtReady(m_ctx))
     {
@@ -270,31 +274,27 @@ void Renderer::destroyPipelines() noexcept
     if (!m_ctx.device)
         return;
 
-    VkDevice device = m_ctx.device;
-    vkDeviceWaitIdle(device);
+    // Often this is already handled at a higher level.
+    vkDeviceWaitIdle(m_ctx.device);
 
-    auto destroyPipe = [&](VkPipeline& p) noexcept {
-        if (p)
-        {
-            vkDestroyPipeline(device, p, nullptr);
-            p = VK_NULL_HANDLE;
-        }
+    auto destroyPipe = [](GraphicsPipeline& p) noexcept {
+        p.destroy();
     };
 
-    destroyPipe(m_pipelineSolid);
-    destroyPipe(m_pipelineShaded);
-    destroyPipe(m_pipelineDepthOnly);
-    destroyPipe(m_pipelineWire);
-    destroyPipe(m_pipelineEdgeHidden);
-    destroyPipe(m_pipelineEdgeDepthBias);
-    destroyPipe(m_overlayLinePipeline);
+    destroyPipe(m_solidPipeline);
+    destroyPipe(m_shadedPipeline);
+    destroyPipe(m_depthOnlyPipeline);
+    destroyPipe(m_wirePipeline);
+    destroyPipe(m_wireHiddenPipeline);
+    destroyPipe(m_wireOverlayPipeline);
+    destroyPipe(m_overlayPipeline);
 
-    destroyPipe(m_pipelineSelVert);
-    destroyPipe(m_pipelineSelEdge);
-    destroyPipe(m_pipelineSelPoly);
-    destroyPipe(m_pipelineSelVertHidden);
-    destroyPipe(m_pipelineSelEdgeHidden);
-    destroyPipe(m_pipelineSelPolyHidden);
+    destroyPipe(m_selVertPipeline);
+    destroyPipe(m_selEdgePipeline);
+    destroyPipe(m_selPolyPipeline);
+    destroyPipe(m_selVertHiddenPipeline);
+    destroyPipe(m_selEdgeHiddenPipeline);
+    destroyPipe(m_selPolyHiddenPipeline);
 }
 
 //==================================================================
@@ -332,7 +332,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         // binding 0: MVP (view/proj) for raster
         uboBindings[0].binding = 0;
         uboBindings[0].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        // VS/GS for raster; you can add RT stages later if needed
+        // VS/GS for raster
         uboBindings[0].stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT;
         uboBindings[0].count  = 1;
 
@@ -938,48 +938,14 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         return false;
     }
 
-    const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
-
-    ShaderStage SolidDrawVert = vkutil::loadStage(m_ctx.device, shaderDir, "SolidDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage SolidDrawFrag = vkutil::loadStage(m_ctx.device, shaderDir, "SolidDraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    ShaderStage ShadedDrawVert = vkutil::loadStage(m_ctx.device, shaderDir, "ShadedDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage ShadedDrawFrag = vkutil::loadStage(m_ctx.device, shaderDir, "ShadedDraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    ShaderStage wireVert          = vkutil::loadStage(m_ctx.device, shaderDir, "Wireframe.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage wireFrag          = vkutil::loadStage(m_ctx.device, shaderDir, "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-    ShaderStage wireDepthBiasVert = vkutil::loadStage(m_ctx.device, shaderDir, "WireframeDepthBias.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-
-    ShaderStage overlayVert = vkutil::loadStage(m_ctx.device, shaderDir, "Overlay.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage overlayGeom = vkutil::loadStage(m_ctx.device, shaderDir, "Overlay.geom.spv", VK_SHADER_STAGE_GEOMETRY_BIT);
-    ShaderStage overlayFrag = vkutil::loadStage(m_ctx.device, shaderDir, "Overlay.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    ShaderStage selVert     = vkutil::loadStage(m_ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage selFrag     = vkutil::loadStage(m_ctx.device, shaderDir, "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-    ShaderStage selVertFrag = vkutil::loadStage(m_ctx.device, shaderDir, "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    if (!SolidDrawVert.isValid() || !SolidDrawFrag.isValid() ||
-        !ShadedDrawVert.isValid() || !ShadedDrawFrag.isValid() ||
-        !wireVert.isValid() || !wireFrag.isValid() || !wireDepthBiasVert.isValid() ||
-        !overlayVert.isValid() || !overlayGeom.isValid() || !overlayFrag.isValid() ||
-        !selVert.isValid() || !selFrag.isValid() || !selVertFrag.isValid())
-    {
-        std::cerr << "RendererVK: Failed to load one or more shader modules.\n";
+    if (!m_ctx.device)
         return false;
-    }
 
-    VkPipelineShaderStageCreateInfo SolidDrawStages[2]  = {SolidDrawVert.stageInfo(), SolidDrawFrag.stageInfo()};
-    VkPipelineShaderStageCreateInfo ShadedDrawStages[2] = {ShadedDrawVert.stageInfo(), ShadedDrawFrag.stageInfo()};
-
-    VkPipelineShaderStageCreateInfo wireStages[2]          = {wireVert.stageInfo(), wireFrag.stageInfo()};
-    VkPipelineShaderStageCreateInfo wireDepthBiasStages[2] = {wireDepthBiasVert.stageInfo(), wireFrag.stageInfo()};
-
-    VkPipelineShaderStageCreateInfo overlayStages[3] = {overlayVert.stageInfo(), overlayGeom.stageInfo(), overlayFrag.stageInfo()};
-    VkPipelineShaderStageCreateInfo selStages[2]     = {selVert.stageInfo(), selFrag.stageInfo()};
-    VkPipelineShaderStageCreateInfo selVertStages[2] = {selVert.stageInfo(), selVertFrag.stageInfo()};
-
-    VkVertexInputBindingDescription      solidBindings[4]{};
-    VkVertexInputAttributeDescription    solidAttrs[4]{};
+    // ------------------------------------------------------------
+    // Vertex input descriptions
+    // ------------------------------------------------------------
+    VkVertexInputBindingDescription      solidBindings[4] = {};
+    VkVertexInputAttributeDescription    solidAttrs[4]    = {};
     VkPipelineVertexInputStateCreateInfo viSolid{};
     vkutil::makeSolidVertexInput(viSolid, solidBindings, solidAttrs);
 
@@ -998,17 +964,17 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     overlayAttrs[0].location = 0;
     overlayAttrs[0].binding  = 0;
     overlayAttrs[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
-    overlayAttrs[0].offset   = offsetof(OverlayVertex, pos);
+    overlayAttrs[0].offset   = static_cast<uint32_t>(offsetof(OverlayVertex, pos));
 
     overlayAttrs[1].location = 1;
     overlayAttrs[1].binding  = 0;
     overlayAttrs[1].format   = VK_FORMAT_R32_SFLOAT;
-    overlayAttrs[1].offset   = offsetof(OverlayVertex, thickness);
+    overlayAttrs[1].offset   = static_cast<uint32_t>(offsetof(OverlayVertex, thickness));
 
     overlayAttrs[2].location = 2;
     overlayAttrs[2].binding  = 0;
     overlayAttrs[2].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
-    overlayAttrs[2].offset   = offsetof(OverlayVertex, color);
+    overlayAttrs[2].offset   = static_cast<uint32_t>(offsetof(OverlayVertex, color));
 
     VkPipelineVertexInputStateCreateInfo viOverlay{};
     viOverlay.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1017,63 +983,120 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     viOverlay.vertexAttributeDescriptionCount = 3;
     viOverlay.pVertexAttributeDescriptions    = overlayAttrs;
 
-    vkutil::MeshPipelinePreset solidPreset{
-        .topology            = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .polygonMode         = VK_POLYGON_MODE_FILL,
-        .cullMode            = VK_CULL_MODE_NONE,
-        .frontFace           = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthTest           = true,
-        .depthWrite          = true,
-        .depthCompareOp      = VK_COMPARE_OP_LESS,
-        .enableBlend         = false,
-        .enableDepthBias     = false,
-        .colorWrite          = true,
-        .sampleShadingEnable = false,
-        .minSampleShading    = 1.0f,
+    // ------------------------------------------------------------
+    // Main mesh / wireframe / overlay pipelines via helpers
+    // ------------------------------------------------------------
+
+    // Solid
+    if (!vkutil::createSolidPipeline(m_ctx,
+                                     renderPass,
+                                     m_pipelineLayout,
+                                     m_ctx.sampleCount,
+                                     viSolid,
+                                     m_solidPipeline))
+    {
+        std::cerr << "RendererVK: createSolidPipeline failed.\n";
+        return false;
+    }
+
+    // Shaded
+    if (!vkutil::createShadedPipeline(m_ctx,
+                                      renderPass,
+                                      m_pipelineLayout,
+                                      m_ctx.sampleCount,
+                                      viSolid,
+                                      m_shadedPipeline))
+    {
+        std::cerr << "RendererVK: createShadedPipeline failed.\n";
+        return false;
+    }
+
+    // Depth-only (triangles, no color)
+    if (!vkutil::createDepthOnlyPipeline(m_ctx,
+                                         renderPass,
+                                         m_pipelineLayout,
+                                         m_ctx.sampleCount,
+                                         viSolid,
+                                         m_depthOnlyPipeline))
+    {
+        std::cerr << "RendererVK: createDepthOnlyPipeline failed.\n";
+        return false;
+    }
+
+    // Wireframe visible
+    if (!vkutil::createWireframePipeline(m_ctx,
+                                         renderPass,
+                                         m_pipelineLayout,
+                                         m_ctx.sampleCount,
+                                         viLines,
+                                         m_wirePipeline))
+    {
+        std::cerr << "RendererVK: createWireframePipeline failed.\n";
+        return false;
+    }
+
+    // Wireframe hidden (depth GREATER)
+    if (!vkutil::createWireframeHiddenPipeline(m_ctx,
+                                               renderPass,
+                                               m_pipelineLayout,
+                                               m_ctx.sampleCount,
+                                               viLines,
+                                               m_wireHiddenPipeline))
+    {
+        std::cerr << "RendererVK: createWireframeHiddenPipeline failed.\n";
+        return false;
+    }
+
+    // Wire overlay in SOLID mode (depth bias)
+    if (!vkutil::createWireframeDepthBiasPipeline(m_ctx,
+                                                  renderPass,
+                                                  m_pipelineLayout,
+                                                  m_ctx.sampleCount,
+                                                  viLines,
+                                                  m_wireOverlayPipeline))
+    {
+        std::cerr << "RendererVK: createWireframeDepthBiasPipeline failed.\n";
+        return false;
+    }
+
+    // Overlay (gizmos)
+    if (!vkutil::createOverlayPipeline(m_ctx,
+                                       renderPass,
+                                       m_pipelineLayout,
+                                       m_ctx.sampleCount,
+                                       viOverlay,
+                                       m_overlayPipeline))
+    {
+        std::cerr << "RendererVK: createOverlayPipeline failed.\n";
+        return false;
+    }
+
+    // ------------------------------------------------------------
+    // Selection pipelines (keep existing MeshPipelinePreset logic)
+    // ------------------------------------------------------------
+    const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+
+    ShaderStage selVert =
+        vkutil::loadStage(m_ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+    ShaderStage selFrag =
+        vkutil::loadStage(m_ctx.device, shaderDir, "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    ShaderStage selVertFrag =
+        vkutil::loadStage(m_ctx.device, shaderDir, "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    if (!selVert.isValid() || !selFrag.isValid() || !selVertFrag.isValid())
+    {
+        std::cerr << "RendererVK: Failed to load selection shaders.\n";
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo selStages[2] = {
+        selVert.stageInfo(),
+        selFrag.stageInfo(),
     };
 
-    vkutil::MeshPipelinePreset wirePreset{
-        .topology              = VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
-        .polygonMode           = VK_POLYGON_MODE_FILL,
-        .cullMode              = VK_CULL_MODE_NONE,
-        .frontFace             = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthTest             = true,
-        .depthWrite            = false,
-        .depthCompareOp        = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .enableBlend           = true,
-        .enableDepthBias       = false,
-        .colorWrite            = true,
-        .sampleShadingEnable   = false,
-        .minSampleShading      = 1.0f,
-        .alphaToCoverageEnable = false,
-    };
-
-    vkutil::MeshPipelinePreset edgeOverlayPreset = wirePreset;
-
-    vkutil::MeshPipelinePreset depthOnlyPreset = solidPreset;
-    depthOnlyPreset.enableBlend                = false;
-    depthOnlyPreset.depthWrite                 = true;
-    depthOnlyPreset.depthCompareOp             = VK_COMPARE_OP_LESS_OR_EQUAL;
-    depthOnlyPreset.colorWrite                 = false;
-
-    vkutil::MeshPipelinePreset hiddenEdgePreset = wirePreset;
-    hiddenEdgePreset.depthCompareOp             = VK_COMPARE_OP_GREATER;
-    hiddenEdgePreset.depthWrite                 = false;
-
-    vkutil::MeshPipelinePreset overlayPreset{
-        .topology              = VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
-        .polygonMode           = VK_POLYGON_MODE_FILL,
-        .cullMode              = VK_CULL_MODE_NONE,
-        .frontFace             = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthTest             = false,
-        .depthWrite            = false,
-        .depthCompareOp        = VK_COMPARE_OP_LESS,
-        .enableBlend           = true,
-        .enableDepthBias       = false,
-        .colorWrite            = true,
-        .sampleShadingEnable   = false,
-        .minSampleShading      = 1.0f,
-        .alphaToCoverageEnable = false,
+    VkPipelineShaderStageCreateInfo selVertStages[2] = {
+        selVert.stageInfo(),
+        selVertFrag.stageInfo(),
     };
 
     vkutil::MeshPipelinePreset selVertPreset{
@@ -1130,96 +1153,109 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     vkutil::MeshPipelinePreset selPolyHiddenPreset = selPolyPreset;
     selPolyHiddenPreset.depthCompareOp             = VK_COMPARE_OP_GREATER;
 
-    m_pipelineSolid = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, SolidDrawStages, 2, &viSolid, solidPreset);
-    if (!m_pipelineSolid)
+    auto wrapSelPipeline = [&](GraphicsPipeline& dst, VkPipeline src) -> bool {
+        if (!src)
+            return false;
+        dst.destroy();
+        dst.m_device   = m_ctx.device;
+        dst.m_pipeline = src;
+        return true;
+    };
+
+    // Visible verts
     {
-        std::cerr << "RendererVK: createMeshPipeline(solid) failed.\n";
-        return false;
+        VkPipeline p = createMeshPipeline(m_ctx,
+                                          renderPass,
+                                          m_pipelineLayout,
+                                          selVertStages,
+                                          2,
+                                          &viLines,
+                                          selVertPreset);
+        if (!wrapSelPipeline(m_selVertPipeline, p))
+        {
+            std::cerr << "RendererVK: createMeshPipeline(selection verts) failed.\n";
+            return false;
+        }
     }
 
-    m_pipelineShaded = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, ShadedDrawStages, 2, &viSolid, solidPreset);
-    if (!m_pipelineShaded)
+    // Visible edges
     {
-        std::cerr << "RendererVK: createMeshPipeline(shaded) failed.\n";
-        return false;
+        VkPipeline p = createMeshPipeline(m_ctx,
+                                          renderPass,
+                                          m_pipelineLayout,
+                                          selStages,
+                                          2,
+                                          &viLines,
+                                          selEdgePreset);
+        if (!wrapSelPipeline(m_selEdgePipeline, p))
+        {
+            std::cerr << "RendererVK: createMeshPipeline(selection edges) failed.\n";
+            return false;
+        }
     }
 
-    VkPipelineShaderStageCreateInfo depthStages[1] = {SolidDrawVert.stageInfo()};
-    m_pipelineDepthOnly                            = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, depthStages, 1, &viSolid, depthOnlyPreset);
-    if (!m_pipelineDepthOnly)
+    // Visible polys
     {
-        std::cerr << "RendererVK: createMeshPipeline(depthOnly) failed.\n";
-        return false;
+        VkPipeline p = createMeshPipeline(m_ctx,
+                                          renderPass,
+                                          m_pipelineLayout,
+                                          selStages,
+                                          2,
+                                          &viLines,
+                                          selPolyPreset);
+        if (!wrapSelPipeline(m_selPolyPipeline, p))
+        {
+            std::cerr << "RendererVK: createMeshPipeline(selection polys) failed.\n";
+            return false;
+        }
     }
 
-    m_pipelineWire = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, wireStages, 2, &viLines, wirePreset);
-    if (!m_pipelineWire)
+    // Hidden verts
     {
-        std::cerr << "RendererVK: createMeshPipeline(wire) failed.\n";
-        return false;
+        VkPipeline p = createMeshPipeline(m_ctx,
+                                          renderPass,
+                                          m_pipelineLayout,
+                                          selVertStages,
+                                          2,
+                                          &viLines,
+                                          selVertHiddenPreset);
+        if (!wrapSelPipeline(m_selVertHiddenPipeline, p))
+        {
+            std::cerr << "RendererVK: createMeshPipeline(selection verts hidden) failed.\n";
+            return false;
+        }
     }
 
-    m_pipelineEdgeHidden = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, wireStages, 2, &viLines, hiddenEdgePreset);
-    if (!m_pipelineEdgeHidden)
+    // Hidden edges
     {
-        std::cerr << "RendererVK: createMeshPipeline(edgeHidden) failed.\n";
-        return false;
+        VkPipeline p = createMeshPipeline(m_ctx,
+                                          renderPass,
+                                          m_pipelineLayout,
+                                          selStages,
+                                          2,
+                                          &viLines,
+                                          selEdgeHiddenPreset);
+        if (!wrapSelPipeline(m_selEdgeHiddenPipeline, p))
+        {
+            std::cerr << "RendererVK: createMeshPipeline(selection edges hidden) failed.\n";
+            return false;
+        }
     }
 
-    m_pipelineEdgeDepthBias = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, wireDepthBiasStages, 2, &viLines, edgeOverlayPreset);
-    if (!m_pipelineEdgeDepthBias)
+    // Hidden polys
     {
-        std::cerr << "RendererVK: createMeshPipeline(edgeOverlay) failed.\n";
-        return false;
-    }
-
-    m_overlayLinePipeline = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, overlayStages, 3, &viOverlay, overlayPreset);
-    if (!m_overlayLinePipeline)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(overlay) failed.\n";
-        return false;
-    }
-
-    m_pipelineSelVert = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selVertStages, 2, &viLines, selVertPreset);
-    if (!m_pipelineSelVert)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(selection verts) failed.\n";
-        return false;
-    }
-
-    m_pipelineSelEdge = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selEdgePreset);
-    if (!m_pipelineSelEdge)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(selection edges) failed.\n";
-        return false;
-    }
-
-    m_pipelineSelPoly = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selPolyPreset);
-    if (!m_pipelineSelPoly)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(selection polys) failed.\n";
-        return false;
-    }
-
-    m_pipelineSelVertHidden = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selVertStages, 2, &viLines, selVertHiddenPreset);
-    if (!m_pipelineSelVertHidden)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(selection verts hidden) failed.\n";
-        return false;
-    }
-
-    m_pipelineSelEdgeHidden = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selEdgeHiddenPreset);
-    if (!m_pipelineSelEdgeHidden)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(selection edges hidden) failed.\n";
-        return false;
-    }
-
-    m_pipelineSelPolyHidden = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selPolyHiddenPreset);
-    if (!m_pipelineSelPolyHidden)
-    {
-        std::cerr << "RendererVK: createMeshPipeline(selection polys hidden) failed.\n";
-        return false;
+        VkPipeline p = createMeshPipeline(m_ctx,
+                                          renderPass,
+                                          m_pipelineLayout,
+                                          selStages,
+                                          2,
+                                          &viLines,
+                                          selPolyHiddenPreset);
+        if (!wrapSelPipeline(m_selPolyHiddenPipeline, p))
+        {
+            std::cerr << "RendererVK: createMeshPipeline(selection polys hidden) failed.\n";
+            return false;
+        }
     }
 
     return true;
@@ -1462,7 +1498,7 @@ bool Renderer::ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDev
 }
 
 //==================================================================
-// RT AS teardown (UNCHANGED from your current file)
+// RT AS teardown
 //==================================================================
 
 void Renderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept
@@ -1710,7 +1746,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         }
 
         // ------------------------------------------------------------
-        // Lights (THIS WAS MISSING)
+        // Lights
         // ------------------------------------------------------------
         {
             GpuLightsUBO lights{};
@@ -1763,7 +1799,9 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         // Present RT output
         vkutil::setViewportAndScissor(cmd, w, h);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresent.pipeline());
+        vkCmdBindPipeline(cmd,
+                          VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          m_rtPresent.pipeline());
 
         VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
         vkCmdBindDescriptorSets(cmd,
@@ -1808,7 +1846,10 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     {
         const bool isShaded = (vp->drawMode() == DrawMode::SHADED);
 
-        VkPipeline triPipe = isShaded ? m_pipelineShaded : m_pipelineSolid;
+        // Choose solid or shaded pipeline
+        VkPipeline triPipe = isShaded
+                                 ? m_shadedPipeline.handle()
+                                 : m_solidPipeline.handle();
 
         if (scene->materialHandler() &&
             m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
@@ -1834,7 +1875,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                     nullptr);
         }
 
-        if (triPipe)
+        if (triPipe != VK_NULL_HANDLE)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, triPipe);
 
@@ -1863,9 +1904,11 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         }
 
         constexpr bool drawEdgesInSolid = true;
-        if (!isShaded && drawEdgesInSolid && m_pipelineEdgeDepthBias)
+        if (!isShaded && drawEdgesInSolid && m_wireOverlayPipeline.valid())
         {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineEdgeDepthBias);
+            vkCmdBindPipeline(cmd,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              m_wireOverlayPipeline.handle());
 
             forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
@@ -1898,9 +1941,11 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     else
     {
         // 1) depth-only triangles
-        if (m_pipelineDepthOnly)
+        if (m_depthOnlyPipeline.valid())
         {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineDepthOnly);
+            vkCmdBindPipeline(cmd,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              m_depthOnlyPipeline.handle());
 
             forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 PushConstants pc{};
@@ -1928,11 +1973,13 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
             });
         }
 
-        auto drawEdges = [&](VkPipeline pipeline, const glm::vec4& color) {
-            if (!pipeline)
+        auto drawEdges = [&](const GraphicsPipeline& pipeline, const glm::vec4& color) {
+            if (!pipeline.valid())
                 return;
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            vkCmdBindPipeline(cmd,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline.handle());
 
             forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
@@ -1959,8 +2006,8 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
             });
         };
 
-        drawEdges(m_pipelineEdgeHidden, wireHiddenColor);
-        drawEdges(m_pipelineWire, wireVisibleColor);
+        drawEdges(m_wireHiddenPipeline, wireHiddenColor);
+        drawEdges(m_wirePipeline, wireVisibleColor);
     }
 
     drawSelection(cmd, vp, scene);
@@ -2497,7 +2544,7 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
 
     RtTlasFrame& t = m_rtTlasFrames[fc.frameIndex];
 
-    // Use your change counter as the TLAS rebuild key.
+    // Use change counter as the TLAS rebuild key.
     uint64_t key = m_rtTlasChangeCounter ? m_rtTlasChangeCounter->value() : 1ull;
 
     // ------------------------------------------------------------
@@ -2774,13 +2821,16 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
     if (!m_overlayVertexBuffer.valid())
         return;
 
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(vertexCount * sizeof(OverlayVertex));
+    const VkDeviceSize byteSize =
+        static_cast<VkDeviceSize>(vertexCount * sizeof(OverlayVertex));
     m_overlayVertexBuffer.upload(vertices.data(), byteSize);
 
-    if (!m_overlayLinePipeline)
+    if (!m_overlayPipeline.valid())
         return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayLinePipeline);
+    vkCmdBindPipeline(cmd,
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      m_overlayPipeline.handle());
 
     PushConstants pc{};
     pc.model         = glm::mat4(1.0f);
@@ -2842,8 +2892,12 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     if (!scene || !vp)
         return;
 
-    if (!m_pipelineSelVert && !m_pipelineSelEdge && !m_pipelineSelPoly)
+    if (!m_selVertPipeline.valid() &&
+        !m_selEdgePipeline.valid() &&
+        !m_selPolyPipeline.valid())
+    {
         return;
+    }
 
     VkDeviceSize zeroOffset = 0;
 
@@ -2853,9 +2907,9 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     const bool showOccluded = (vp->drawMode() == DrawMode::WIREFRAME);
 
     auto pushPC = [&](SceneMesh& sm, const glm::vec4& color) {
-        PushConstants pc = {};
-        pc.model         = sm.model();
-        pc.color         = color;
+        PushConstants pc{};
+        pc.model = sm.model();
+        pc.color = color;
 
         vkCmdPushConstants(cmd,
                            m_pipelineLayout,
@@ -2868,7 +2922,7 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     auto drawHidden = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
         if (!showOccluded)
             return;
-        if (!pipeline || indexCount == 0)
+        if (pipeline == VK_NULL_HANDLE || indexCount == 0)
             return;
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -2878,7 +2932,7 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     };
 
     auto drawVisible = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
-        if (!pipeline || indexCount == 0)
+        if (pipeline == VK_NULL_HANDLE || indexCount == 0)
             return;
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -2888,12 +2942,12 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     };
 
     const render::geom::SelPipelines pipes{
-        .vertVis = m_pipelineSelVert,
-        .vertHid = m_pipelineSelVertHidden,
-        .edgeVis = m_pipelineSelEdge,
-        .edgeHid = m_pipelineSelEdgeHidden,
-        .polyVis = m_pipelineSelPoly,
-        .polyHid = m_pipelineSelPolyHidden,
+        .vertVis = m_selVertPipeline.handle(),
+        .vertHid = m_selVertHiddenPipeline.handle(),
+        .edgeVis = m_selEdgePipeline.handle(),
+        .edgeHid = m_selEdgeHiddenPipeline.handle(),
+        .polyVis = m_selPolyPipeline.handle(),
+        .polyHid = m_selPolyHiddenPipeline.handle(),
     };
 
     const SelectionMode mode = scene->selectionMode();
@@ -2934,17 +2988,21 @@ void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     glm::mat4 gridModel = render::geom::gridModelFor(vp->viewMode());
 
     PushConstants pc{};
-    pc.model = gridModel;
-    pc.color = glm::vec4(0, 0, 0, 0);
+    pc.model         = gridModel;
+    pc.color         = glm::vec4(0, 0, 0, 0);
+    pc.overlayParams = glm::vec4(0.0f); // unused for grid
 
     vkCmdPushConstants(cmd,
                        m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT |
+                           VK_SHADER_STAGE_GEOMETRY_BIT |
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
                        0,
                        sizeof(PushConstants),
                        &pc);
 
-    m_grid->render(cmd);
+    const bool xrayGrid = (vp->drawMode() == DrawMode::WIREFRAME);
+    m_grid->render(cmd, xrayGrid);
 }
 
 template<typename Fn>

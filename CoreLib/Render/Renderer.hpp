@@ -20,6 +20,7 @@
 #include "DescriptorSetLayout.hpp"
 #include "GpuBuffer.hpp"
 #include "GpuLights.hpp"
+#include "GraphicsPipelines.hpp"
 #include "GridRendererVK.hpp"
 #include "Material.hpp"
 #include "OverlayHandler.hpp"
@@ -284,22 +285,22 @@ private:
 
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 
-    VkPipeline m_pipelineSolid      = VK_NULL_HANDLE;
-    VkPipeline m_pipelineShaded     = VK_NULL_HANDLE;
-    VkPipeline m_pipelineDepthOnly  = VK_NULL_HANDLE;
-    VkPipeline m_pipelineWire       = VK_NULL_HANDLE;
-    VkPipeline m_pipelineEdgeHidden = VK_NULL_HANDLE;
+    // New graphics pipeline wrappers (swapchain-level)
+    GraphicsPipeline m_solidPipeline{};       // SolidDraw (triangles, unlit)
+    GraphicsPipeline m_shadedPipeline{};      // ShadedDraw (triangles, lit)
+    GraphicsPipeline m_depthOnlyPipeline{};   // depth prepass (triangles, no color)
+    GraphicsPipeline m_wirePipeline{};        // visible edges (wireframe)
+    GraphicsPipeline m_wireHiddenPipeline{};  // hidden edges (wireframe, depth GREATER)
+    GraphicsPipeline m_wireOverlayPipeline{}; // solid-mode wire overlay with depth bias
 
-    VkPipeline m_pipelineEdgeDepthBias = VK_NULL_HANDLE;
+    GraphicsPipeline m_overlayPipeline{}; // gizmo / overlay lines
 
-    VkPipeline m_pipelineSelVert       = VK_NULL_HANDLE;
-    VkPipeline m_pipelineSelEdge       = VK_NULL_HANDLE;
-    VkPipeline m_pipelineSelPoly       = VK_NULL_HANDLE;
-    VkPipeline m_pipelineSelVertHidden = VK_NULL_HANDLE;
-    VkPipeline m_pipelineSelEdgeHidden = VK_NULL_HANDLE;
-    VkPipeline m_pipelineSelPolyHidden = VK_NULL_HANDLE;
-
-    VkPipeline m_overlayLinePipeline = VK_NULL_HANDLE;
+    GraphicsPipeline m_selVertPipeline{};       // selection verts visible
+    GraphicsPipeline m_selEdgePipeline{};       // selection edges visible
+    GraphicsPipeline m_selPolyPipeline{};       // selection polys visible
+    GraphicsPipeline m_selVertHiddenPipeline{}; // selection verts hidden
+    GraphicsPipeline m_selEdgeHiddenPipeline{}; // selection edges hidden
+    GraphicsPipeline m_selPolyHiddenPipeline{}; // selection polys hidden
 
     std::unique_ptr<GridRendererVK> m_grid;
 

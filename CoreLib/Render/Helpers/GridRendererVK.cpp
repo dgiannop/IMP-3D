@@ -16,9 +16,7 @@
 // ---------------------------------------------------------
 GridRendererVK::GridRendererVK(VulkanContext* ctx) : m_ctx(ctx)
 {
-    // IMPORTANT:
-    // Do NOT create GPU buffers here if you want clean lifetime control.
-    // createDeviceResources() will be called by the Renderer after device init.
+    // Device resources created explicitly via createDeviceResources().
 }
 
 GridRendererVK::~GridRendererVK() noexcept
@@ -58,10 +56,20 @@ void GridRendererVK::destroySwapchainResources() noexcept
     if (!m_ctx)
         return;
 
-    if (m_pipeline != VK_NULL_HANDLE)
+    VkDevice device = m_ctx->device;
+    if (!device)
+        return;
+
+    if (m_pipelineDepthTested != VK_NULL_HANDLE)
     {
-        vkDestroyPipeline(m_ctx->device, m_pipeline, nullptr);
-        m_pipeline = VK_NULL_HANDLE;
+        vkDestroyPipeline(device, m_pipelineDepthTested, nullptr);
+        m_pipelineDepthTested = VK_NULL_HANDLE;
+    }
+
+    if (m_pipelineXray != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device, m_pipelineXray, nullptr);
+        m_pipelineXray = VK_NULL_HANDLE;
     }
 }
 
@@ -91,8 +99,6 @@ void GridRendererVK::createGridData(float halfExtent, float spacing)
     };
 
     auto isMajor = [&](float v) noexcept -> bool {
-        // "Major" lines at multiples of majorStep.
-        // Using fmod on abs() keeps it symmetric around 0.
         const float m = std::fmod(std::abs(v), majorStep);
         return m < eps || std::abs(m - majorStep) < eps;
     };
@@ -150,15 +156,15 @@ void GridRendererVK::createGridData(float halfExtent, float spacing)
 // ---------------------------------------------------------
 // Pipeline creation (swapchain-dependent)
 // ---------------------------------------------------------
-bool GridRendererVK::createPipeline(VkRenderPass     renderPass,
-                                    VkPipelineLayout sharedLayout)
+bool GridRendererVK::createPipelines(VkRenderPass     renderPass,
+                                     VkPipelineLayout sharedLayout)
 {
-    if (!m_ctx)
+    if (!m_ctx || !m_ctx->device || renderPass == VK_NULL_HANDLE || sharedLayout == VK_NULL_HANDLE)
         return false;
 
     VkDevice device = m_ctx->device;
 
-    // If we already have a pipeline, destroy it first (swapchain resource)
+    // If we already have pipelines, destroy them first (swapchain resource)
     destroySwapchainResources();
 
     const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
@@ -188,9 +194,6 @@ bool GridRendererVK::createPipeline(VkRenderPass     renderPass,
 
     // -----------------------------------------------------
     // Vertex input: interleaved pos + color
-    // binding 0:
-    //   location 0 -> vec3 position
-    //   location 1 -> vec4 color
     // -----------------------------------------------------
     VkVertexInputBindingDescription binding{};
     binding.binding   = 0;
@@ -245,14 +248,24 @@ bool GridRendererVK::createPipeline(VkRenderPass     renderPass,
     ms.rasterizationSamples = m_ctx->sampleCount;
     ms.sampleShadingEnable  = VK_FALSE;
 
-    // Depth/stencil: test on, no depth writes
-    VkPipelineDepthStencilStateCreateInfo ds{};
-    ds.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    ds.depthTestEnable       = VK_TRUE;
-    ds.depthWriteEnable      = VK_FALSE;
-    ds.depthCompareOp        = VK_COMPARE_OP_LESS_OR_EQUAL;
-    ds.depthBoundsTestEnable = VK_FALSE;
-    ds.stencilTestEnable     = VK_FALSE;
+    // Depth/stencil variants:
+    //  - depth-tested grid (solid/shaded)
+    //  - xray (no depth test, no write)
+    VkPipelineDepthStencilStateCreateInfo dsDepth{};
+    dsDepth.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    dsDepth.depthTestEnable       = VK_TRUE;
+    dsDepth.depthWriteEnable      = VK_FALSE;
+    dsDepth.depthCompareOp        = VK_COMPARE_OP_LESS_OR_EQUAL;
+    dsDepth.depthBoundsTestEnable = VK_FALSE;
+    dsDepth.stencilTestEnable     = VK_FALSE;
+
+    VkPipelineDepthStencilStateCreateInfo dsXray{};
+    dsXray.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    dsXray.depthTestEnable       = VK_FALSE;
+    dsXray.depthWriteEnable      = VK_FALSE;
+    dsXray.depthCompareOp        = VK_COMPARE_OP_LESS_OR_EQUAL;
+    dsXray.depthBoundsTestEnable = VK_FALSE;
+    dsXray.stencilTestEnable     = VK_FALSE;
 
     // Color blend: alpha blending
     VkPipelineColorBlendAttachmentState att{};
@@ -296,21 +309,37 @@ bool GridRendererVK::createPipeline(VkRenderPass     renderPass,
     info.pViewportState      = &vp;
     info.pRasterizationState = &rs;
     info.pMultisampleState   = &ms;
-    info.pDepthStencilState  = &ds;
     info.pColorBlendState    = &cb;
     info.pDynamicState       = &dyn;
     info.layout              = sharedLayout;
     info.renderPass          = renderPass;
     info.subpass             = 0;
 
+    // Create depth-tested pipeline
+    info.pDepthStencilState = &dsDepth;
     if (vkCreateGraphicsPipelines(device,
                                   VK_NULL_HANDLE,
                                   1,
                                   &info,
                                   nullptr,
-                                  &m_pipeline) != VK_SUCCESS)
+                                  &m_pipelineDepthTested) != VK_SUCCESS)
     {
-        std::cerr << "GridRendererVK: Failed to create graphics pipeline.\n";
+        std::cerr << "GridRendererVK: Failed to create depth-tested grid pipeline.\n";
+        destroySwapchainResources();
+        return false;
+    }
+
+    // Create xray (no depth) pipeline
+    info.pDepthStencilState = &dsXray;
+    if (vkCreateGraphicsPipelines(device,
+                                  VK_NULL_HANDLE,
+                                  1,
+                                  &info,
+                                  nullptr,
+                                  &m_pipelineXray) != VK_SUCCESS)
+    {
+        std::cerr << "GridRendererVK: Failed to create xray grid pipeline.\n";
+        destroySwapchainResources();
         return false;
     }
 
@@ -320,18 +349,18 @@ bool GridRendererVK::createPipeline(VkRenderPass     renderPass,
 // ---------------------------------------------------------
 // Render
 // ---------------------------------------------------------
-void GridRendererVK::render(VkCommandBuffer cmd)
+void GridRendererVK::render(VkCommandBuffer cmd, bool xray)
 {
-    if (m_pipeline == VK_NULL_HANDLE)
-        return;
-
-    // If vertex buffer was never created (or got destroyed), don't draw.
     if (m_vertexCount == 0 || !m_vertexBuffer.valid())
         return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+    VkPipeline pipe = xray ? m_pipelineXray : m_pipelineDepthTested;
+    if (pipe == VK_NULL_HANDLE)
+        return;
 
-    // Depth bias so the grid is stable against the ground plane.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+
+    // Slight depth bias for stability against ground plane (still harmless in xray mode)
     vkCmdSetDepthBias(cmd, 1.0f, 0.0f, 1.0f);
 
     VkBuffer     vb   = m_vertexBuffer.buffer();
