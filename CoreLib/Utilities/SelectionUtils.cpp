@@ -58,6 +58,38 @@ namespace sel
 
         const SelectionMode mode = scene->selectionMode();
 
+        // ------------------------------------------------------------
+        // 1) Scene-wide: does ANY active mesh have a selection?
+        // ------------------------------------------------------------
+        bool anySelected = false;
+
+        for (SysMesh* mesh : scene->activeMeshes())
+        {
+            if (!mesh)
+                continue;
+
+            switch (mode)
+            {
+                case SelectionMode::VERTS:
+                    anySelected = !mesh->selected_verts().empty();
+                    break;
+
+                case SelectionMode::EDGES:
+                    anySelected = !mesh->selected_edges().empty();
+                    break;
+
+                case SelectionMode::POLYS:
+                    anySelected = !mesh->selected_polys().empty();
+                    break;
+            }
+
+            if (anySelected)
+                break;
+        }
+
+        // ------------------------------------------------------------
+        // 2) Build per-mesh vert lists (selected-only if anySelected)
+        // ------------------------------------------------------------
         for (SysMesh* mesh : scene->activeMeshes())
         {
             if (!mesh)
@@ -65,7 +97,6 @@ namespace sel
 
             std::vector<int32_t> verts = {};
             std::vector<uint8_t> mark  = {};
-
             mark.resize(mesh->vert_buffer_size(), 0);
 
             // ------------------------------------------------------------
@@ -74,16 +105,27 @@ namespace sel
             if (mode == SelectionMode::VERTS)
             {
                 const std::vector<int32_t>& selv = mesh->selected_verts();
-                const std::vector<int32_t>& src  = (!selv.empty()) ? selv : mesh->all_verts();
 
-                verts.reserve(src.size());
-
-                for (int32_t vi : src)
+                if (anySelected)
                 {
-                    push_unique_vert(verts, mark, vi);
+                    if (selv.empty())
+                        continue;
+
+                    verts.reserve(selv.size());
+                    for (int32_t vi : selv)
+                        push_unique_vert(verts, mark, vi);
+                }
+                else
+                {
+                    const std::vector<int32_t>& allv = mesh->all_verts();
+                    verts.reserve(allv.size());
+                    for (int32_t vi : allv)
+                        push_unique_vert(verts, mark, vi);
                 }
 
-                result[mesh] = std::move(verts);
+                if (!verts.empty())
+                    result[mesh] = std::move(verts);
+
                 continue;
             }
 
@@ -93,19 +135,33 @@ namespace sel
             if (mode == SelectionMode::EDGES)
             {
                 const std::vector<IndexPair>& sele = mesh->selected_edges();
-                const std::vector<IndexPair>  alle = mesh->all_edges(); // returns by value
 
-                const std::vector<IndexPair>& src = (!sele.empty()) ? sele : alle;
-
-                verts.reserve(src.size() * 2);
-
-                for (const IndexPair& e : src)
+                if (anySelected)
                 {
-                    push_unique_vert(verts, mark, e.first);
-                    push_unique_vert(verts, mark, e.second);
+                    if (sele.empty())
+                        continue;
+
+                    verts.reserve(sele.size() * 2);
+                    for (const IndexPair& e : sele)
+                    {
+                        push_unique_vert(verts, mark, e.first);
+                        push_unique_vert(verts, mark, e.second);
+                    }
+                }
+                else
+                {
+                    const std::vector<IndexPair> alle = mesh->all_edges(); // by value
+                    verts.reserve(alle.size() * 2);
+                    for (const IndexPair& e : alle)
+                    {
+                        push_unique_vert(verts, mark, e.first);
+                        push_unique_vert(verts, mark, e.second);
+                    }
                 }
 
-                result[mesh] = std::move(verts);
+                if (!verts.empty())
+                    result[mesh] = std::move(verts);
+
                 continue;
             }
 
@@ -115,24 +171,43 @@ namespace sel
             if (mode == SelectionMode::POLYS)
             {
                 const std::vector<int32_t>& selp = mesh->selected_polys();
-                const std::vector<int32_t>& src  = (!selp.empty()) ? selp : mesh->all_polys();
 
-                // Reserve a decent guess: quads
-                verts.reserve(src.size() * 4);
-
-                for (int32_t pi : src)
+                if (anySelected)
                 {
-                    if (!mesh->poly_valid(pi))
+                    if (selp.empty())
                         continue;
 
-                    const SysPolyVerts& pv = mesh->poly_verts(pi);
-                    for (int32_t vi : pv)
+                    verts.reserve(selp.size() * 4);
+
+                    for (int32_t pi : selp)
                     {
-                        push_unique_vert(verts, mark, vi);
+                        if (!mesh->poly_valid(pi))
+                            continue;
+
+                        const SysPolyVerts& pv = mesh->poly_verts(pi);
+                        for (int32_t vi : pv)
+                            push_unique_vert(verts, mark, vi);
+                    }
+                }
+                else
+                {
+                    const std::vector<int32_t>& allp = mesh->all_polys();
+                    verts.reserve(allp.size() * 4);
+
+                    for (int32_t pi : allp)
+                    {
+                        if (!mesh->poly_valid(pi))
+                            continue;
+
+                        const SysPolyVerts& pv = mesh->poly_verts(pi);
+                        for (int32_t vi : pv)
+                            push_unique_vert(verts, mark, vi);
                     }
                 }
 
-                result[mesh] = std::move(verts);
+                if (!verts.empty())
+                    result[mesh] = std::move(verts);
+
                 continue;
             }
         }

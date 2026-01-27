@@ -581,6 +581,19 @@ void MainWindow::handleAction()
                 static_cast<MenuStackedWidget*>(ui->stackedWidget)->setToolChecked("MoveTool", true);
             }
         }
+        else if (name == "actionDuplicateToObject")
+        {
+            if (m_core->runCommand("DuplicatePolysToObject"))
+            {
+                m_core->selectionMode(SelectionMode::POLYS);
+                m_core->setActiveTool("SelectTool");
+                ui->btnSelPolys->setChecked(true);
+
+                m_core->setActiveTool("MoveTool");
+                static_cast<MenuStackedWidget*>(ui->stackedWidget)->setToolChecked("MoveTool", true);
+            }
+        }
+
         else if (name == "actionAssignMaterial")
         {
             m_subWindowManager->showSubWindow("ASSIGN_MAT_DIALOG");

@@ -1078,6 +1078,7 @@ QPushButton:checked {
     <addaction name="separator"/>
     <addaction name="actionDelete"/>
     <addaction name="actionDuplicate"/>
+    <addaction name="actionDuplicateToObject"/>
     <addaction name="actionAssignMaterial"/>
    </widget>
    <widget class="QMenu" name="menuSelection">
@@ -1354,6 +1355,14 @@ QPushButton:checked {
   <action name="actionCreatePoly">
    <property name="text">
     <string>Create Polygon</string>
+   </property>
+  </action>
+  <action name="actionDuplicateToObject">
+   <property name="text">
+    <string>Duplicate to Object</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+D</string>
    </property>
   </action>
  </widget>

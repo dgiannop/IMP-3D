@@ -9,6 +9,7 @@
 #include "CmdDissolveEdge.hpp"
 #include "CmdDivide.hpp"
 #include "CmdDuplicatePolys.hpp"
+#include "CmdDuplicatePolysToObject.hpp"
 #include "CmdFitView.hpp"
 #include "CmdFlattenNormals.hpp"
 #include "CmdFlipNormals.hpp"
@@ -79,6 +80,7 @@ namespace config
         factory.registerItem("FitToView", factory.createItemType<CmdFitView>);
         factory.registerItem("CreatePoly", factory.createItemType<CmdCreatePoly>);
         factory.registerItem("SelectConnected", factory.createItemType<CmdSelectConnected>);
+        factory.registerItem("DuplicatePolysToObject", factory.createItemType<CmdDuplicatePolysToObject>);
     }
 
     void registerSceneFormats(ItemFactory<SceneFormat>& factory)
