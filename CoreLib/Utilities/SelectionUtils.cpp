@@ -224,16 +224,38 @@ namespace sel
         if (scene->selectionMode() != SelectionMode::EDGES)
             return result;
 
+        // Scene-wide: any selection?
+        bool anySelected = false;
+        for (SysMesh* mesh : scene->activeMeshes())
+        {
+            if (!mesh)
+                continue;
+
+            if (!mesh->selected_edges().empty())
+            {
+                anySelected = true;
+                break;
+            }
+        }
+
         for (SysMesh* mesh : scene->activeMeshes())
         {
             if (!mesh)
                 continue;
 
             const auto& sel = mesh->selected_edges();
-            if (!sel.empty())
+
+            if (anySelected)
+            {
+                if (sel.empty())
+                    continue;
+
                 result[mesh] = sel;
+            }
             else
-                result[mesh] = mesh->all_edges();
+            {
+                result[mesh] = mesh->all_edges(); // by value
+            }
         }
 
         return result;
@@ -248,16 +270,38 @@ namespace sel
         if (scene->selectionMode() != SelectionMode::POLYS)
             return result;
 
+        // Scene-wide: any selection?
+        bool anySelected = false;
+        for (SysMesh* mesh : scene->activeMeshes())
+        {
+            if (!mesh)
+                continue;
+
+            if (!mesh->selected_polys().empty())
+            {
+                anySelected = true;
+                break;
+            }
+        }
+
         for (SysMesh* mesh : scene->activeMeshes())
         {
             if (!mesh)
                 continue;
 
             const auto& sel = mesh->selected_polys();
-            if (!sel.empty())
+
+            if (anySelected)
+            {
+                if (sel.empty())
+                    continue;
+
                 result[mesh] = sel;
+            }
             else
+            {
                 result[mesh] = mesh->all_polys();
+            }
         }
 
         return result;
@@ -403,21 +447,21 @@ namespace sel
 
         // ------------------------------------------------------------
         // POLYS mode: average poly normals directly (best-defined).
+        // Uses to_polys(scene) so it respects scene-wide selection rules.
         // ------------------------------------------------------------
         if (mode == SelectionMode::POLYS)
         {
+            const MeshPolyMap mp = to_polys(scene);
+
             glm::vec3 sum = {0.0f, 0.0f, 0.0f};
             uint64_t  n   = 0;
 
-            for (SysMesh* mesh : scene->activeMeshes())
+            for (const auto& [mesh, polys] : mp)
             {
                 if (!mesh)
                     continue;
 
-                const std::vector<int32_t>& selp = mesh->selected_polys();
-                const std::vector<int32_t>& src  = (!selp.empty()) ? selp : mesh->all_polys();
-
-                for (int32_t pi : src)
+                for (int32_t pi : polys)
                 {
                     if (!mesh->poly_valid(pi))
                         continue;
@@ -436,6 +480,7 @@ namespace sel
 
         // ------------------------------------------------------------
         // VERTS/EDGES mode: estimate by averaging normals of incident polys.
+        // Uses to_verts(scene) so it respects scene-wide selection rules.
         // ------------------------------------------------------------
         const MeshVertMap mv = to_verts(scene);
 
@@ -491,15 +536,15 @@ namespace sel
 
         if (mode == SelectionMode::POLYS)
         {
-            for (SysMesh* mesh : scene->activeMeshes())
+            // Uses to_polys(scene) so it respects scene-wide selection rules.
+            const MeshPolyMap mp = to_polys(scene);
+
+            for (const auto& [mesh, polys] : mp)
             {
                 if (!mesh)
                     continue;
 
-                const std::vector<int32_t>& selp = mesh->selected_polys();
-                const std::vector<int32_t>& src  = (!selp.empty()) ? selp : mesh->all_polys();
-
-                for (int32_t pi : src)
+                for (int32_t pi : polys)
                 {
                     if (!mesh->poly_valid(pi))
                         continue;
