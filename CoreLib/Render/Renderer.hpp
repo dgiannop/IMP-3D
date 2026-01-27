@@ -25,6 +25,7 @@
 #include "OverlayHandler.hpp"
 #include "RenderGeometry.hpp" // for render::geom::...
 #include "RtPipeline.hpp"
+#include "RtPresentPipeline.hpp"
 #include "RtSbt.hpp"
 #include "VulkanContext.hpp"
 
@@ -347,8 +348,8 @@ private:
     vkrt::RtPipeline m_rtPipeline;
     vkrt::RtSbt      m_rtSbt;
 
-    VkPipeline       m_rtPresentPipeline = VK_NULL_HANDLE;
-    VkPipelineLayout m_rtPresentLayout   = VK_NULL_HANDLE;
+    // Ray tracing present pipeline (fullscreen blit)
+    vkrt::RtPresentPipeline m_rtPresent;
 
     VkCommandPool m_rtUploadPool = VK_NULL_HANDLE;
 

@@ -1231,10 +1231,10 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
 
 bool Renderer::createRtPresentPipeline(VkRenderPass renderPass)
 {
-    destroyRtPresentPipeline();
+    m_rtPresent.destroy(m_ctx.device);
 
     if (!rtReady(m_ctx))
-        return true;
+        return true; // RT disabled: it's fine to "succeed" with no pipeline
 
     if (!m_rtSetLayout.layout())
     {
@@ -1242,88 +1242,9 @@ bool Renderer::createRtPresentPipeline(VkRenderPass renderPass)
         return false;
     }
 
-    const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
-
-    ShaderStage vs = vkutil::loadStage(m_ctx.device, shaderDir, "RtPresent.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage fs = vkutil::loadStage(m_ctx.device, shaderDir, "RtPresent.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    if (!vs.isValid() || !fs.isValid())
+    if (!m_rtPresent.create(m_ctx.device, renderPass, m_ctx.sampleCount, m_rtSetLayout.layout()))
     {
-        std::cerr << "RendererVK: Failed to load RtPresent shaders.\n";
-        return false;
-    }
-
-    VkDescriptorSetLayout setLayouts[1] = {m_rtSetLayout.layout()};
-
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 1;
-    plci.pSetLayouts    = setLayouts;
-
-    if (vkCreatePipelineLayout(m_ctx.device, &plci, nullptr, &m_rtPresentLayout) != VK_SUCCESS)
-    {
-        std::cerr << "RendererVK: vkCreatePipelineLayout(RtPresent) failed.\n";
-        destroyRtPresentPipeline();
-        return false;
-    }
-
-    VkPipelineShaderStageCreateInfo stages[2] = {vs.stageInfo(), fs.stageInfo()};
-
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    vp.viewportCount = 1;
-    vp.scissorCount  = 1;
-
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode    = VK_CULL_MODE_NONE;
-    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth   = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = m_ctx.sampleCount;
-
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    ds.depthTestEnable  = VK_FALSE;
-    ds.depthWriteEnable = VK_FALSE;
-
-    VkPipelineColorBlendAttachmentState cbAtt{};
-    cbAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                           VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT |
-                           VK_COLOR_COMPONENT_A_BIT;
-
-    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1;
-    cb.pAttachments    = &cbAtt;
-
-    VkDynamicState                   dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyn.dynamicStateCount = 2;
-    dyn.pDynamicStates    = dynStates;
-
-    VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gp.stageCount          = 2;
-    gp.pStages             = stages;
-    gp.pVertexInputState   = &vi;
-    gp.pInputAssemblyState = &ia;
-    gp.pViewportState      = &vp;
-    gp.pRasterizationState = &rs;
-    gp.pMultisampleState   = &ms;
-    gp.pDepthStencilState  = &ds;
-    gp.pColorBlendState    = &cb;
-    gp.pDynamicState       = &dyn;
-    gp.layout              = m_rtPresentLayout;
-    gp.renderPass          = renderPass;
-    gp.subpass             = 0;
-
-    if (vkCreateGraphicsPipelines(m_ctx.device, VK_NULL_HANDLE, 1, &gp, nullptr, &m_rtPresentPipeline) != VK_SUCCESS)
-    {
-        std::cerr << "RendererVK: vkCreateGraphicsPipelines(RtPresent) failed.\n";
-        destroyRtPresentPipeline();
+        std::cerr << "RendererVK: RtPresentPipeline::create() failed.\n";
         return false;
     }
 
@@ -1332,22 +1253,7 @@ bool Renderer::createRtPresentPipeline(VkRenderPass renderPass)
 
 void Renderer::destroyRtPresentPipeline() noexcept
 {
-    if (!m_ctx.device)
-        return;
-
-    VkDevice device = m_ctx.device;
-
-    if (m_rtPresentPipeline != VK_NULL_HANDLE)
-    {
-        vkDestroyPipeline(device, m_rtPresentPipeline, nullptr);
-        m_rtPresentPipeline = VK_NULL_HANDLE;
-    }
-
-    if (m_rtPresentLayout != VK_NULL_HANDLE)
-    {
-        vkDestroyPipelineLayout(device, m_rtPresentLayout, nullptr);
-        m_rtPresentLayout = VK_NULL_HANDLE;
-    }
+    m_rtPresent.destroy(m_ctx.device);
 }
 
 //==================================================================
@@ -1848,7 +1754,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         if (!ensureRtOutputImages(rtv, fc, w, h))
             return;
 
-        if (!m_rtPresentPipeline || !m_rtPresentLayout)
+        if (!m_rtPresent.valid())
             return;
 
         if (frameIdx >= rtv.sets.size())
@@ -1857,12 +1763,12 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         // Present RT output
         vkutil::setViewportAndScissor(cmd, w, h);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresentPipeline);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresent.pipeline());
 
         VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
         vkCmdBindDescriptorSets(cmd,
                                 VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_rtPresentLayout,
+                                m_rtPresent.layout(),
                                 0,
                                 1,
                                 &rtSet0,

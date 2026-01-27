@@ -9,21 +9,7 @@
 
 #include "ShaderStage.hpp"
 #include "VkPipelineHelpers.hpp"
-
-namespace
-{
-    // (Unused right now, but harmless if you want to keep it around)
-    static VkPipelineShaderStageCreateInfo makeStage(VkShaderModule        mod,
-                                                     VkShaderStageFlagBits stage) noexcept
-    {
-        VkPipelineShaderStageCreateInfo s{};
-        s.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        s.stage  = stage;
-        s.module = mod;
-        s.pName  = "main";
-        return s;
-    }
-} // namespace
+#include "VulkanContext.hpp"
 
 namespace vkrt
 {

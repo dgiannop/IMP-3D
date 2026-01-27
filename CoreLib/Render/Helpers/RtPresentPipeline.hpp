@@ -2,36 +2,74 @@
 
 #include <vulkan/vulkan.h>
 
-#include "VulkanContext.hpp"
-
-class RtPresentPipeline final
+namespace vkrt
 {
-public:
-    RtPresentPipeline()  = default;
-    ~RtPresentPipeline() = default;
-
-    RtPresentPipeline(const RtPresentPipeline&)            = delete;
-    RtPresentPipeline& operator=(const RtPresentPipeline&) = delete;
-
-    void destroy(const VulkanContext& ctx) noexcept;
-
-    bool create(const VulkanContext&  ctx,
-                VkRenderPass          renderPass,
-                VkSampleCountFlagBits sampleCount,
-                VkDescriptorSetLayout setLayout,
-                VkShaderModule        fullscreenVs,
-                VkShaderModule        presentFs);
-
-    VkPipeline pipeline() const noexcept
+    /**
+     * @brief Minimal graphics pipeline for presenting the RT result.
+     *
+     * Pipeline:
+     *  - Fullscreen triangle
+     *  - No depth
+     *  - Single color attachment
+     *
+     * Layout:
+     *  - Single descriptor set (RT set: storage image + sampler + TLAS, etc.).
+     *
+     * NOTE:
+     *  - Only Vulkan *types* appear in the header.
+     *  - All vk* function calls live in the .cpp file.
+     */
+    class RtPresentPipeline final
     {
-        return m_pipeline;
-    }
-    VkPipelineLayout layout() const noexcept
-    {
-        return m_layout;
-    }
+    public:
+        RtPresentPipeline()  = default;
+        ~RtPresentPipeline() = default;
 
-private:
-    VkPipelineLayout m_layout   = VK_NULL_HANDLE;
-    VkPipeline       m_pipeline = VK_NULL_HANDLE;
-};
+        RtPresentPipeline(const RtPresentPipeline&)            = delete;
+        RtPresentPipeline& operator=(const RtPresentPipeline&) = delete;
+
+        RtPresentPipeline(RtPresentPipeline&& other) noexcept;
+        RtPresentPipeline& operator=(RtPresentPipeline&& other) noexcept;
+
+        /**
+         * @brief Destroy pipeline & layout using the given device.
+         */
+        void destroy(VkDevice device) noexcept;
+
+        /**
+         * @brief Create the RT present pipeline + layout.
+         *
+         * @param device       Vulkan device.
+         * @param renderPass   Render pass used for the viewport swapchain.
+         * @param sampleCount  MSAA sample count for the swapchain.
+         * @param setLayout    Descriptor set layout for the RT set (Set 2).
+         */
+        bool create(VkDevice              device,
+                    VkRenderPass          renderPass,
+                    VkSampleCountFlagBits sampleCount,
+                    VkDescriptorSetLayout setLayout);
+
+        [[nodiscard]] VkPipeline pipeline() const noexcept
+        {
+            return m_pipeline;
+        }
+
+        [[nodiscard]] VkPipelineLayout layout() const noexcept
+        {
+            return m_layout;
+        }
+
+        [[nodiscard]] bool valid() const noexcept
+        {
+            return m_pipeline != VK_NULL_HANDLE && m_layout != VK_NULL_HANDLE;
+        }
+
+    private:
+        void moveFrom(RtPresentPipeline&& other) noexcept;
+
+    private:
+        VkPipelineLayout m_layout   = VK_NULL_HANDLE;
+        VkPipeline       m_pipeline = VK_NULL_HANDLE;
+    };
+
+} // namespace vkrt
