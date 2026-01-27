@@ -8,6 +8,7 @@
 #include <QVulkanInstance>
 
 #include "Core.hpp"
+#include "MainUtilities.hpp"
 #include "SubWindows/MaterialAssignDialog.hpp"
 #include "SubWindows/MaterialEditorDialog.hpp"
 #include "SubWindows/PropertyWindow.hpp"
@@ -444,6 +445,7 @@ void MainWindow::handleAction()
             if (fileName.isEmpty())
                 return;
 
+            BusyCursorGuard busy;
             m_core->openFile(fileName.toStdString());
         }
 
@@ -464,6 +466,7 @@ void MainWindow::handleAction()
                 if (savePath.isEmpty())
                     return;
 
+                BusyCursorGuard busy;
                 savePath = ensureImpExtension(savePath);
                 m_core->saveFileAs(savePath.toStdString());
             }
@@ -483,6 +486,7 @@ void MainWindow::handleAction()
             if (savePath.isEmpty())
                 return;
 
+            BusyCursorGuard busy;
             savePath = ensureImpExtension(savePath);
             m_core->saveFileAs(savePath.toStdString());
         }
@@ -501,6 +505,7 @@ void MainWindow::handleAction()
             if (fileName.isEmpty())
                 return;
 
+            BusyCursorGuard busy;
             m_core->importFile(fileName.toStdString());
         }
 
@@ -518,6 +523,7 @@ void MainWindow::handleAction()
             if (fileName.isEmpty())
                 return;
 
+            BusyCursorGuard busy;
             m_core->exportFile(fileName.toStdString());
         }
 
