@@ -31,6 +31,19 @@ namespace
     }
 } // namespace
 
+/* later
+
+// 1) modeling headlight (optional)
+appendLight(...);
+
+// 2) scene lights
+for (const SceneLight& sl : scene->lights())
+{
+    GpuLight gl = {};
+    // world → view transform
+    appendLight(out, gl);
+} The call site does not change at all.
+ */
 void buildGpuLightsUBO(const HeadlightSettings& headlight,
                        const Viewport& /*vp*/,
                        const Scene* /*scene*/,

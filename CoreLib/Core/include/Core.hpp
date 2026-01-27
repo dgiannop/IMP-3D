@@ -128,6 +128,8 @@ public:
     /** @brief Set the currently active viewport. */
     void setActiveViewport(Viewport* vp) noexcept;
 
+    /** @brief Get the active viewport (last clicked). */
+    Viewport* activeViewport() const noexcept;
     /**
      * @brief Activate a tool by name.
      * @throws std::runtime_error if tool is not registered

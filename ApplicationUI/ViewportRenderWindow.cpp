@@ -1,3 +1,6 @@
+//============================================================
+// ViewportRenderWindow.cpp  (FULL REPLACEMENT)
+//============================================================
 #include "ViewportRenderWindow.hpp"
 
 #include <qvulkanfunctions.h>
@@ -5,6 +8,9 @@
 #include <Core.hpp>
 #include <QEvent>
 #include <QExposeEvent>
+#include <QFocusEvent>
+#include <QGuiApplication>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPlatformSurfaceEvent>
 #include <QResizeEvent>
@@ -37,6 +43,14 @@ ViewportRenderWindow::ViewportRenderWindow(Core* core, Viewport* vp, VulkanBacke
 
     // Optional: can reduce flashes in some setups.
     setFlag(Qt::FramelessWindowHint, true);
+
+    // Continuous move tick (~60Hz)
+    m_moveTimer.setInterval(16);
+    m_moveTimer.setSingleShot(false);
+
+    QObject::connect(&m_moveTimer, &QTimer::timeout, [this]() {
+        tickMove();
+    });
 }
 
 ViewportRenderWindow::~ViewportRenderWindow()
@@ -75,6 +89,12 @@ bool ViewportRenderWindow::event(QEvent* e)
             // Stop rendering loop and destroy swapchain now.
             m_exposed      = false;
             m_updateQueued = false;
+
+            // Stop keyboard movement as well.
+            m_move = {};
+            if (m_moveTimer.isActive())
+                m_moveTimer.stop();
+
             destroySwapchain();
         }
     }
@@ -102,6 +122,11 @@ void ViewportRenderWindow::exposeEvent(QExposeEvent* e)
         return;
 
     ensureSwapchain();
+
+    // Helpful: when a viewport appears, make it eligible to receive keys
+    // (focus is still typically set on click, but this helps in some setups).
+    requestActivate();
+
     requestUpdateOnce();
 }
 
@@ -124,6 +149,14 @@ void ViewportRenderWindow::resizeEvent(QResizeEvent* e)
 
     if (m_exposed)
         requestUpdateOnce();
+}
+
+void ViewportRenderWindow::focusOutEvent(QFocusEvent* e)
+{
+    // Prevent stuck keys if focus changes while a key is held.
+    m_move = {};
+    stopMoveTimerIfIdle();
+    QWindow::focusOutEvent(e);
 }
 
 void ViewportRenderWindow::ensureSwapchain() noexcept
@@ -208,10 +241,6 @@ void ViewportRenderWindow::renderOnce() noexcept
     rfc.deferred           = &m_swapchain->deferred;
     rfc.frameFenceWaited   = fc.frameFenceWaited;
 
-    // / If beginFrame() waited the fence for this frame slot, we can flush deferred deletions now.
-    // if (rfc.frameFenceWaited && rfc.deferred)
-    // rfc.deferred->flush(rfc.frameIndex);
-
     // RT / compute / prepass work must happen outside render pass
     m_core->renderPrePass(m_viewport, rfc);
 
@@ -263,6 +292,10 @@ void ViewportRenderWindow::mousePressEvent(QMouseEvent* e)
 {
     if (!m_core || !m_viewport)
         return;
+
+    // Ensure this window can receive keyboard input after a click.
+    requestActivate();
+    // setFocus(Qt::MouseFocusReason);
 
     m_lastPos = e->position();
     m_core->setActiveViewport(m_viewport);
@@ -316,4 +349,189 @@ void ViewportRenderWindow::wheelEvent(QWheelEvent* e)
 
     m_core->mouseWheelEvent(m_viewport, ev);
     requestUpdateOnce();
+}
+
+//============================================================
+// Continuous keyboard movement helpers
+//============================================================
+void ViewportRenderWindow::startMoveTimer() noexcept
+{
+    if (!m_moveClock.isValid())
+        m_moveClock.start();
+    else
+        m_moveClock.restart();
+
+    if (!m_moveTimer.isActive())
+        m_moveTimer.start();
+}
+
+void ViewportRenderWindow::stopMoveTimerIfIdle() noexcept
+{
+    if (m_move.left || m_move.right || m_move.forward || m_move.backward)
+        return;
+
+    if (m_moveTimer.isActive())
+        m_moveTimer.stop();
+}
+
+void ViewportRenderWindow::tickMove() noexcept
+{
+    if (!m_core || !m_viewport)
+        return;
+
+    // Drive shared camera from this window's viewport as the reference.
+    m_core->setActiveViewport(m_viewport);
+
+    const float dt = static_cast<float>(m_moveClock.restart()) / 1000.0f;
+    if (dt <= 0.0f)
+        return;
+
+    const Qt::KeyboardModifiers mods  = QGuiApplication::keyboardModifiers();
+    const bool                  alt   = (mods & Qt::AltModifier) != 0;
+    const bool                  shift = (mods & Qt::ShiftModifier) != 0;
+
+    // ------------------------------------------------------------
+    // ALT held: rotate (yaw / pitch)
+    // ------------------------------------------------------------
+    if (alt)
+    {
+        const float rotSpeedPerSec = 60.0f;
+
+        float rotX = 0.0f; // yaw
+        float rotY = 0.0f; // pitch
+
+        if (m_move.left)
+            rotX += rotSpeedPerSec * dt;
+        if (m_move.right)
+            rotX -= rotSpeedPerSec * dt;
+
+        if (m_move.forward) // Up
+            rotY += rotSpeedPerSec * dt;
+        if (m_move.backward) // Down
+            rotY -= rotSpeedPerSec * dt;
+
+        if (rotX != 0.0f || rotY != 0.0f)
+            m_core->viewportRotate(m_viewport, rotX, rotY);
+
+        requestUpdateOnce();
+        return;
+    }
+
+    // ------------------------------------------------------------
+    // SHIFT held (no ALT): vertical camera move (up / down)
+    // ------------------------------------------------------------
+    if (shift)
+    {
+        const float panSpeedPxPerSec = 400.0f;
+
+        float panY = 0.0f;
+
+        if (m_move.forward) // Shift + Up
+            panY += panSpeedPxPerSec * dt;
+        if (m_move.backward) // Shift + Down
+            panY -= panSpeedPxPerSec * dt;
+
+        if (panY != 0.0f)
+            m_core->viewportPan(m_viewport, 0.0f, panY);
+
+        requestUpdateOnce();
+        return;
+    }
+
+    // ------------------------------------------------------------
+    // No modifiers: strafe + dolly
+    // ------------------------------------------------------------
+    const float panSpeedPxPerSec = 400.0f;
+    const float zoomUnitsPerSec  = 400.0f;
+
+    float panX  = 0.0f;
+    float zoomX = 0.0f;
+
+    if (m_move.left)
+        panX -= panSpeedPxPerSec * dt;
+    if (m_move.right)
+        panX += panSpeedPxPerSec * dt;
+
+    if (m_move.forward) // Up
+        zoomX += zoomUnitsPerSec * dt;
+    if (m_move.backward) // Down
+        zoomX -= zoomUnitsPerSec * dt;
+
+    if (panX != 0.0f)
+        m_core->viewportPan(m_viewport, panX, 0.0f);
+
+    if (zoomX != 0.0f)
+        m_core->viewportZoom(m_viewport, zoomX, 0.0f);
+
+    requestUpdateOnce();
+}
+
+//============================================================
+// Key events
+//============================================================
+void ViewportRenderWindow::keyPressEvent(QKeyEvent* e)
+{
+    if (!e || !m_core || !m_viewport)
+        return;
+
+    switch (e->key())
+    {
+        case Qt::Key_Left:
+            m_move.left = true;
+            break;
+
+        case Qt::Key_Right:
+            m_move.right = true;
+            break;
+
+        case Qt::Key_Up:
+            m_move.forward = true;
+            break;
+
+        case Qt::Key_Down:
+            m_move.backward = true;
+            break;
+
+        default:
+            e->ignore();
+            return;
+    }
+
+    m_core->setActiveViewport(m_viewport);
+    startMoveTimer();
+
+    e->accept();
+}
+
+void ViewportRenderWindow::keyReleaseEvent(QKeyEvent* e)
+{
+    if (!e)
+        return;
+
+    switch (e->key())
+    {
+        case Qt::Key_Left:
+            m_move.left = false;
+            break;
+
+        case Qt::Key_Right:
+            m_move.right = false;
+            break;
+
+        case Qt::Key_Up:
+            m_move.forward = false;
+            break;
+
+        case Qt::Key_Down:
+            m_move.backward = false;
+            break;
+
+        default:
+            e->ignore();
+            return;
+    }
+
+    stopMoveTimerIfIdle();
+
+    e->accept();
 }

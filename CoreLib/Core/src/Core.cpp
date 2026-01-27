@@ -150,6 +150,11 @@ void Core::setActiveViewport(Viewport* vp) noexcept
         m_scene->setActiveViewport(vp);
 }
 
+Viewport* Core::activeViewport() const noexcept
+{
+    return m_scene->activeViewport();
+}
+
 void Core::setActiveTool(const std::string& name)
 {
     if (m_activeTool)
