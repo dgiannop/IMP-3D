@@ -18,7 +18,7 @@ bool DescriptorPool::create(VkDevice                              device,
     ci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     ci.pPoolSizes    = poolSizes.data();
     ci.maxSets       = maxSets;
-    ci.flags         = 0; // or VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT if you want
+    ci.flags         = 0; // or VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
 
     if (vkCreateDescriptorPool(m_device, &ci, nullptr, &m_pool) != VK_SUCCESS)
     {

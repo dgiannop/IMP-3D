@@ -1636,6 +1636,7 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
         return false;
     }
 
+    out.frameFenceWaited = true;
     // All work previously submitted for this frame slot is complete.
     // Now it's safe to destroy resources deferred for this slot (PER-VIEWPORT queue).
     sc->deferred.flush(fi);

@@ -1,5 +1,5 @@
 //============================================================
-// Renderer.hpp (DROP-IN REPLACEMENT)
+// Renderer.hpp
 //============================================================
 #pragma once
 
@@ -185,7 +185,7 @@ private:
     bool createPipelines(VkRenderPass renderPass);
     void destroyPipelines() noexcept;
 
-    ViewportUboState& ensureViewportUboState(Viewport* vp);
+    ViewportUboState& ensureViewportUboState(Viewport* vp, uint32_t frameIndex);
 
     // Materials (raster path)
     void uploadMaterialsToGpu(const std::vector<Material>& materials,
@@ -231,7 +231,7 @@ private:
         void destroyDeviceResources(const VulkanContext& ctx) noexcept;
     };
 
-    RtViewportState& ensureRtViewportState(Viewport* vp);
+    RtViewportState& ensureRtViewportState(Viewport* vp, uint32_t frameIndex);
     bool             ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h);
     void             destroyRtOutputImages(RtViewportState& s) noexcept;
 
@@ -323,7 +323,7 @@ private:
 
     GpuBuffer     m_materialBuffer;
     std::uint32_t m_materialCount      = 0;
-    uint64_t      m_curMaterialCounter = 0;
+    std::uint64_t m_curMaterialCounter = 0;
 
 private:
     // ============================================================

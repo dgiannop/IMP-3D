@@ -1,3 +1,6 @@
+//==============================================================
+// Overlay.geom (expand line to screen-space quad)
+//==============================================================
 #version 450
 
 layout(lines) in;
@@ -27,7 +30,7 @@ void main()
     vec2 n0 = p0.xy / max(p0.w, 1e-6);
     vec2 n1 = p1.xy / max(p1.w, 1e-6);
 
-    vec2 d = n1 - n0;
+    vec2 d   = n1 - n0;
     float len = length(d);
     if (len < 1e-8)
         return;

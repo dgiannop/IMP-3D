@@ -209,8 +209,8 @@ void ViewportRenderWindow::renderOnce() noexcept
     rfc.frameFenceWaited   = fc.frameFenceWaited;
 
     // / If beginFrame() waited the fence for this frame slot, we can flush deferred deletions now.
-    if (rfc.frameFenceWaited && rfc.deferred)
-        rfc.deferred->flush(rfc.frameIndex);
+    // if (rfc.frameFenceWaited && rfc.deferred)
+    // rfc.deferred->flush(rfc.frameIndex);
 
     // RT / compute / prepass work must happen outside render pass
     m_core->renderPrePass(m_viewport, rfc);

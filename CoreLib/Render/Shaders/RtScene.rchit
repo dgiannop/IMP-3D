@@ -1,6 +1,6 @@
-// ============================================================
+//==============================================================
 // RtScene.rchit
-// ============================================================
+//==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
@@ -35,13 +35,14 @@ struct RtInstanceData
     uint     _pad2;
 };
 
-layout(set = 0, binding = 4, std430) readonly buffer Instances
+// Instances buffer: set=2, binding=3 (RT set)
+layout(set = 2, binding = 3, std430) readonly buffer Instances
 {
     RtInstanceData inst[];
 } u_inst;
 
 // ------------------------------------------------------------
-// Camera (now includes view matrix)
+// Camera (frame set: set=0, binding=2)
 // ------------------------------------------------------------
 layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
@@ -52,7 +53,7 @@ layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 } u_cam;
 
 // ------------------------------------------------------------
-// Lights (same semantics as raster: VIEW-SPACE)
+// Lights (frame set: set=0, binding=1, matches raster)
 // ------------------------------------------------------------
 struct GpuLight
 {
@@ -62,7 +63,7 @@ struct GpuLight
     vec4 spot_params;
 };
 
-layout(set = 0, binding = 5, std140) uniform LightsUBO
+layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
     uvec4   info;         // x = lightCount
     vec4    ambient;      // rgb, a
