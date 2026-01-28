@@ -132,6 +132,82 @@ float G_Smith(float NdotV, float NdotL, float k)
     return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
 }
 
+// ------------------------------------------------------------
+// Light conversion helpers (VIEW-space UBO -> WORLD-space for RT rays)
+// NOTE: no behavior change until used.
+// ------------------------------------------------------------
+const uint kLightType_Directional = 0u;
+const uint kLightType_Point       = 1u;
+const uint kLightType_Spot        = 2u;
+
+uint light_type(const GpuLight L)
+{
+    // pos_type.w stores type as float (vec4). Round safely.
+    return uint(L.pos_type.w + 0.5);
+}
+
+vec3 view_to_world_pos(vec3 v)
+{
+    return (u_cam.invView * vec4(v, 1.0)).xyz;
+}
+
+vec3 view_to_world_dir(vec3 vdir)
+{
+    vec3 w = (u_cam.invView * vec4(vdir, 0.0)).xyz;
+    float len2 = dot(w, w);
+    if (len2 <= 1e-20)
+        return vec3(0.0, 0.0, -1.0);
+    return w * inversesqrt(len2);
+}
+
+struct LightWorld
+{
+    uint  type;
+
+    vec3  posW; // point/spot
+    vec3  dirW; // directional/spot (normalized)
+
+    vec3  color;
+    float intensity;
+
+    float range;    // point/spot
+    float innerCos; // spot
+    float outerCos; // spot
+};
+
+LightWorld light_to_world(const GpuLight L)
+{
+    LightWorld o;
+    o.type      = light_type(L);
+    o.color     = L.color_intensity.rgb;
+    o.intensity = L.color_intensity.a;
+
+    o.posW     = vec3(0.0);
+    o.dirW     = vec3(0.0, 0.0, -1.0);
+    o.range    = 0.0;
+    o.innerCos = 0.0;
+    o.outerCos = 0.0;
+
+    if (o.type == kLightType_Point || o.type == kLightType_Spot)
+    {
+        o.posW  = view_to_world_pos(L.pos_type.xyz);
+        o.range = L.dir_range.w;
+    }
+
+    if (o.type == kLightType_Directional || o.type == kLightType_Spot)
+    {
+        o.dirW = view_to_world_dir(L.dir_range.xyz);
+    }
+
+    if (o.type == kLightType_Spot)
+    {
+        o.innerCos = L.spot_params.x;
+        o.outerCos = L.spot_params.y;
+    }
+
+    return o;
+}
+
 void main()
 {
     const uint instId = gl_InstanceCustomIndexEXT;

@@ -542,7 +542,7 @@ bool VulkanBackend::createDevice()
     std::vector<Candidate> cands;
     cands.reserve(devices.size());
 
-    std::cerr << "VulkanBackend: Enumerating physical devices (" << devices.size() << "):\n";
+    // std::cerr << "VulkanBackend: Enumerating physical devices (" << devices.size() << "):\n";
 
     Candidate best     = {};
     bool      haveBest = false;
@@ -554,28 +554,28 @@ bool VulkanBackend::createDevice()
 
         c.score = scoreDevice(pd, c.props, c.feats, c.supportedCore, c.exts, c.graphicsFamily, c.meets);
 
-        std::cerr
-            << "  - " << c.props.deviceName
-            << " | " << vendorStr(c.props.vendorID) << " (0x" << std::hex << c.props.vendorID << std::dec << ")"
-            << " | " << deviceTypeStr(c.props.deviceType)
-            << " | Vulkan " << versionStr(c.props.apiVersion)
-            << " | Driver " << versionStr(c.props.driverVersion)
-            << "\n";
+        // std::cerr
+        //     << "  - " << c.props.deviceName
+        //     << " | " << vendorStr(c.props.vendorID) << " (0x" << std::hex << c.props.vendorID << std::dec << ")"
+        //     << " | " << deviceTypeStr(c.props.deviceType)
+        //     << " | Vulkan " << versionStr(c.props.apiVersion)
+        //     << " | Driver " << versionStr(c.props.driverVersion)
+        //     << "\n";
 
-        std::cerr
-            << "      features: geometryShader=" << (c.feats.geometryShader ? "YES" : "no")
-            << " samplerAnisotropy=" << (c.feats.samplerAnisotropy ? "YES" : "no")
-            << " shaderInt64=" << (c.supportedCore.features.shaderInt64 ? "YES" : "no")
-            << "\n";
+        // std::cerr
+        //     << "      features: geometryShader=" << (c.feats.geometryShader ? "YES" : "no")
+        //     << " samplerAnisotropy=" << (c.feats.samplerAnisotropy ? "YES" : "no")
+        //     << " shaderInt64=" << (c.supportedCore.features.shaderInt64 ? "YES" : "no")
+        //     << "\n";
 
-        std::cerr
-            << "      ext: VK_KHR_swapchain=" << (hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ? "YES" : "no")
-            << "\n";
+        // std::cerr
+        //     << "      ext: VK_KHR_swapchain=" << (hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ? "YES" : "no")
+        //     << "\n";
 
-        if (c.score >= 0)
-            std::cerr << "      score: " << c.score << "\n";
-        else
-            std::cerr << "      score: (rejected)\n";
+        // if (c.score >= 0)
+        //     std::cerr << "      score: " << c.score << "\n";
+        // else
+        //     std::cerr << "      score: (rejected)\n";
 
         cands.push_back(c);
 
