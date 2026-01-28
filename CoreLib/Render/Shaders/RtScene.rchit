@@ -13,11 +13,11 @@ hitAttributeEXT vec2 attribs;
 // ------------------------------------------------------------
 // Buffer references (device address)
 // ------------------------------------------------------------
-layout(buffer_reference, scalar) readonly buffer PosBuf { vec4 p[]; };
-layout(buffer_reference, scalar) readonly buffer IdxBuf { uint idx[]; }; // padded uvec4 per tri
-layout(buffer_reference, scalar) readonly buffer NrmBuf { vec4 n[]; };   // triCount*3
-layout(buffer_reference, scalar) readonly buffer UvBuf  { vec4 uv[]; };  // triCount*3
-layout(buffer_reference, scalar) readonly buffer MatIdBuf { uint m[]; }; // triCount
+layout(buffer_reference, scalar) readonly buffer PosBuf   { vec4 p[]; };
+layout(buffer_reference, scalar) readonly buffer IdxBuf   { uint idx[]; }; // triCount*4 (padded)
+layout(buffer_reference, scalar) readonly buffer NrmBuf   { vec4 n[]; };   // triCount*3
+layout(buffer_reference, scalar) readonly buffer UvBuf    { vec4 uv[]; };  // triCount*3
+layout(buffer_reference, scalar) readonly buffer MatIdBuf { uint m[]; };   // triCount
 
 // ------------------------------------------------------------
 // Per-instance data (MUST match CPU RtInstanceData exactly)
@@ -35,7 +35,6 @@ struct RtInstanceData
     uint     _pad2;
 };
 
-// Instances buffer: set=2, binding=3 (RT set)
 layout(set = 2, binding = 3, std430) readonly buffer Instances
 {
     RtInstanceData inst[];
@@ -47,26 +46,31 @@ layout(set = 2, binding = 3, std430) readonly buffer Instances
 layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
-    mat4 view;        // NEW
+    mat4 view;        // WORLD->VIEW
     vec4 camPos;      // world
     vec4 clearColor;
 } u_cam;
 
 // ------------------------------------------------------------
-// Lights (frame set: set=0, binding=1, matches raster)
+// Lights (frame set: set=0, binding=1)
+// IMPORTANT: matches CPU:
+//   - pos_type.xyz = light position in VIEW (point/spot)
+//   - pos_type.w   = type (0 dir, 1 point, 2 spot)
+//   - dir_range.xyz = light forward dir in VIEW (dir/spot)
+//   - dir_range.w   = range (point/spot, 0 => infinite)
 // ------------------------------------------------------------
 struct GpuLight
 {
-    vec4 pos_type;        // w = type
-    vec4 dir_range;       // xyz = (surface -> light) in VIEW SPACE
-    vec4 color_intensity; // rgb = color, a = intensity
-    vec4 spot_params;
+    vec4 pos_type;
+    vec4 dir_range;
+    vec4 color_intensity;
+    vec4 spot_params; // x=innerCos, y=outerCos
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    uvec4   info;         // x = lightCount
-    vec4    ambient;      // rgb, a
+    uvec4   info;    // x = lightCount
+    vec4    ambient; // rgb, a
     GpuLight lights[64];
 } uLights;
 
@@ -101,7 +105,7 @@ const int kMaxTextureCount = 512;
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ------------------------------------------------------------
-// Helpers (GGX / Cook-Torrance) — identical to raster
+// Helpers
 // ------------------------------------------------------------
 float saturate(float x) { return clamp(x, 0.0, 1.0); }
 
@@ -124,15 +128,20 @@ float G_SchlickGGX(float NdotX, float k)
 
 float G_Smith(float NdotV, float NdotL, float k)
 {
-    float ggxV = G_SchlickGGX(NdotV, k);
-    float ggxL = G_SchlickGGX(NdotL, k);
-    return ggxV * ggxL;
+    return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
 }
 
 void main()
 {
     const uint instId = gl_InstanceCustomIndexEXT;
-    RtInstanceData d  = u_inst.inst[instId];
+
+    if (instId >= u_inst.inst.length())
+    {
+        payload = vec4(1.0, 0.0, 1.0, 1.0); // magenta: bad instance index
+        return;
+    }
+
+    RtInstanceData d = u_inst.inst[instId];
 
     if (d.posAdr == 0ul || d.idxAdr == 0ul || d.nrmAdr == 0ul || d.uvAdr == 0ul || d.matIdAdr == 0ul || d.triCount == 0u)
     {
@@ -153,19 +162,16 @@ void main()
     UvBuf    uvb = UvBuf(d.uvAdr);
     MatIdBuf mid = MatIdBuf(d.matIdAdr);
 
-    // -----------------------------
     // World-space hit point
-    // -----------------------------
-    vec3 P = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    vec3 Pw = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
-    // -----------------------------
-    // Triangle data
-    // -----------------------------
+    // Triangle indices (padded uvec4 per tri)
     const uint base4 = prim * 4u;
     const uint ia = ind.idx[base4 + 0u];
     const uint ib = ind.idx[base4 + 1u];
     const uint ic = ind.idx[base4 + 2u];
 
+    // Vertex positions (assumed WORLD space in your current upload path)
     vec3 a = pos.p[ia].xyz;
     vec3 b = pos.p[ib].xyz;
     vec3 c = pos.p[ic].xyz;
@@ -175,7 +181,7 @@ void main()
     const float b2 = attribs.y;
     const float b0 = 1.0 - b1 - b2;
 
-    // Per-corner normals/uvs (assumed WORLD SPACE, as uploaded)
+    // Per-corner normals/uvs (assumed WORLD space, as uploaded)
     const uint base3 = prim * 3u;
 
     vec3 n0 = nrm.n[base3 + 0u].xyz;
@@ -183,7 +189,7 @@ void main()
     vec3 n2 = nrm.n[base3 + 2u].xyz;
 
     vec3 Nw = normalize(n0 * b0 + n1 * b1 + n2 * b2);
-    if (any(isnan(Nw)) || dot(Nw, Nw) < 1e-20)
+    if (dot(Nw, Nw) < 1e-20)
         Nw = normalize(cross(b - a, c - a));
 
     vec2 uv0 = uvb.uv[base3 + 0u].xy;
@@ -191,16 +197,12 @@ void main()
     vec2 uv2 = uvb.uv[base3 + 2u].xy;
     vec2 UV  = uv0 * b0 + uv1 * b1 + uv2 * b2;
 
-    // -----------------------------
-    // Convert to VIEW SPACE (to match raster headlight lighting)
-    // -----------------------------
-    vec3 Pv = (u_cam.view * vec4(P, 1.0)).xyz;          // view-space position
-    vec3 Nv = normalize(mat3(u_cam.view) * Nw);         // view-space normal
-    vec3 V  = normalize(-Pv);                           // view-space view vector (camera at origin)
+    // Convert to VIEW SPACE (match raster semantics)
+    vec3 Pv = (u_cam.view * vec4(Pw, 1.0)).xyz;
+    vec3 Nv = normalize(mat3(u_cam.view) * Nw);
+    vec3 V  = normalize(-Pv);
 
-    // -----------------------------
     // Material fetch
-    // -----------------------------
     const uint matIdRaw = mid.m[prim];
     const uint matCount = materials.length();
     const uint matId    = (matCount > 0u) ? min(matIdRaw, matCount - 1u) : 0u;
@@ -211,23 +213,19 @@ void main()
         0.5, 0.0, 1.5, 0.0,
         -1, -1, -1, -1);
 
-    // -----------------------------
-    // Base color (albedo)
-    // -----------------------------
+    // Albedo
     vec3 albedo = mat.baseColor;
     if (mat.baseColorTexture >= 0)
         albedo *= texture(uTextures[mat.baseColorTexture], UV).rgb;
 
-    // -----------------------------
-    // Material params (+ optional MRAO like raster)
-    // -----------------------------
+    // Params (+ MRAO)
     float roughness = clamp(mat.roughness, 0.04, 1.0);
     float metallic  = clamp(mat.metallic,  0.0,  1.0);
     float ao        = 1.0;
 
     if (mat.mraoTexture >= 0)
     {
-        vec3 mrao = texture(uTextures[mat.mraoTexture], UV).rgb; // linear
+        vec3 mrao = texture(uTextures[mat.mraoTexture], UV).rgb;
         ao        = clamp(mrao.r, 0.0, 1.0);
         roughness = clamp(roughness * mrao.g, 0.04, 1.0);
         metallic  = clamp(metallic  * mrao.b, 0.0,  1.0);
@@ -240,53 +238,123 @@ void main()
     vec3  F0d = vec3(clamp(f0s, 0.02, 0.08));
     vec3  F0  = mix(F0d, albedo, metallic);
 
-    // -----------------------------
-    // Direct lighting from GpuLightsUBO (VIEW SPACE)
-    // -----------------------------
+    // Ambient (fallback if ambient.a is unset)
+    float ambStrength = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
+    vec3  ambient = uLights.ambient.rgb * ambStrength * albedo * ao;
+
+    // Direct lighting (FIXED: compute L per type, matches Solid)
     vec3 direct = vec3(0.0);
 
     const uint lightCount = uLights.info.x;
+    if (lightCount == 0u)
+    {
+        // Debug: you should still see something if geometry hits but lights aren't bound
+        payload = vec4(ambient + albedo * 0.02, 1.0);
+        return;
+    }
+
     for (uint i = 0u; i < lightCount; ++i)
     {
-        vec3 L = normalize(uLights.lights[i].dir_range.xyz); // surface -> light (view space)
-        vec3 H = normalize(V + L);
+        float typeF = uLights.lights[i].pos_type.w;
+        uint  t     = uint(typeF + 0.5); // 0=Dir,1=Point,2=Spot
+
+        vec3  L = vec3(0.0);
+        float atten = 1.0;
+
+        if (t == 0u) // Directional
+        {
+            // dir_range.xyz = light forward; surface->light is opposite
+            L = normalize(-uLights.lights[i].dir_range.xyz);
+        }
+        else if (t == 1u) // Point
+        {
+            vec3 toLight = uLights.lights[i].pos_type.xyz - Pv; // view space
+            float d2 = max(dot(toLight, toLight), 1e-8);
+            float d  = sqrt(d2);
+            L = toLight / d;
+
+            float range = uLights.lights[i].dir_range.w;
+            if (range > 0.0)
+            {
+                float x = saturate(1.0 - (d / range));
+                atten = x * x;
+            }
+            else
+            {
+                atten = 1.0 / d2;
+            }
+        }
+        else if (t == 2u) // Spot
+        {
+            vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
+            float d2 = max(dot(toLight, toLight), 1e-8);
+            float d  = sqrt(d2);
+            L = toLight / d;
+
+            float range = uLights.lights[i].dir_range.w;
+            if (range > 0.0)
+            {
+                float x = saturate(1.0 - (d / range));
+                atten = x * x;
+            }
+            else
+            {
+                atten = 1.0 / d2;
+            }
+
+            // cone term
+            vec3  spotFwd = normalize(uLights.lights[i].dir_range.xyz); // light forward
+            float cosAng  = dot(-L, spotFwd);
+
+            float innerCos = uLights.lights[i].spot_params.x;
+            float outerCos = uLights.lights[i].spot_params.y;
+
+            float cone = saturate((cosAng - outerCos) / max(innerCos - outerCos, 1e-5));
+            atten *= cone * cone;
+        }
+        else
+        {
+            continue;
+        }
 
         float NdotL = saturate(dot(Nv, L));
         float NdotV = saturate(dot(Nv, V));
+        if (NdotL <= 0.0 || NdotV <= 0.0)
+            continue;
+
+        vec3 H = normalize(V + L);
+
         float NdotH = saturate(dot(Nv, H));
         float VdotH = saturate(dot(V, H));
 
-        if (NdotL > 0.0 && NdotV > 0.0)
-        {
-            vec3  F = fresnelSchlick(VdotH, F0);
-            float D = D_GGX(NdotH, alpha);
+        vec3  F = fresnelSchlick(VdotH, F0);
+        float D = D_GGX(NdotH, alpha);
 
-            float r = roughness + 1.0;
-            float k = (r * r) / 8.0;
-            float G = G_Smith(NdotV, NdotL, k);
+        float r = roughness + 1.0;
+        float k = (r * r) / 8.0;
+        float G = G_Smith(NdotV, NdotL, k);
 
-            vec3  specularBRDF = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
-            vec3  kd           = (vec3(1.0) - F) * (1.0 - metallic);
-            vec3  diffuseBRDF  = kd * albedo / 3.14159265;
+        vec3  specBRDF = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
+        vec3  kd       = (vec3(1.0) - F) * (1.0 - metallic);
+        vec3  diffBRDF = kd * albedo / 3.14159265;
 
-            vec3 radiance = uLights.lights[i].color_intensity.rgb *
-                            uLights.lights[i].color_intensity.a;
+        vec3  c = uLights.lights[i].color_intensity.rgb;
+        float I = uLights.lights[i].color_intensity.a;
 
-            direct += (diffuseBRDF + specularBRDF) * radiance * NdotL;
-        }
+        vec3 radiance = c * I;
+
+        direct += (diffBRDF + specBRDF) * radiance * (NdotL * atten);
     }
-
-    // Ambient from UBO (match raster behavior)
-    vec3 ambient = uLights.ambient.rgb * uLights.ambient.a * albedo;
 
     // Emissive
     vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;
     if (mat.emissiveTexture >= 0)
         emissive *= texture(uTextures[mat.emissiveTexture], UV).rgb;
 
-    // AO affects indirect-ish parts (keep it simple here)
-    ambient *= ao;
-
     vec3 color = ambient + direct + emissive;
+
+    // tiny floor so you can see *something* even if intensities are weird
+    color = max(color, vec3(0.0));
+
     payload = vec4(color, 1.0);
 }

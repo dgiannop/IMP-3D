@@ -6,6 +6,7 @@
 
 #include "CoreTypes.hpp"
 #include "GpuResources/TextureHandler.hpp"
+#include "LightHandler.hpp"
 #include "MaterialHandler.hpp"
 #include "SceneMesh.hpp"
 #include "SceneObject.hpp"
@@ -151,6 +152,12 @@ public:
     /** @brief Access texture handler. */
     [[nodiscard]] TextureHandler* textureHandler() noexcept;
 
+    /** @brief Access light handler. */
+    [[nodiscard]] LightHandler* lightHandler() noexcept;
+
+    /** @brief Access light handler (const). */
+    [[nodiscard]] const LightHandler* lightHandler() const noexcept;
+
     /** @brief Access renderer. */
     [[nodiscard]] class Renderer* renderer() noexcept;
 
@@ -246,6 +253,9 @@ private:
 
     /** @brief Material handler. */
     std::unique_ptr<MaterialHandler> m_materialHandler;
+
+    /** @brief Light handler. */
+    std::unique_ptr<LightHandler> m_lightHandler = {};
 
     /** @brief Material change monitor. */
     SysMonitor m_materialChangeMonitor;

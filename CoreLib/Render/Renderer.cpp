@@ -1756,6 +1756,16 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                 scene,
                 lights);
 
+            std::cout << "lightCount=" << lights.info.x
+                      << " ambient=(" << lights.ambient.x << "," << lights.ambient.y << "," << lights.ambient.z << "," << lights.ambient.w << ")\n";
+            if (lights.info.x > 0)
+            {
+                const auto& L = lights.lights[0];
+                std::cout << "L0 pos_type=(" << L.pos_type.x << "," << L.pos_type.y << "," << L.pos_type.z << "," << L.pos_type.w << ") "
+                          << "dir_range=(" << L.dir_range.x << "," << L.dir_range.y << "," << L.dir_range.z << "," << L.dir_range.w << ") "
+                          << "color_intensity=(" << L.color_intensity.x << "," << L.color_intensity.y << "," << L.color_intensity.z << "," << L.color_intensity.w << ")\n";
+            }
+
             vpUbo.lightBuffers[frameIdx].upload(&lights, sizeof(lights));
         }
 

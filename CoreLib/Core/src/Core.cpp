@@ -133,6 +133,11 @@ void Core::mouseReleaseEvent(Viewport* vp, CoreEvent event) noexcept
 
 void Core::mouseWheelEvent(Viewport* vp, CoreEvent event) noexcept
 {
+    if (!vp)
+        return;
+
+    // Typical: wheel = zoom/dolly. Treat both axes so trackpads feel right.
+    vp->zoom(event.deltaX, event.deltaY);
 }
 
 bool Core::keyPressEvent(Viewport* vp, CoreEvent event) noexcept

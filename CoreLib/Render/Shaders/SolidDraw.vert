@@ -8,18 +8,20 @@ layout(location = 1) in vec3 norm;
 layout(location = 2) in vec2 uvCo;
 layout(location = 3) in int  inMaterialId;
 
-layout(set = 0, binding = 0) uniform MvpUBO {
+layout(set = 0, binding = 0) uniform MvpUBO
+{
     mat4 proj;
     mat4 view;
 } ubo;
 
-layout(push_constant) uniform PC {
+layout(push_constant) uniform PC
+{
     mat4 model;
     vec4 color;
 } pc;
 
-layout(location = 0) out vec3 pos;
-layout(location = 1) out vec3 nrm;
+layout(location = 0) out vec3 pos;             // view-space position
+layout(location = 1) out vec3 nrm;             // view-space normal
 layout(location = 2) out vec2 vUv;
 layout(location = 3) flat out int vMaterialId;
 
@@ -36,8 +38,8 @@ void main()
     mat3 normMtx = transpose(inverse(mat3(ubo.view * pc.model)));
     nrm = normalize(normMtx * norm);
 
-    vUv          = uvCo;
-    vMaterialId  = inMaterialId;   // Pass through
+    vUv         = uvCo;
+    vMaterialId = inMaterialId;
 
     gl_Position = ubo.proj * viewPos;
 }

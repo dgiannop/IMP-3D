@@ -320,8 +320,6 @@ void ViewportRenderWindow::mouseMoveEvent(QMouseEvent* e)
         m_core->mouseDragEvent(m_viewport, ev);
     else
         m_core->mouseMoveEvent(m_viewport, ev);
-
-    requestUpdateOnce();
 }
 
 void ViewportRenderWindow::mouseReleaseEvent(QMouseEvent* e)
@@ -330,7 +328,6 @@ void ViewportRenderWindow::mouseReleaseEvent(QMouseEvent* e)
         return;
 
     m_core->mouseReleaseEvent(m_viewport, createCoreEvent(e));
-    requestUpdateOnce();
 }
 
 void ViewportRenderWindow::mouseDoubleClickEvent(QMouseEvent* e)
@@ -348,7 +345,6 @@ void ViewportRenderWindow::wheelEvent(QWheelEvent* e)
     ev.deltaY    = e->angleDelta().y() / 120.0f;
 
     m_core->mouseWheelEvent(m_viewport, ev);
-    requestUpdateOnce();
 }
 
 //============================================================
@@ -413,7 +409,6 @@ void ViewportRenderWindow::tickMove() noexcept
         if (rotX != 0.0f || rotY != 0.0f)
             m_core->viewportRotate(m_viewport, rotX, rotY);
 
-        requestUpdateOnce();
         return;
     }
 
@@ -434,7 +429,6 @@ void ViewportRenderWindow::tickMove() noexcept
         if (panY != 0.0f)
             m_core->viewportPan(m_viewport, 0.0f, panY);
 
-        requestUpdateOnce();
         return;
     }
 
@@ -442,7 +436,7 @@ void ViewportRenderWindow::tickMove() noexcept
     // No modifiers: strafe + dolly
     // ------------------------------------------------------------
     const float panSpeedPxPerSec = 400.0f;
-    const float zoomUnitsPerSec  = 400.0f;
+    const float zoomUnitsPerSec  = 500.0f;
 
     float panX  = 0.0f;
     float zoomX = 0.0f;
@@ -462,8 +456,6 @@ void ViewportRenderWindow::tickMove() noexcept
 
     if (zoomX != 0.0f)
         m_core->viewportZoom(m_viewport, zoomX, 0.0f);
-
-    requestUpdateOnce();
 }
 
 //============================================================

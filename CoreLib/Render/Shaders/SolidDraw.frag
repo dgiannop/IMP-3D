@@ -1,13 +1,18 @@
 //==============================================================
-// SolidDraw.frag
+// SolidDraw.frag  (Modeling Solid: a pinch more Lambert contrast)
 //==============================================================
 #version 450
 
-layout(location = 0) in vec3 pos;
-layout(location = 1) in vec3 nrm;
-layout(location = 2) in vec2 vUv;
+layout(location = 0) in vec3 pos; // view-space position
+layout(location = 1) in vec3 nrm; // view-space normal
+layout(location = 2) in vec2 vUv; // unused (kept to match vert)
 layout(location = 3) flat in int vMaterialId;
 
+layout(location = 0) out vec4 fragColor;
+
+// ------------------------------
+// Materials (baseColor only)
+// ------------------------------
 struct GpuMaterial
 {
     vec3  baseColor;
@@ -32,69 +37,70 @@ layout(std430, set = 1, binding = 0) readonly buffer MaterialBuffer
     GpuMaterial materials[];
 };
 
-const int kMaxTextureCount = 512;
-layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
-
-// ------------------------------------------------------------
-// Lights UBO (std140) - set=0 binding=1
-// Matches your C++ GpuLightsUBO layout (vec4-based).
-// ------------------------------------------------------------
+// ------------------------------
+// Lights UBO (use ONLY light 0 = headlight)
+// ------------------------------
 struct GpuLight
 {
-    vec4 pos_type;         // xyz = pos (VS) or unused, w = type
-    vec4 dir_range;        // xyz = dir (VS), w = range/unused
-    vec4 color_intensity;  // rgb = color, a = intensity
-    vec4 spot_params;      // x = innerCos, y = outerCos, zw unused
+    vec4 pos_type;
+    vec4 dir_range;       // xyz = light forward dir (view), so L = -dir_range.xyz
+    vec4 color_intensity; // rgb, a = intensity
+    vec4 spot_params;
 };
 
 layout(std140, set = 0, binding = 1) uniform LightsUBO
 {
-    uvec4 info;     // x = lightCount
-    vec4  ambient;  // rgb = ambient, a = ambientStrength (optional)
+    uvec4   info;
+    vec4    ambient; // rgb ignored here, a ignored here
     GpuLight lights[64];
 } uLights;
 
-layout(location = 0) out vec4 fragColor;
+float saturate(float x) { return clamp(x, 0.0, 1.0); }
 
 void main()
 {
     vec3 N = normalize(nrm);
+    vec3 V = normalize(-pos);
 
-    // --- material base ---
-    int id = clamp(vMaterialId, 0, int(materials.length()) - 1);
-    GpuMaterial mat = materials[id];
+    int matCount = int(materials.length());
+    int id       = (matCount > 0) ? clamp(vMaterialId, 0, matCount - 1) : 0;
+    vec3 base    = (matCount > 0) ? materials[id].baseColor : vec3(0.8);
 
-    vec3 base = mat.baseColor;
+    // Headlight (light 0) or fallback
+    vec3  L = normalize(vec3(0.25, 0.35, 0.90));
+    vec3  c = vec3(1.0);
+    float I = 1.0;
 
-    if (mat.baseColorTexture >= 0)
-        base *= texture(uTextures[mat.baseColorTexture], vUv).rgb;
-
-    // --- lighting ---
-    float ambientTerm = 0.25; // fallback
-    if (uLights.ambient.a > 0.0)
-        ambientTerm = uLights.ambient.a;
-
-    vec3 lit = base * ambientTerm;
-
-    uint lightCount = uLights.info.x;
-    for (uint i = 0u; i < lightCount; ++i)
+    if (uLights.info.x > 0u)
     {
-        // type encoded in pos_type.w
-        uint t = uint(uLights.lights[i].pos_type.w + 0.5);
-
-        // Directional only for now
-        if (t == 0u)
-        {
-            vec3 L = normalize(uLights.lights[i].dir_range.xyz); // VIEW SPACE
-            float NdotL = max(dot(N, L), 0.0);
-            NdotL = pow(NdotL, 0.75); // soften falloff
-
-            vec3  c = uLights.lights[i].color_intensity.rgb;
-            float I = uLights.lights[i].color_intensity.a;
-
-            lit += base * (c * (I * NdotL));
-        }
+        L = normalize(-uLights.lights[0].dir_range.xyz);
+        c = uLights.lights[0].color_intensity.rgb;
+        I = uLights.lights[0].color_intensity.a;
     }
+
+    float NdotL = saturate(dot(N, L));
+
+    // Lambert (self shadowing)
+    float diff = pow(NdotL, 1.65); // This is the knob I’d expose as “Solid Contrast” if I ever add a UI slider.
+
+    // Lower baseline so shapes don't wash out
+    vec3 lit = base * 0.14;
+
+    // Very subtle hemisphere shaping to keep the scene readable
+    float hemi = saturate(dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5);
+    lit *= mix(0.88, 1.0, hemi);
+
+    // Diffuse
+    lit += base * (c * (I * diff)) * 0.90;
+
+    // Tiny spec kick (Small so it doesn't look "shaded mode")
+    vec3  H    = normalize(V + L);
+    float spec = pow(saturate(dot(N, H)), 48.0) * 0.035;
+    lit += (c * I) * spec;
+
+    // Rim: reduce a bit so it doesn't flatten the shadows
+    float rim = pow(1.0 - saturate(dot(N, V)), 3.0);
+    lit += base * rim * 0.020;
 
     fragColor = vec4(lit, 1.0);
 }

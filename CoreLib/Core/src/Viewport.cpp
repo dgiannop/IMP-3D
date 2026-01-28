@@ -94,10 +94,23 @@ void Viewport::pan(float deltaX, float deltaY) noexcept
     m_changeCounter->change();
 }
 
-void Viewport::zoom(float deltaX, float /*deltaY*/) noexcept
+void Viewport::zoom(float deltaX, float deltaY) noexcept
 {
-    // Zoom modifies camera distance. The scale factor is UI-tuned.
-    m_dist += deltaX / 100.0f;
+    // Treat vertical mouse movement or wheel as zoom
+    const float delta = (std::abs(deltaY) > std::abs(deltaX)) ? deltaY : deltaX;
+
+    // Exponential zoom: scale distance multiplicatively
+    const float zoomSpeed = 0.0015f; // tweak to taste
+    const float factor    = std::exp(-delta * zoomSpeed);
+
+    m_dist *= factor;
+
+    // Clamp to avoid crossing through the origin
+    const float minDist = 0.1f;
+    const float maxDist = 100000.f;
+
+    m_dist = glm::clamp(m_dist, -maxDist, -minDist);
+
     m_changeCounter->change();
 }
 

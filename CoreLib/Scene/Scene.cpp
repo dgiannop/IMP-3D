@@ -1,5 +1,8 @@
 #include "Scene.hpp"
 
+#include <iostream>
+
+#include "LightHandler.hpp"
 #include "Renderer.hpp"
 #include "Viewport.hpp"
 
@@ -13,7 +16,8 @@ Scene::Scene() : m_renderer{std::make_unique<Renderer>()},
                  m_showGrid{true},
                  m_sceneQueryCounter{std::make_shared<SysCounter>()},
                  m_sceneQueryMonitor{m_sceneQueryCounter},
-                 m_contentChangeCounter{std::make_shared<SysCounter>()}
+                 m_contentChangeCounter{std::make_shared<SysCounter>()},
+                 m_lightHandler{std::make_unique<LightHandler>()}
 {
     m_materialHandler->changeCounter()->addParent(m_sceneChangeCounter);
     m_imageHandler->changeCounter()->addParent(m_sceneChangeCounter);
@@ -67,6 +71,10 @@ void Scene::clear()
     m_sceneObjects.clear();
 
     m_materialHandler->clear();
+
+    if (m_lightHandler)
+        m_lightHandler->clear();
+
     // Ensure default material at index 0
     m_materialHandler->createMaterial("Default");
 
@@ -206,6 +214,16 @@ TextureHandler* Scene::textureHandler() noexcept
     return m_textureHandler.get();
 }
 
+LightHandler* Scene::lightHandler() noexcept
+{
+    return m_lightHandler.get();
+}
+
+const LightHandler* Scene::lightHandler() const noexcept
+{
+    return m_lightHandler.get();
+}
+
 Renderer* Scene::renderer() noexcept
 {
     return m_renderer.get();
@@ -340,6 +358,8 @@ void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
 
 void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
+    static uint64_t aaa = 0;
+    std::cerr << "-------------- RENDER # " << aaa++ << std::endl;
     vp->apply();
     m_renderer->render(vp, this, fc);
 }

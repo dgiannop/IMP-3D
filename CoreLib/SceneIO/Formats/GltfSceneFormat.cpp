@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "Light.hpp"
+#include "LightHandler.hpp"
 #include "MaterialHandler.hpp"
 #include "Scene.hpp"
 #include "SceneMesh.hpp"
@@ -110,7 +112,6 @@ namespace
     // ------------------------------------------------------------
     // TinyGLTF image loader override:
     // Store encoded bytes (PNG/JPG/KTX2/etc) and do NOT stb-decode.
-    // This prevents "Unknown image format. STB cannot decode..." for KTX2.
     // ------------------------------------------------------------
     static bool storeEncodedImageLoader(tinygltf::Image*     image,
                                         const int            image_idx,
@@ -135,16 +136,11 @@ namespace
             return false;
         }
 
-        // Always store the encoded payload.
-        // We deliberately mark width/height/component as 0 so caller knows it's NOT decoded pixels.
         image->image.assign(bytes, bytes + size);
         image->width     = 0;
         image->height    = 0;
         image->component = 0;
         image->bits      = 0;
-
-        // Keep mimeType if present; if absent, it may still decode fine via stb/ktx later.
-        // No failure here; decoding happens in ImageHandler/Image later.
         return true;
     }
 
@@ -414,16 +410,13 @@ namespace
 
     static int resolveTextureImageIndex(const tinygltf::Model& model, const tinygltf::Texture& tex)
     {
-        // Normal glTF path
         if (tex.source >= 0 && tex.source < static_cast<int>(model.images.size()))
             return tex.source;
 
-        // KTX2 via KHR_texture_basisu
         int idx = -1;
         if (getExtensionSourceImageIndex(tex, "KHR_texture_basisu", idx))
             return idx;
 
-        // WebP via EXT_texture_webp
         if (getExtensionSourceImageIndex(tex, "EXT_texture_webp", idx))
             return idx;
 
@@ -431,11 +424,226 @@ namespace
     }
 
     // ------------------------------------------------------------
+    // KHR_lights_punctual import (minimal)
+    // ------------------------------------------------------------
+    struct GltfPunctualLightDef
+    {
+        std::string name         = {};
+        LightType   type         = LightType::Point;
+        glm::vec3   color        = glm::vec3(1.0f);
+        float       intensity    = 1.0f;
+        float       range        = 0.0f; // 0 = infinite
+        float       innerConeRad = 0.0f;
+        float       outerConeRad = 0.78539816339f;
+    };
+
+    static bool parseGltfPunctualLightDefs(const tinygltf::Model&             model,
+                                           std::vector<GltfPunctualLightDef>& outDefs,
+                                           SceneIOReport&                     report)
+    {
+        outDefs.clear();
+
+        const auto itExt = model.extensions.find("KHR_lights_punctual");
+        if (itExt == model.extensions.end())
+            return false;
+
+        const tinygltf::Value& ext = itExt->second;
+        if (!ext.IsObject())
+        {
+            report.warning("glTF: KHR_lights_punctual extension is not an object.");
+            return false;
+        }
+
+        const auto& obj = ext.Get<tinygltf::Value::Object>();
+        const auto  itL = obj.find("lights");
+        if (itL == obj.end())
+            return false;
+
+        const tinygltf::Value& vLights = itL->second;
+        if (!vLights.IsArray())
+        {
+            report.warning("glTF: KHR_lights_punctual.lights is not an array.");
+            return false;
+        }
+
+        const auto& arr = vLights.Get<tinygltf::Value::Array>();
+        outDefs.reserve(arr.size());
+
+        report.info("glTF: KHR_lights_punctual light definitions = " + std::to_string(arr.size()) + ".");
+
+        for (size_t i = 0; i < arr.size(); ++i)
+        {
+            const tinygltf::Value& v = arr[i];
+            if (!v.IsObject())
+                continue;
+
+            const auto& o = v.Get<tinygltf::Value::Object>();
+
+            GltfPunctualLightDef d{};
+            d.name = makeName(
+                (o.find("name") != o.end() && o.at("name").IsString()) ? o.at("name").Get<std::string>() : std::string{},
+                static_cast<int>(i),
+                "Light_");
+
+            // type
+            if (auto itT = o.find("type"); itT != o.end() && itT->second.IsString())
+            {
+                const std::string t = itT->second.Get<std::string>();
+                if (t == "directional")
+                    d.type = LightType::Directional;
+                else if (t == "spot")
+                    d.type = LightType::Spot;
+                else
+                    d.type = LightType::Point;
+            }
+
+            // color (default 1,1,1)
+            if (auto itC = o.find("color"); itC != o.end() && itC->second.IsArray())
+            {
+                const auto& ca = itC->second.Get<tinygltf::Value::Array>();
+                if (ca.size() >= 3 &&
+                    ca[0].IsNumber() && ca[1].IsNumber() && ca[2].IsNumber())
+                {
+                    d.color = glm::vec3(
+                        static_cast<float>(ca[0].Get<double>()),
+                        static_cast<float>(ca[1].Get<double>()),
+                        static_cast<float>(ca[2].Get<double>()));
+                }
+            }
+
+            // intensity (default 1)
+            if (auto itI = o.find("intensity"); itI != o.end() && itI->second.IsNumber())
+                d.intensity = static_cast<float>(itI->second.Get<double>());
+
+            // range (optional)
+            if (auto itR = o.find("range"); itR != o.end() && itR->second.IsNumber())
+                d.range = static_cast<float>(itR->second.Get<double>());
+
+            // spot params (only for spot)
+            if (auto itS = o.find("spot"); itS != o.end() && itS->second.IsObject())
+            {
+                const auto& so = itS->second.Get<tinygltf::Value::Object>();
+
+                if (auto itIn = so.find("innerConeAngle"); itIn != so.end() && itIn->second.IsNumber())
+                    d.innerConeRad = static_cast<float>(itIn->second.Get<double>());
+
+                if (auto itOut = so.find("outerConeAngle"); itOut != so.end() && itOut->second.IsNumber())
+                    d.outerConeRad = static_cast<float>(itOut->second.Get<double>());
+            }
+
+            outDefs.push_back(d);
+
+            // log
+            {
+                const char* tn =
+                    (d.type == LightType::Directional) ? "directional" : (d.type == LightType::Spot) ? "spot"
+                                                                                                     : "point";
+
+                report.info("glTF: Light[" + std::to_string(i) + "] '" + d.name + "' type=" + tn +
+                            " color=(" + std::to_string(d.color.x) + "," + std::to_string(d.color.y) + "," + std::to_string(d.color.z) + ")" +
+                            " intensity=" + std::to_string(d.intensity));
+            }
+        }
+
+        return !outDefs.empty();
+    }
+
+    static bool nodeLightIndexKHR(const tinygltf::Node& n, int& outLightIndex)
+    {
+        outLightIndex = -1;
+
+        const auto itNodeExt = n.extensions.find("KHR_lights_punctual");
+        if (itNodeExt == n.extensions.end())
+            return false;
+
+        const tinygltf::Value& ne = itNodeExt->second;
+        if (!ne.IsObject())
+            return false;
+
+        const auto& nobj = ne.Get<tinygltf::Value::Object>();
+        const auto  itLi = nobj.find("light");
+        if (itLi == nobj.end())
+            return false;
+
+        const tinygltf::Value& v = itLi->second;
+        if (!v.IsInt())
+            return false;
+
+        outLightIndex = v.Get<int>();
+        return outLightIndex >= 0;
+    }
+
+    static void importNodeLightsToScene(Scene*                                   scene,
+                                        const tinygltf::Model&                   model,
+                                        const std::vector<glm::mat4>&            world,
+                                        const std::vector<GltfPunctualLightDef>& defs,
+                                        SceneIOReport&                           report)
+    {
+        if (!scene)
+            return;
+
+        LightHandler* lh = scene->lightHandler();
+        if (!lh)
+            return;
+
+        int created = 0;
+
+        for (size_t nodeIdx = 0; nodeIdx < model.nodes.size(); ++nodeIdx)
+        {
+            const tinygltf::Node& n = model.nodes[nodeIdx];
+
+            int li = -1;
+            if (!nodeLightIndexKHR(n, li))
+                continue;
+
+            if (li < 0 || li >= static_cast<int>(defs.size()))
+            {
+                report.warning("glTF: Node[" + std::to_string(nodeIdx) + "] references out-of-range Light[" + std::to_string(li) + "].");
+                continue;
+            }
+
+            const GltfPunctualLightDef& d = defs[li];
+
+            const std::string nodeName  = makeName(n.name, static_cast<int>(nodeIdx), "Node_");
+            const std::string lightName = nodeName.empty() ? d.name : nodeName;
+
+            const glm::mat4 M = world[nodeIdx];
+
+            // position = translation of node
+            const glm::vec3 pos = glm::vec3(M[3][0], M[3][1], M[3][2]);
+
+            // direction = -Z axis transformed by node rotation (glTF lights point along -Z)
+            const glm::vec3 fwd = glm::normalize(glm::vec3(M * glm::vec4(0, 0, -1, 0)));
+
+            Light l{};
+            l.name             = lightName;
+            l.type             = d.type;
+            l.position         = pos;
+            l.direction        = fwd;
+            l.color            = d.color;
+            l.intensity        = d.intensity;
+            l.range            = d.range;
+            l.spotInnerConeRad = d.innerConeRad;
+            l.spotOuterConeRad = d.outerConeRad;
+            l.enabled          = true;
+
+            const LightId id = lh->createLight(l);
+            if (id != kInvalidLightId)
+            {
+                ++created;
+                report.info("glTF: Node[" + std::to_string(nodeIdx) + "] '" + nodeName + "' references Light[" + std::to_string(li) + "]; created Scene LightId=" + std::to_string(id) + ".");
+            }
+        }
+
+        report.info("glTF: node light references = " + std::to_string(created) + ".");
+    }
+
+    // ------------------------------------------------------------
     // Texture cache + importer
     // ------------------------------------------------------------
     struct GltfTextureCache
     {
-        std::vector<ImageId> texToImage; // glTF texture index -> ImageId
+        std::vector<ImageId> texToImage;
     };
 
     static ImageId importGltfTextureToImageId(Scene*                       scene,
@@ -475,7 +683,6 @@ namespace
         const tinygltf::Image& img      = model.images[imgIndex];
         const std::string      nameHint = makeName(img.name, imgIndex, "Image_");
 
-        // 1) External path URI
         if (!img.uri.empty())
         {
             if (img.uri.rfind("data:", 0) == 0)
@@ -497,7 +704,6 @@ namespace
             return id;
         }
 
-        // 2) Embedded image with bufferView (often encoded PNG/JPG in GLB)
         if (img.bufferView >= 0 && img.bufferView < static_cast<int>(model.bufferViews.size()))
         {
             const tinygltf::BufferView& bv = model.bufferViews[img.bufferView];
@@ -528,8 +734,6 @@ namespace
             }
         }
 
-        // 3) Encoded bytes stored by our TinyGLTF image loader override
-        //    (img.image contains encoded payload, img.width/img.height == 0)
         if (!img.image.empty() && (img.width <= 0 || img.height <= 0))
         {
             const ImageId id = ih->loadFromEncodedMemory(
@@ -547,7 +751,6 @@ namespace
             return kInvalidImageId;
         }
 
-        // 4) Decoded pixels (if TinyGLTF decoded somehow into img.image + width/height/component)
         if (!img.image.empty() && img.width > 0 && img.height > 0 && img.component > 0)
         {
             const ImageId id =
@@ -621,7 +824,6 @@ namespace
 
         Material& dst = mh->material(matId);
 
-        // Flags
         dst.alphaMode(toAlphaMode(gm.alphaMode));
         dst.doubleSided(gm.doubleSided);
 
@@ -630,7 +832,6 @@ namespace
             report.info("glTF: material '" + dst.name() + "' alphaMode=MASK alphaCutoff=" + std::to_string(gm.alphaCutoff));
         }
 
-        // Emissive factor
         if (gm.emissiveFactor.size() == 3)
         {
             const glm::vec3 e{
@@ -643,7 +844,6 @@ namespace
             dst.emissiveIntensity(maxc > 0.0f ? 1.0f : 0.0f);
         }
 
-        // PBR MR
         const tinygltf::PbrMetallicRoughness& pbr = gm.pbrMetallicRoughness;
 
         if (pbr.baseColorFactor.size() == 4)
@@ -666,7 +866,6 @@ namespace
         dst.metallic(static_cast<float>(pbr.metallicFactor));
         dst.roughness(static_cast<float>(pbr.roughnessFactor));
 
-        // Textures
         if (pbr.baseColorTexture.index >= 0)
         {
             const ImageId id = importGltfTextureToImageId(scene, model, pbr.baseColorTexture.index, baseDir, texCache, report);
@@ -803,20 +1002,6 @@ bool GltfSceneFormat::load(Scene*                       scene,
         return false;
     }
 
-    if (model.scenes.empty())
-    {
-        report.warning("glTF: file contains no scenes. Nothing to import.");
-        report.status = SceneIOStatus::Ok;
-        return true;
-    }
-
-    // Choose scene
-    int sceneIndex = model.defaultScene;
-    if (sceneIndex < 0 || sceneIndex >= static_cast<int>(model.scenes.size()))
-        sceneIndex = 0;
-
-    const tinygltf::Scene& gltfScene = model.scenes[sceneIndex];
-
     // Base directory for external image URIs
     const std::filesystem::path baseDir = filePath.parent_path();
 
@@ -826,10 +1011,49 @@ bool GltfSceneFormat::load(Scene*                       scene,
     std::vector<glm::mat4> world;
     world.resize(model.nodes.size(), glm::mat4(1.0f));
 
-    for (int root : gltfScene.nodes)
+    if (!model.scenes.empty())
     {
-        buildWorldMatrices(model, root, glm::mat4(1.0f), world);
+        int sceneIndex = model.defaultScene;
+        if (sceneIndex < 0 || sceneIndex >= static_cast<int>(model.scenes.size()))
+            sceneIndex = 0;
+
+        const tinygltf::Scene& gltfScene = model.scenes[sceneIndex];
+        for (int root : gltfScene.nodes)
+        {
+            buildWorldMatrices(model, root, glm::mat4(1.0f), world);
+        }
     }
+
+    // ---------------------------------------------------------
+    // Lights (KHR_lights_punctual)
+    // ---------------------------------------------------------
+    {
+        std::vector<GltfPunctualLightDef> lightDefs;
+        if (parseGltfPunctualLightDefs(model, lightDefs, report))
+        {
+            importNodeLightsToScene(scene, model, world, lightDefs, report);
+        }
+        else
+        {
+            report.info("glTF: KHR_lights_punctual not present (0 light definitions).");
+        }
+    }
+
+    // ---------------------------------------------------------
+    // Choose scene (for mesh import)
+    // ---------------------------------------------------------
+    if (model.scenes.empty())
+    {
+        report.warning("glTF: file contains no scenes. Nothing to import.");
+        report.status = SceneIOStatus::Ok;
+        return true;
+    }
+
+    int sceneIndex = model.defaultScene;
+    if (sceneIndex < 0 || sceneIndex >= static_cast<int>(model.scenes.size()))
+        sceneIndex = 0;
+
+    const tinygltf::Scene& gltfScene = model.scenes[sceneIndex];
 
     // ---------------------------------------------------------
     // Caches
@@ -843,7 +1067,7 @@ bool GltfSceneFormat::load(Scene*                       scene,
     int importedMeshCount = 0;
 
     // If you flip images at load time (we do: flipY=true), usually you do NOT flip UVs.
-    // But different pipelines differ. If textures are upside-down, set this to true.
+    // If textures are upside-down, set this to true.
     const bool flipUvY = true;
 
     for (size_t nodeIdx = 0; nodeIdx < model.nodes.size(); ++nodeIdx)
@@ -991,13 +1215,7 @@ bool GltfSceneFormat::load(Scene*                       scene,
             // Material
             uint32_t matIndex = 0;
             if (prim.material >= 0)
-                matIndex = resolveMaterialIndex(scene,
-                                                model,
-                                                prim.material,
-                                                baseDir,
-                                                matCache,
-                                                texCache,
-                                                report);
+                matIndex = resolveMaterialIndex(scene, model, prim.material, baseDir, matCache, texCache, report);
 
             // Create SysMesh verts for this primitive (no dedupe; simple & correct)
             std::vector<int32_t> vRemap;

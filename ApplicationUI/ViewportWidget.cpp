@@ -125,8 +125,8 @@ QWidget* ViewportWidget::renderHost() const
 
 void ViewportWidget::requestRender()
 {
-    if (m_container)
-        m_container->setFocus(Qt::OtherFocusReason);
+    // if (m_container)
+    // m_container->setFocus(Qt::OtherFocusReason);
     if (m_window)
         m_window->requestUpdate();
 }
@@ -137,9 +137,6 @@ void ViewportWidget::cmbViewTypeChanged(int index)
         return;
 
     m_core->viewMode(m_viewport, static_cast<ViewMode>(index));
-
-    if (m_window)
-        m_window->requestUpdate();
 }
 
 void ViewportWidget::cmbDrawTypeChanged(int index)
@@ -148,9 +145,6 @@ void ViewportWidget::cmbDrawTypeChanged(int index)
         return;
 
     m_core->drawMode(m_viewport, static_cast<DrawMode>(index));
-
-    if (m_window)
-        m_window->requestUpdate();
 }
 
 void ViewportWidget::scrollButtonAction(QWidget* sender, QPoint delta)
@@ -167,7 +161,4 @@ void ViewportWidget::scrollButtonAction(QWidget* sender, QPoint delta)
         m_core->viewportZoom(m_viewport, dx, dy);
     if (sender == ui->btnRotate)
         m_core->viewportRotate(m_viewport, dx, dy);
-
-    if (m_window)
-        m_window->requestUpdate();
 }
