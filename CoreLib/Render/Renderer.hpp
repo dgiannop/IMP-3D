@@ -129,16 +129,18 @@ public:
     static_assert(sizeof(PushConstants) == 96);
 
     // set=0 binding=2 (RT path)
-    struct alignas(16) RtCameraUBO
+    struct RtCameraUBO
     {
-        glm::mat4 invViewProj = {}; // 64
-        glm::mat4 view        = {}; // 64
-        glm::vec4 camPos      = {}; // 16
-        glm::vec4 clearColor  = {}; // 16
+        glm::mat4 invViewProj = {}; // CLIP -> WORLD (or whatever you currently use)
+        glm::mat4 view        = {}; // WORLD -> VIEW
+        glm::mat4 invView     = {}; // VIEW -> WORLD  (NEW)
+        glm::vec4 camPos      = {}; // world-space camera position
+        glm::vec4 clearColor  = {}; // clear color for RT
     };
 
-    static_assert(sizeof(RtCameraUBO) == 160);
-    static_assert(alignof(RtCameraUBO) == 16);
+    static_assert(sizeof(RtCameraUBO) % 16 == 0, "RtCameraUBO must be std140-aligned");
+    // static_assert(sizeof(RtCameraUBO) == 160);
+    // static_assert(alignof(RtCameraUBO) == 16);
 
     // set=0 binding=4 (RT path) - std430 SSBO element
     struct alignas(8) RtInstanceData

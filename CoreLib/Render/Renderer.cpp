@@ -2287,6 +2287,7 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
         RtCameraUBO cam = {};
         cam.invViewProj = glm::inverse(vp->projection() * vp->view());
         cam.view        = vp->view();
+        cam.invView     = glm::inverse(vp->view());
         cam.camPos      = glm::vec4(vp->cameraPosition(), 1.0f);
         cam.clearColor  = vp->clearColor();
         rtv.cameraBuffers[fc.frameIndex].upload(&cam, sizeof(cam));

@@ -16,9 +16,10 @@ layout(set = 2, binding = 2) uniform accelerationStructureEXT u_tlas;
 // Camera: set=0, binding=2
 layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
-    mat4 invViewProj;
-    mat4 view;
-    vec4 camPos;
+    mat4 invViewProj; // CLIP -> WORLD
+    mat4 view;        // WORLD -> VIEW
+    mat4 invView;     // VIEW -> WORLD (NEW)
+    vec4 camPos;      // world
     vec4 clearColor;
 } u_cam;
 

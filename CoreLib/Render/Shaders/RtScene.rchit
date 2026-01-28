@@ -47,6 +47,7 @@ layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
     mat4 view;        // WORLD->VIEW
+    mat4 invView;     // VIEW->WORLD (NEW)
     vec4 camPos;      // world
     vec4 clearColor;
 } u_cam;
