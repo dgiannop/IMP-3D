@@ -55,8 +55,8 @@ namespace vkrt
 
         // Group counts for this pipeline (used by SBT creation).
         static constexpr uint32_t kRaygenCount   = 1;
-        static constexpr uint32_t kMissCount     = 1;
-        static constexpr uint32_t kHitCount      = 1;
+        static constexpr uint32_t kMissCount     = 2;
+        static constexpr uint32_t kHitCount      = 2;
         static constexpr uint32_t kCallableCount = 0;
         static constexpr uint32_t kGroupCount =
             kRaygenCount + kMissCount + kHitCount + kCallableCount;

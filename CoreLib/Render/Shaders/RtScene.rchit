@@ -8,6 +8,12 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(location = 0) rayPayloadInEXT vec4 payload;
+
+// IMPORTANT:
+// - payloadInEXT is for the incoming primary ray.
+// - rayPayloadEXT is for rays we trace FROM this shader (shadow rays).
+layout(location = 1) rayPayloadEXT uint shadowHit;
+
 hitAttributeEXT vec2 attribs;
 
 // ------------------------------------------------------------
@@ -18,6 +24,11 @@ layout(buffer_reference, scalar) readonly buffer IdxBuf   { uint idx[]; }; // tr
 layout(buffer_reference, scalar) readonly buffer NrmBuf   { vec4 n[]; };   // triCount*3
 layout(buffer_reference, scalar) readonly buffer UvBuf    { vec4 uv[]; };  // triCount*3
 layout(buffer_reference, scalar) readonly buffer MatIdBuf { uint m[]; };   // triCount
+
+// ------------------------------------------------------------
+// TLAS (MATCH rgen: set=2, binding=2)
+// ------------------------------------------------------------
+layout(set = 2, binding = 2) uniform accelerationStructureEXT u_tlas;
 
 // ------------------------------------------------------------
 // Per-instance data (MUST match CPU RtInstanceData exactly)
@@ -54,11 +65,6 @@ layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 
 // ------------------------------------------------------------
 // Lights (frame set: set=0, binding=1)
-// IMPORTANT: matches CPU:
-//   - pos_type.xyz = light position in VIEW (point/spot)
-//   - pos_type.w   = type (0 dir, 1 point, 2 spot)
-//   - dir_range.xyz = light forward dir in VIEW (dir/spot)
-//   - dir_range.w   = range (point/spot, 0 => infinite)
 // ------------------------------------------------------------
 struct GpuLight
 {
@@ -141,7 +147,6 @@ const uint kLightType_Spot        = 2u;
 
 uint light_type(const GpuLight L)
 {
-    // pos_type.w stores type as float (vec4). Round safely.
     return uint(L.pos_type.w + 0.5);
 }
 
@@ -207,13 +212,46 @@ LightWorld light_to_world(const GpuLight L)
     return o;
 }
 
+// ------------------------------------------------------------
+// Shadow trace (Directional only, hard shadows)
+// Pipeline layout:
+// - MissIndex: 0 = primary miss (RtScene.rmiss), 1 = shadow miss (RtShadow.rmiss)
+// - Hit groups per ray type: 2 (primary hit, shadow hit) => stride = 2
+// - For shadow ray: sbtRecordOffset = 1 (shadow hit group), missIndex = 1
+// ------------------------------------------------------------
+float trace_shadow_dir(vec3 Pw, vec3 Nw, vec3 Lw_dir)
+{
+    const float kEps = 1e-3;
+
+    vec3 org = Pw + Nw * kEps;
+    vec3 dir = normalize(Lw_dir);
+
+    shadowHit = 0u;
+
+    traceRayEXT(
+        u_tlas,
+        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+        0xFF,
+        1, // sbtRecordOffset: shadow hit group (0=primary, 1=shadow)
+        2, // sbtRecordStride: number of hit groups per ray type
+        1, // missIndex: shadow miss
+        org,
+        0.001,
+        dir,
+        1e30,
+        1  // payload location = 1
+    );
+
+    return (shadowHit == 0u) ? 1.0 : 0.0;
+}
+
 void main()
 {
     const uint instId = gl_InstanceCustomIndexEXT;
 
     if (instId >= u_inst.inst.length())
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0); // magenta: bad instance index
+        payload = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
@@ -241,13 +279,12 @@ void main()
     // World-space hit point
     vec3 Pw = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
-    // Triangle indices (padded uvec4 per tri)
+    // Triangle indices
     const uint base4 = prim * 4u;
     const uint ia = ind.idx[base4 + 0u];
     const uint ib = ind.idx[base4 + 1u];
     const uint ic = ind.idx[base4 + 2u];
 
-    // Vertex positions (assumed WORLD space in your current upload path)
     vec3 a = pos.p[ia].xyz;
     vec3 b = pos.p[ib].xyz;
     vec3 c = pos.p[ic].xyz;
@@ -257,7 +294,7 @@ void main()
     const float b2 = attribs.y;
     const float b0 = 1.0 - b1 - b2;
 
-    // Per-corner normals/uvs (assumed WORLD space, as uploaded)
+    // Per-corner normals/uvs
     const uint base3 = prim * 3u;
 
     vec3 n0 = nrm.n[base3 + 0u].xyz;
@@ -273,7 +310,7 @@ void main()
     vec2 uv2 = uvb.uv[base3 + 2u].xy;
     vec2 UV  = uv0 * b0 + uv1 * b1 + uv2 * b2;
 
-    // Convert to VIEW SPACE (match raster semantics)
+    // View-space for shading
     vec3 Pv = (u_cam.view * vec4(Pw, 1.0)).xyz;
     vec3 Nv = normalize(mat3(u_cam.view) * Nw);
     vec3 V  = normalize(-Pv);
@@ -314,7 +351,7 @@ void main()
     vec3  F0d = vec3(clamp(f0s, 0.02, 0.08));
     vec3  F0  = mix(F0d, albedo, metallic);
 
-    // Ambient (fallback if ambient.a is unset)
+    // Ambient
     float ambStrength = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
     vec3  ambient = uLights.ambient.rgb * ambStrength * albedo * ao;
 
@@ -330,24 +367,25 @@ void main()
 
     for (uint i = 0u; i < lightCount; ++i)
     {
-        float typeF = uLights.lights[i].pos_type.w;
-        uint  t     = uint(typeF + 0.5); // 0=Dir,1=Point,2=Spot
+        uint t = uint(uLights.lights[i].pos_type.w + 0.5);
 
         vec3  L = vec3(0.0);
         float atten = 1.0;
 
-        if (t == 0u) // Directional
+        if (t == 0u) // Directional (with shadows)
         {
-            // Directional (via view->world->view round-trip using invView)
             LightWorld lw = light_to_world(uLights.lights[i]);
 
-            // Surface->light direction in WORLD, then back to VIEW for shading
-            vec3 Lw = normalize(-lw.dirW);
+            vec3 Lw = normalize(-lw.dirW); // surface -> light in WORLD
+            float visibility = trace_shadow_dir(Pw, Nw, Lw);
+
+            // Shading L in VIEW
             L = normalize((u_cam.view * vec4(Lw, 0.0)).xyz);
+            atten *= visibility;
         }
-        else if (t == 1u) // Point
+        else if (t == 1u) // Point (no shadows yet)
         {
-            vec3 toLight = uLights.lights[i].pos_type.xyz - Pv; // view space
+            vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
             float d2 = max(dot(toLight, toLight), 1e-8);
             float d  = sqrt(d2);
             L = toLight / d;
@@ -363,7 +401,7 @@ void main()
                 atten = 1.0 / d2;
             }
         }
-        else if (t == 2u) // Spot
+        else if (t == 2u) // Spot (no shadows yet)
         {
             vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
             float d2 = max(dot(toLight, toLight), 1e-8);
@@ -381,8 +419,7 @@ void main()
                 atten = 1.0 / d2;
             }
 
-            // cone term
-            vec3  spotFwd = normalize(uLights.lights[i].dir_range.xyz); // light forward
+            vec3  spotFwd = normalize(uLights.lights[i].dir_range.xyz);
             float cosAng  = dot(-L, spotFwd);
 
             float innerCos = uLights.lights[i].spot_params.x;

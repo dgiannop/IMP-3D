@@ -255,35 +255,74 @@ namespace vkrt
             const size_t dst = static_cast<size_t>(dstOff);
             const size_t src = static_cast<size_t>(globalGroupIndex) * size_t(handleSize);
 
-            // Copy only handleSize bytes; the rest of the record stays zero (padding / inline data later).
             std::memcpy(sbtBytes.data() + dst,
                         rawHandles.data() + src,
                         size_t(handleSize));
 
-            // Optionally you could write inline data after handleSizeAligned,
-            // but we keep it empty for now.
             (void)handleSizeAligned;
         };
 
-        // IMPORTANT: Group order must match how you created the RT pipeline groups.
-        // Common convention:
-        //  - raygen groups first
-        //  - then miss
-        //  - then hit
-        //  - then callable
-        uint32_t g = 0;
+        // ------------------------------------------------------------
+        // Group index mapping
+        // ------------------------------------------------------------
+        // Default: assumes groups are contiguous:
+        //   [raygen...][miss...][hit...][callable...]
+        //
+        // BUT your pipeline is currently:
+        //   0 raygen
+        //   1 primary miss
+        //   2 primary hit
+        //   3 shadow miss
+        //   4 shadow hit
+        //
+        // So for the (1,2,2,0) case we must remap:
+        //   miss = [1,3]
+        //   hit  = [2,4]
+        //
+        // This fixes missIndex=1 / sbtRecordOffset=1 hangs.
+        std::vector<uint32_t> raygenGroups;
+        std::vector<uint32_t> missGroups;
+        std::vector<uint32_t> hitGroups;
+        std::vector<uint32_t> callableGroups;
 
+        raygenGroups.resize(raygenCount);
+        missGroups.resize(missCount);
+        hitGroups.resize(hitCount);
+        callableGroups.resize(callableCount);
+
+        // Default contiguous mapping
+        uint32_t g = 0;
         for (uint32_t i = 0; i < raygenCount; ++i)
-            writeRecord(m_layout.raygenOffset, m_layout.raygenStride, i, g++);
+            raygenGroups[i] = g++;
+        for (uint32_t i = 0; i < missCount; ++i)
+            missGroups[i] = g++;
+        for (uint32_t i = 0; i < hitCount; ++i)
+            hitGroups[i] = g++;
+        for (uint32_t i = 0; i < callableCount; ++i)
+            callableGroups[i] = g++;
+
+        // Special-case: scene+shadow pipeline (5 groups total)
+        if (raygenCount == 1u && missCount == 2u && hitCount == 2u && callableCount == 0u && totalGroups == 5u)
+        {
+            raygenGroups[0] = 0u;
+            missGroups[0]   = 1u; // primary miss
+            hitGroups[0]    = 2u; // primary hit
+            missGroups[1]   = 3u; // shadow miss
+            hitGroups[1]    = 4u; // shadow hit
+        }
+
+        // Write records using the chosen mapping.
+        for (uint32_t i = 0; i < raygenCount; ++i)
+            writeRecord(m_layout.raygenOffset, m_layout.raygenStride, i, raygenGroups[i]);
 
         for (uint32_t i = 0; i < missCount; ++i)
-            writeRecord(m_layout.missOffset, m_layout.missStride, i, g++);
+            writeRecord(m_layout.missOffset, m_layout.missStride, i, missGroups[i]);
 
         for (uint32_t i = 0; i < hitCount; ++i)
-            writeRecord(m_layout.hitOffset, m_layout.hitStride, i, g++);
+            writeRecord(m_layout.hitOffset, m_layout.hitStride, i, hitGroups[i]);
 
         for (uint32_t i = 0; i < callableCount; ++i)
-            writeRecord(m_layout.callableOffset, m_layout.callableStride, i, g++);
+            writeRecord(m_layout.callableOffset, m_layout.callableStride, i, callableGroups[i]);
 
         // Upload to GPU SBT buffer (device local)
         if (!createAndUploadBytes(ctx, sbtBytes, uploadCmdPool, uploadQueue))
