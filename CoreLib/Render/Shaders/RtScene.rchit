@@ -377,7 +377,17 @@ void main()
             LightWorld lw = light_to_world(uLights.lights[i]);
 
             vec3 Lw = normalize(-lw.dirW); // surface -> light in WORLD
-            float visibility = trace_shadow_dir(Pw, Nw, Lw);
+            // float visibility = trace_shadow_dir(Pw, Nw, Lw);
+
+float visibility = trace_shadow_dir(Pw, Nw, Lw);
+
+if (visibility < 0.5)
+{
+    // DEBUG: visualize shadowed pixels
+    payload = vec4(1.0, 0.0, 0.0, 1.0);
+    return;
+}
+
 
             // Shading L in VIEW
             L = normalize((u_cam.view * vec4(Lw, 0.0)).xyz);
