@@ -163,6 +163,8 @@ set(SHADERS
     RtScene.rgen
     RtScene.rmiss
     RtScene.rchit
+    RtShadow.rmiss
+    RtShadow.rchit
 )
 
 # Compile shaders to SPIR-V using glslangValidator
