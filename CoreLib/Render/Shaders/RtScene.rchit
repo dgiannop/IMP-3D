@@ -47,7 +47,7 @@ layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj;
     mat4 view;        // WORLD->VIEW
-    mat4 invView;     // VIEW->WORLD (NEW)
+    mat4 invView;     // VIEW->WORLD
     vec4 camPos;      // world
     vec4 clearColor;
 } u_cam;
@@ -134,7 +134,6 @@ float G_Smith(float NdotV, float NdotL, float k)
 
 // ------------------------------------------------------------
 // Light conversion helpers (VIEW-space UBO -> WORLD-space for RT rays)
-// NOTE: no behavior change until used.
 // ------------------------------------------------------------
 const uint kLightType_Directional = 0u;
 const uint kLightType_Point       = 1u;
@@ -319,13 +318,12 @@ void main()
     float ambStrength = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
     vec3  ambient = uLights.ambient.rgb * ambStrength * albedo * ao;
 
-    // Direct lighting (FIXED: compute L per type, matches Solid)
+    // Direct lighting
     vec3 direct = vec3(0.0);
 
     const uint lightCount = uLights.info.x;
     if (lightCount == 0u)
     {
-        // Debug: you should still see something if geometry hits but lights aren't bound
         payload = vec4(ambient + albedo * 0.02, 1.0);
         return;
     }
@@ -340,8 +338,12 @@ void main()
 
         if (t == 0u) // Directional
         {
-            // dir_range.xyz = light forward; surface->light is opposite
-            L = normalize(-uLights.lights[i].dir_range.xyz);
+            // Directional (via view->world->view round-trip using invView)
+            LightWorld lw = light_to_world(uLights.lights[i]);
+
+            // Surface->light direction in WORLD, then back to VIEW for shading
+            vec3 Lw = normalize(-lw.dirW);
+            L = normalize((u_cam.view * vec4(Lw, 0.0)).xyz);
         }
         else if (t == 1u) // Point
         {
@@ -429,8 +431,6 @@ void main()
         emissive *= texture(uTextures[mat.emissiveTexture], UV).rgb;
 
     vec3 color = ambient + direct + emissive;
-
-    // tiny floor so you can see *something* even if intensities are weird
     color = max(color, vec3(0.0));
 
     payload = vec4(color, 1.0);
