@@ -95,6 +95,7 @@ namespace vkrt
 
         const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
+        // Primary shaders
         ShaderStage rgen =
             vkutil::loadStage(ctx.device, shaderDir, "RtScene.rgen.spv", VK_SHADER_STAGE_RAYGEN_BIT_KHR);
 
@@ -104,20 +105,35 @@ namespace vkrt
         ShaderStage rchit =
             vkutil::loadStage(ctx.device, shaderDir, "RtScene.rchit.spv", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
 
-        if (!rgen.isValid() || !rmiss.isValid() || !rchit.isValid())
+        // Shadow shaders (tiny, dedicated payload @ location 1)
+        ShaderStage smiss =
+            vkutil::loadStage(ctx.device, shaderDir, "RtShadow.rmiss.spv", VK_SHADER_STAGE_MISS_BIT_KHR);
+
+        ShaderStage schit =
+            vkutil::loadStage(ctx.device, shaderDir, "RtShadow.rchit.spv", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+
+        if (!rgen.isValid() || !rmiss.isValid() || !rchit.isValid() || !smiss.isValid() || !schit.isValid())
         {
-            std::cerr << "RtPipeline: Failed to load RT scene shaders.\n";
+            std::cerr << "RtPipeline: Failed to load RT scene/shadow shaders.\n";
             destroy();
             return false;
         }
 
-        VkPipelineShaderStageCreateInfo stages[3] = {
+        // Stage indices (MUST match group references below)
+        // 0 = rgen
+        // 1 = primary miss
+        // 2 = primary closest hit
+        // 3 = shadow miss
+        // 4 = shadow closest hit
+        VkPipelineShaderStageCreateInfo stages[5] = {
             rgen.stageInfo(),  // index 0
             rmiss.stageInfo(), // index 1
             rchit.stageInfo(), // index 2
+            smiss.stageInfo(), // index 3
+            schit.stageInfo(), // index 4
         };
 
-        VkRayTracingShaderGroupCreateInfoKHR groups[3]{};
+        VkRayTracingShaderGroupCreateInfoKHR groups[5]{};
 
         for (auto& g : groups)
         {
@@ -128,26 +144,37 @@ namespace vkrt
             g.intersectionShader = VK_SHADER_UNUSED_KHR;
         }
 
-        // Raygen
+        // Group 0: Raygen
         groups[0].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
         groups[0].generalShader = 0;
 
-        // Miss
+        // Group 1: Primary miss
         groups[1].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
         groups[1].generalShader = 1;
 
-        // Closest hit (triangles)
+        // Group 2: Primary closest hit (triangles)
         groups[2].type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
         groups[2].closestHitShader = 2;
 
+        // Group 3: Shadow miss
+        groups[3].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[3].generalShader = 3;
+
+        // Group 4: Shadow closest hit (triangles)
+        groups[4].type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        groups[4].closestHitShader = 4;
+
         VkRayTracingPipelineCreateInfoKHR ci{};
-        ci.sType                        = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-        ci.stageCount                   = 3;
-        ci.pStages                      = stages;
-        ci.groupCount                   = 3;
-        ci.pGroups                      = groups;
-        ci.maxPipelineRayRecursionDepth = 1;
-        ci.layout                       = m_layout;
+        ci.sType      = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
+        ci.stageCount = 5;
+        ci.pStages    = stages;
+        ci.groupCount = 5;
+        ci.pGroups    = groups;
+
+        // We now trace a shadow ray from closest-hit => recursion depth must be >= 2
+        ci.maxPipelineRayRecursionDepth = 2;
+
+        ci.layout = m_layout;
 
         VkPipeline pipe = VK_NULL_HANDLE;
         VkResult   res =
