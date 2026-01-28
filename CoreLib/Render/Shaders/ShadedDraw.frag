@@ -1,5 +1,5 @@
 //==============================================================
-// ShadedDraw.frag
+// ShadedDraw.frag  (Viewport PBR, scene-light safe + headlight fill)
 //==============================================================
 #version 450
 
@@ -42,21 +42,21 @@ const int kMaxTextureCount = 512;
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ============================================================
-// Lights (matches GpuLightsUBO, VIEW SPACE)
+// Lights (VIEW SPACE)
 // ============================================================
 
 struct GpuLight
 {
-    vec4 pos_type;        // xyz = position (view space) for point/spot, w = type
-    vec4 dir_range;       // xyz = direction (view space, normalized) for directional/spot, w = range (point/spot) or unused
+    vec4 pos_type;        // xyz = position (view) for point/spot, w = type
+    vec4 dir_range;       // xyz = direction the light points TOWARD (view), w = range
     vec4 color_intensity; // rgb = color, a = intensity
-    vec4 spot_params;     // x = spot inner cos, y = spot outer cos, z/w reserved
+    vec4 spot_params;     // x = innerCos, y = outerCos
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    uvec4    info;        // x = lightCount
-    vec4     ambient;     // rgb = ambientColor, a = OPTIONAL exposure (if you choose)
+    uvec4    info;        // x = lightCount (includes headlight if you injected it)
+    vec4     ambient;     // rgb unused here, a = exposure (optional)
     GpuLight lights[64];
 } uLights;
 
@@ -64,20 +64,15 @@ layout(set = 0, binding = 1, std140) uniform LightsUBO
 // Output controls
 // ============================================================
 
-// Turn this on for “nice” output when your swapchain is UNORM.
-// If your swapchain is *SRGB*, you generally want gamma OFF here
-// (or you will double-encode).
-const bool ENABLE_GAMMA_ENCODE = true;
+// NOTE: Leave this false if your swapchain is SRGB (prevents double-gamma wash).
+const bool  ENABLE_GAMMA_ENCODE = false;
 
-// Tonemap always on (recommended once you start honoring glTF intensities)
-const bool ENABLE_TONEMAP = true;
+const bool  ENABLE_TONEMAP      = true;
+const bool  USE_UBO_EXPOSURE    = false;
 
-// If true, interpret uLights.ambient.a as EXPOSURE.
-// If false, use FIXED_EXPOSURE below.
-const bool USE_UBO_EXPOSURE = false;
-
-// Default exposure (headlight-only should not be dark)
-const float FIXED_EXPOSURE = 1.0;
+// Slightly brighter default for headlight-only viewports.
+// (expose this later as "Viewport Exposure".)
+const float FIXED_EXPOSURE      = 1.25;
 
 // ============================================================
 // Helpers
@@ -108,7 +103,7 @@ float G_Smith(float NdotV, float NdotL, float k)
 }
 
 // ------------------------------------------------------------
-// Cheap studio environment
+// Studio environment (viewport IBL)
 // ------------------------------------------------------------
 vec3 studioEnv(vec3 dir)
 {
@@ -130,12 +125,12 @@ vec3 studioEnv(vec3 dir)
 }
 
 // ------------------------------------------------------------
-// Normal mapping via derivatives
+// Normal mapping (derivatives)
 // ------------------------------------------------------------
 vec3 sampleNormalMapTS(int normalTex, vec2 uv)
 {
-    vec3 nn = texture(uTextures[normalTex], uv).xyz * 2.0 - 1.0;
-    return normalize(nn);
+    vec3 n = texture(uTextures[normalTex], uv).xyz * 2.0 - 1.0;
+    return normalize(n);
 }
 
 mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
@@ -153,10 +148,9 @@ mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
     return mat3(T, B, N);
 }
 
-// ============================================================
-// Light evaluation (VIEW SPACE)
-// ============================================================
-
+// ------------------------------------------------------------
+// Light evaluation
+// ------------------------------------------------------------
 const uint GPU_LIGHT_DIRECTIONAL = 0u;
 const uint GPU_LIGHT_POINT       = 1u;
 const uint GPU_LIGHT_SPOT        = 2u;
@@ -168,22 +162,17 @@ void evalLight(in GpuLight Ld, in vec3 P, out vec3 L, out float atten)
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
-        // Ld.dir_range.xyz = direction the light points TOWARD (view space)
-        // For shading, use surface->light direction, so flip:
         L = normalize(-Ld.dir_range.xyz);
         return;
     }
 
-    // Point / Spot
-    vec3 toLight = Ld.pos_type.xyz - P; // view-space
+    vec3 toLight = Ld.pos_type.xyz - P;
     float dist2  = max(dot(toLight, toLight), 1e-6);
     float dist   = sqrt(dist2);
     L            = toLight / dist;
 
-    // Inverse square falloff (glTF-ish)
     atten = 1.0 / dist2;
 
-    // Optional range
     float range = Ld.dir_range.w;
     if (range > 0.0)
     {
@@ -193,36 +182,25 @@ void evalLight(in GpuLight Ld, in vec3 P, out vec3 L, out float atten)
 
     if (lt == GPU_LIGHT_SPOT)
     {
-        // Ld.dir_range.xyz = direction the spot points TOWARD
         vec3 spotDir = normalize(Ld.dir_range.xyz);
-
-        // Compare surface->light against spot forward (need same convention)
         float cd     = dot(normalize(-spotDir), L);
 
-        float innerC = Ld.spot_params.x; // cos(inner)
-        float outerC = Ld.spot_params.y; // cos(outer)
+        float innerC = Ld.spot_params.x;
+        float outerC = Ld.spot_params.y;
 
-        float s = 0.0;
-        if (innerC > outerC)
-            s = saturate((cd - outerC) / (innerC - outerC));
-        else
-            s = step(outerC, cd);
+        float s = (innerC > outerC)
+                ? saturate((cd - outerC) / (innerC - outerC))
+                : step(outerC, cd);
 
         atten *= s;
     }
 }
 
 // ------------------------------------------------------------
-// Tonemap + gamma
+// Tonemap
 // ------------------------------------------------------------
-vec3 tonemapReinhard(vec3 c)
-{
-    return c / (c + vec3(1.0));
-}
-
 vec3 tonemapReinhardSoft(vec3 c)
 {
-    // Soft shoulder: compress highlights more aggressively
     const float A = 0.22;
     const float B = 0.30;
     const float C = 0.10;
@@ -245,7 +223,6 @@ vec3 gammaEncode(vec3 c)
 
 void main()
 {
-    // Material fetch
     int matCount = int(materials.length());
     int id = (matCount > 0) ? clamp(vMaterialId, 0, matCount - 1) : 0;
     GpuMaterial mat = (matCount > 0) ? materials[id] : materials[0];
@@ -254,7 +231,6 @@ void main()
     if (mat.baseColorTexture >= 0)
         albedo *= texture(uTextures[mat.baseColorTexture], vUv).rgb;
 
-    // View-space vectors
     vec3 N = normalize(nrm);
     vec3 V = normalize(-pos);
 
@@ -264,7 +240,6 @@ void main()
         N = normalize(TBN * sampleNormalMapTS(mat.normalTexture, vUv));
     }
 
-    // Material params
     float roughness = clamp(mat.roughness, 0.04, 1.0);
     float metallic  = clamp(mat.metallic,  0.0,  1.0);
     float ao        = 1.0;
@@ -284,17 +259,18 @@ void main()
     vec3  F0d = vec3(clamp(f0s, 0.02, 0.08));
     vec3  F0  = mix(F0d, albedo, metallic);
 
+    // --------------------------------------------------------
     // Direct lighting
+    // --------------------------------------------------------
     vec3 direct = vec3(0.0);
 
     uint lightCount = min(uLights.info.x, 64u);
+
     for (uint i = 0u; i < lightCount; ++i)
     {
-        GpuLight Ld = uLights.lights[i];
-
-        vec3  L;
+        vec3 L;
         float atten;
-        evalLight(Ld, pos, L, atten);
+        evalLight(uLights.lights[i], pos, L, atten);
 
         float NdotL = saturate(dot(N, L));
         float NdotV = saturate(dot(N, V));
@@ -312,52 +288,57 @@ void main()
         float k = (r * r) / 8.0;
         float G = G_Smith(NdotV, NdotL, k);
 
-        vec3 specBRDF = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
-        vec3 kd       = (vec3(1.0) - F) * (1.0 - metallic);
-        vec3 diffBRDF = kd * albedo / 3.14159265;
+        vec3 spec = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
+        vec3 kd   = (vec3(1.0) - F) * (1.0 - metallic);
+        vec3 diff = kd * albedo / 3.14159265;
 
-        vec3 radiance = Ld.color_intensity.rgb * (Ld.color_intensity.a * atten);
+        vec3 radiance = uLights.lights[i].color_intensity.rgb *
+                        (uLights.lights[i].color_intensity.a * atten);
 
-        // Optional “viewport sanity” clamp (keeps pathological glTF lights from nuking the view)
         radiance = min(radiance, vec3(50.0));
 
-        direct += (diffBRDF + specBRDF) * radiance * NdotL;
+        direct += (diff + spec) * radiance * NdotL;
     }
 
-    // Indirect (studio env)
-    vec3 hemi = studioEnv(N);
-    vec3 kdI  = (vec3(1.0) - fresnelSchlick(dot(N, V), F0)) * (1.0 - metallic);
-    vec3 diffIBL = kdI * albedo * hemi * 0.25 * ao;
+    // --------------------------------------------------------
+    // Indirect (viewport IBL)
+    // --------------------------------------------------------
+    // IMPORTANT: uLights.info.x includes headlight (if injected first).
+    // Treat "scene lights present" as more than just the headlight.
+    float hasSceneLights = (uLights.info.x > 1u) ? 1.0 : 0.0;
+
+    // Stronger IBL when ONLY headlight exists, weaker when scene lights exist.
+    float iblScale = mix(1.0, 0.25, hasSceneLights);
+
+    vec3 kdI = (vec3(1.0) - fresnelSchlick(dot(N, V), F0)) * (1.0 - metallic);
+    vec3 diffIBL = kdI * albedo * studioEnv(N) * 0.25 * ao * iblScale;
 
     vec3 R = reflect(-V, N);
-    vec3 specIBL = studioEnv(R) * fresnelSchlick(dot(N, V), F0) *
-                   (0.15 + 0.35 * (1.0 - roughness));
+    vec3 specIBL = studioEnv(R) *
+                   fresnelSchlick(dot(N, V), F0) *
+                   (0.15 + 0.35 * (1.0 - roughness)) * iblScale;
 
-    // Ambient from UBO (simple)
-    vec3 ambient = uLights.ambient.rgb * uLights.ambient.a * albedo;
+    // Tiny “floor” (DCC viewport cheat, keeps blacks readable)
+    vec3 floorFill = albedo * 0.02;
 
     // Emissive
     vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;
     if (mat.emissiveTexture >= 0)
         emissive *= texture(uTextures[mat.emissiveTexture], vUv).rgb;
 
-    vec3 colorLinear = direct + ambient + diffIBL + specIBL + emissive;
+    vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive;
 
     // Exposure
-    float exposure = FIXED_EXPOSURE;
-    if (USE_UBO_EXPOSURE)
-        exposure = max(uLights.ambient.a, 0.0);
+    float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0)
+                                      : FIXED_EXPOSURE;
 
     vec3 outRgb = colorLinear * exposure;
 
-    // Tonemap
     if (ENABLE_TONEMAP)
         outRgb = tonemapReinhardSoft(outRgb);
 
-    // DCC-style final clamp (prevents lingering “burn” in whites)
     outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
 
-    // Gamma encode (only if presenting to UNORM)
     if (ENABLE_GAMMA_ENCODE)
         outRgb = gammaEncode(outRgb);
 

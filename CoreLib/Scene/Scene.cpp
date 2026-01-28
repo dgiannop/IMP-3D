@@ -358,8 +358,8 @@ void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
 
 void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
-    static uint64_t aaa = 0;
-    std::cerr << "-------------- RENDER # " << aaa++ << std::endl;
+    // static uint64_t renderCount = 0;
+    // std::cerr << "-------------- RENDER # " << renderCount++ << std::endl;
     vp->apply();
     m_renderer->render(vp, this, fc);
 }
