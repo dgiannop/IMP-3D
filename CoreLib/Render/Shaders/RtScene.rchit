@@ -230,7 +230,7 @@ float trace_shadow_dir(vec3 Pw, vec3 Nw, vec3 Lw_dir)
 
     traceRayEXT(
         u_tlas,
-        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT,
         0xFF,
         1, // sbtRecordOffset: shadow hit group (0=primary, 1=shadow)
         2, // sbtRecordStride: number of hit groups per ray type
@@ -372,26 +372,17 @@ void main()
         vec3  L = vec3(0.0);
         float atten = 1.0;
 
-        if (t == 0u) // Directional (with shadows)
+        if (t == 0u) // Directional
         {
-            LightWorld lw = light_to_world(uLights.lights[i]);
+            // Use the SAME convention for shading and shadows:
+            // dir_range.xyz is light "forward" (view space), so surface->light is -dir.
+            vec3 L_view  = normalize(-uLights.lights[i].dir_range.xyz);
+            vec3 L_world = normalize((u_cam.invView * vec4(L_view, 0.0)).xyz);
 
-            vec3 Lw = normalize(-lw.dirW); // surface -> light in WORLD
-            // float visibility = trace_shadow_dir(Pw, Nw, Lw);
+            float visibility = trace_shadow_dir(Pw, Nw, L_world);
 
-float visibility = trace_shadow_dir(Pw, Nw, Lw);
-
-if (visibility < 0.5)
-{
-    // DEBUG: visualize shadowed pixels
-    payload = vec4(1.0, 0.0, 0.0, 1.0);
-    return;
-}
-
-
-            // Shading L in VIEW
-            L = normalize((u_cam.view * vec4(Lw, 0.0)).xyz);
-            atten *= visibility;
+            L = L_view;            // BRDF uses VIEW space
+            atten *= visibility;   // visibility in [0..1]
         }
         else if (t == 1u) // Point (no shadows yet)
         {

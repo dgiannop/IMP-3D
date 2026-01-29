@@ -14,6 +14,8 @@
 
 namespace
 {
+    constexpr bool kUseFixedSunForHeadlight = false; // set true for RT shadow testing
+
     constexpr float kEps = 1e-8f;
 
     static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
@@ -131,8 +133,14 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     // ------------------------------------------------------------
     if (headlight.enabled)
     {
-        const glm::vec3 camFwdWorld = viewportForwardWorld(vp);
-        const glm::vec3 dirView     = viewDir(V, camFwdWorld);
+        glm::vec3 dirWorld = {};
+
+        if (kUseFixedSunForHeadlight)
+            dirWorld = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f)); // fixed sun
+        else
+            dirWorld = viewportForwardWorld(vp); // headlight
+
+        const glm::vec3 dirView = viewDir(V, dirWorld);
         pushLight(out, makeDirectionalView(dirView, headlight.color, headlight.intensity));
     }
 
