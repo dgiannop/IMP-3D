@@ -139,50 +139,79 @@ float G_Smith(float NdotV, float NdotL, float k)
 }
 
 // ------------------------------------------------------------
-// Shadow trace (Directional only, hard shadows)
-//
-// Pipeline layout:
-//   Group 0: raygen
-//   Group 1: primary miss
-//   Group 2: primary hit
-//   Group 3: shadow miss
-//   Group 4: shadow hit
-//
-// SBT layout in RtSbt:
-//   Miss[0] = group 1 (primary miss)
-//   Miss[1] = group 3 (shadow miss)
-//   Hit[0]  = group 2 (primary hit)
-//   Hit[1]  = group 4 (shadow hit)
-//
-// So for shadow rays:
-//   sbtRecordOffset = 1 (Hit[1])
-//   sbtRecordStride = 1
-//   missIndex       = 1 (Miss[1])
+// Shadow helpers (soft shadows)
 // ------------------------------------------------------------
-float trace_shadow_dir(vec3 Pw, vec3 Nw, vec3 Lw_dir)
+
+// Simple hash for noise per-pixel / per-sample
+float hash13(uvec3 v)
 {
-    const float kEps = 1e-3;
+    v = (v ^ (v >> 16u)) * 0x7feb352du;
+    v = (v ^ (v >> 15u)) * 0x846ca68bu;
+    v = (v ^ (v >> 16u));
+    uint h = v.x ^ v.y ^ v.z;
+    return float(h) / 4294967295.0;
+}
 
-    vec3 org = Pw + Nw * kEps;
-    vec3 dir = normalize(Lw_dir);
+// Sample a cone around base direction "dir"
+vec3 sample_cone(vec3 dir, float angle, vec2 xi)
+{
+    // xi in [0,1)^2
+    float cosAngle = cos(angle);
+    float cosTheta = mix(1.0, cosAngle, xi.x);
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    float phi      = 2.0 * 3.14159265 * xi.y;
 
-    shadowHit = 0u;
+    vec3 w = normalize(dir);
+    vec3 u = normalize(abs(w.z) < 0.999 ? cross(w, vec3(0,0,1)) : cross(w, vec3(0,1,0)));
+    vec3 v = cross(w, u);
 
-    traceRayEXT(
-        u_tlas,
-        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT,
-        0xFF,
-        1, // sbtRecordOffset: Hit[1] = shadow hit
-        1, // sbtRecordStride
-        1, // missIndex: Miss[1] = shadow miss
-        org,
-        0.001,
-        dir,
-        1e30,
-        1  // payload location = 1
-    );
+    return normalize(
+        u * (cos(phi) * sinTheta) +
+        v * (sin(phi) * sinTheta) +
+        w * cosTheta);
+}
 
-    return (shadowHit == 0u) ? 1.0 : 0.0;
+// N-sample soft shadow around baseDirWorld
+float trace_shadow_soft(vec3 Pw, vec3 Nw, vec3 baseDirWorld, float angularRadius)
+{
+    const int   kSamples = 4;  // tweakable (4–8 good start)
+    const float eps      = 1e-3;
+
+    vec3 org = Pw + Nw * eps;
+    float visAccum = 0.0;
+
+    for (int i = 0; i < kSamples; ++i)
+    {
+        uvec3 seed = uvec3(gl_LaunchIDEXT.xy, uint(i));
+        float r1   = hash13(seed);
+        float r2   = hash13(seed ^ uvec3(12345u, 67890u, 424242u));
+
+        vec3 dir = (angularRadius > 0.0)
+                 ? sample_cone(baseDirWorld, angularRadius, vec2(r1, r2))
+                 : normalize(baseDirWorld);
+
+        shadowHit = 0u;
+
+        traceRayEXT(
+            u_tlas,
+            gl_RayFlagsTerminateOnFirstHitEXT |
+            gl_RayFlagsOpaqueEXT |
+            gl_RayFlagsCullBackFacingTrianglesEXT,
+            0xFF,
+            1, // sbtRecordOffset: Hit[1] = shadow hit
+            1, // sbtRecordStride
+            1, // missIndex: Miss[1] = shadow miss
+            org,
+            0.001,
+            dir,
+            1e30,
+            1  // payload location = 1
+        );
+
+        visAccum += (shadowHit == 0u) ? 1.0 : 0.0;
+    }
+
+    return visAccum / float(kSamples);
 }
 
 void main()
@@ -315,19 +344,22 @@ void main()
         if (t == 0u) // Directional (HEADLIGHT in view space)
         {
             // Convention:
-            //  - dir_range.xyz = light "forward" direction in VIEW space
-            //  - surface->light = -forward (same as raster path)
-            vec3 L_view  = normalize(-uLights.lights[i].dir_range.xyz);
+            //  - dir_range.xyz = light "forward" in VIEW space
+            //  - dir_range.w   = angular radius (softness), radians
+            //  - surface->light = -forward (same as raster)
+            vec3 fwdView       = normalize(uLights.lights[i].dir_range.xyz);
+            vec3 L_view        = normalize(-fwdView); // surface->light in VIEW
+            float angularRadius = max(uLights.lights[i].dir_range.w, 0.0);
 
             // Convert surface->light to WORLD for shadow rays
-            vec3 L_world = normalize((u_cam.invView * vec4(L_view, 0.0)).xyz);
+            vec3 baseDirWorld = normalize((u_cam.invView * vec4(L_view, 0.0)).xyz);
 
-            float visibility = trace_shadow_dir(Pw, Nw, L_world);
+            float visibility = trace_shadow_soft(Pw, Nw, baseDirWorld, angularRadius);
 
             L      = L_view;      // BRDF uses VIEW space
             atten *= visibility;  // [0..1]
         }
-        else if (t == 1u) // Point (no shadows yet)
+        else if (t == 1u) // Point (no RT shadows yet)
         {
             vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
             float d2 = max(dot(toLight, toLight), 1e-8);
@@ -345,7 +377,7 @@ void main()
                 atten = 1.0 / d2;
             }
         }
-        else if (t == 2u) // Spot (no shadows yet)
+        else if (t == 2u) // Spot (no RT shadows yet)
         {
             vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
             float d2 = max(dot(toLight, toLight), 1e-8);

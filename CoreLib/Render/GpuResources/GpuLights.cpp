@@ -68,10 +68,17 @@ namespace
     static GpuLight makeDirectionalView(const glm::vec3& dirView, const glm::vec3& color, float intensity) noexcept
     {
         GpuLight gl{};
-        gl.pos_type        = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(GpuLightType::Directional));
-        gl.dir_range       = glm::vec4(safeNormalize(dirView, glm::vec3(0, 0, -1)), 0.0f);
+        gl.pos_type = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(GpuLightType::Directional));
+
+        const glm::vec3 fwdView = safeNormalize(dirView, glm::vec3(0, 0, -1));
+
+        // xyz = forward (VIEW space), w = softness (angular radius in radians)
+        constexpr float kSoftnessRadians = 0.05f; // ~3 degrees, tweak later
+        gl.dir_range                     = glm::vec4(fwdView, kSoftnessRadians);
+
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
         gl.spot_params     = glm::vec4(0.0f);
+
         return gl;
     }
 
