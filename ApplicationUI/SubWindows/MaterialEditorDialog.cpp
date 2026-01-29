@@ -252,7 +252,7 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     // Start expanded
     m_leftCollapsed    = false;
-    m_lastExpandedSize = size();
+    m_lastExpandedSize = sizeHint();
 
     for (QWidget* w : ui->propsFrame->findChildren<QWidget*>())
     {
@@ -264,7 +264,10 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     ui->materialList->setStyleSheet("QListWidget::item { height: 25px; }");
 
     ui->rightPanel->setMinimumWidth(300);
-    ui->rightPanel->setMaximumWidth(320);
+    ui->rightPanel->setMaximumWidth(300);
+
+    m_rightPanelMinW = ui->rightPanel->minimumWidth();
+    m_rightPanelMaxW = ui->rightPanel->maximumWidth();
 
     if (ui->propsGrid)
     {
@@ -694,11 +697,14 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
 
     m_leftCollapsed = collapsed;
 
-    const int rightOnlyWidth = ui->rightPanel->maximumWidth();
-
     if (collapsed)
     {
         ui->leftPanel->setVisible(false);
+
+        // Let right panel actually fill the dialog in collapsed mode
+        ui->rightPanel->setMinimumWidth(0);
+        ui->rightPanel->setMaximumWidth(QWIDGETSIZE_MAX);
+        ui->rightPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
         QList<int> sizes;
         sizes.reserve(ui->splitterMain->count());
@@ -706,26 +712,36 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
             sizes.push_back((i == m_rightIndex) ? 1 : 0);
         ui->splitterMain->setSizes(sizes);
 
-        const int newW = std::max(rightOnlyWidth, minimumSizeHint().width());
-        setFixedWidth(newW);
-        resize(newW, height());
+        // Compute tight width from sizeHint + frame margins (prevents “gap”)
+        const int marginW =
+            (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) + (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
+
+        const int newW = ui->rightPanel->sizeHint().width() + marginW + 2; // +2 safety
+        setFixedWidth(std::max(newW, minimumSizeHint().width()));
+        resize(width(), height());
     }
     else
     {
         ui->leftPanel->setVisible(true);
 
+        // Restore right panel constraints for expanded mode
+        ui->rightPanel->setMinimumWidth(m_rightPanelMinW);
+        ui->rightPanel->setMaximumWidth(m_rightPanelMaxW);
+        ui->rightPanel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+
         setMinimumSize(m_expandedMinSize);
         setMaximumSize(m_expandedMaxSize);
 
-        if (m_lastExpandedSize.width() < rightOnlyWidth + 100)
-            m_lastExpandedSize.setWidth(rightOnlyWidth + 180);
+        const int rightW = ui->rightPanel->maximumWidth();
+
+        if (m_lastExpandedSize.width() < rightW + 100)
+            m_lastExpandedSize.setWidth(rightW + 180);
         if (m_lastExpandedSize.height() < minimumHeight())
             m_lastExpandedSize.setHeight(minimumHeight());
 
         resize(m_lastExpandedSize);
 
         const int totalW = width();
-        const int rightW = ui->rightPanel->maximumWidth();
         const int leftW  = std::max(0, totalW - rightW);
 
         QList<int> sizes;

@@ -50,8 +50,11 @@ private:
     int m_leftIndex  = 0;
     int m_rightIndex = 1;
 
-    // QSize m_expandedMinSize;
-    // QSize m_expandedMaxSize;
+    int m_rightPanelMinW = 0;
+    int m_rightPanelMaxW = 0;
+
+    QSize m_expandedMinSize;
+    QSize m_expandedMaxSize;
 
     void      refreshMaterialList();
     void      loadMaterialToUi(int32_t id);
@@ -62,7 +65,4 @@ private:
 
     uint64_t m_lastLibraryCounter  = 0;
     uint64_t m_lastMaterialCounter = 0;
-
-    QSize m_expandedMinSize;
-    QSize m_expandedMaxSize;
 };

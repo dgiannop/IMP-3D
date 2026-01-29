@@ -1110,6 +1110,9 @@ QPushButton:checked {
     <addaction name="separator"/>
     <addaction name="actionToolProperties"/>
     <addaction name="actionMaterialEditor"/>
+    <addaction name="actionLightsEditor"/>
+    <addaction name="separator"/>
+    <addaction name="actionLightingSettings"/>
    </widget>
    <widget class="QMenu" name="menuMesh">
     <property name="title">
@@ -1365,6 +1368,16 @@ QPushButton:checked {
     <string>Ctrl+Shift+D</string>
    </property>
   </action>
+  <action name="actionLightsEditor">
+   <property name="text">
+    <string>Lights Editor</string>
+   </property>
+  </action>
+  <action name="actionLightingSettings">
+   <property name="text">
+    <string>Lighting Settings</string>
+   </property>
+  </action>
  </widget>
  <customwidgets>
   <customwidget>
@@ -1379,7 +1392,7 @@ QPushButton:checked {
  </resources>
  <connections/>
  <buttongroups>
-  <buttongroup name="selectionButtonGroup"/>
   <buttongroup name="topMenuButtonGroup"/>
+  <buttongroup name="selectionButtonGroup"/>
  </buttongroups>
 </ui>
