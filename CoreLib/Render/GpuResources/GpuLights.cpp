@@ -124,7 +124,7 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
 {
     out         = {};
     out.info    = glm::uvec4(0u);
-    out.ambient = glm::vec4(0.0f);
+    out.ambient = glm::vec4(0.f);
 
     const glm::mat4 V = vp.view(); // WORLD -> VIEW
 
@@ -207,8 +207,8 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     // 3) Ambient.rgb and Ambient.a = EXPOSURE
     // ------------------------------------------------------------
     // Keep ambient minimal (optional). This is NOT exposure.
-    // If you want pure physically-based: leave rgb=0.
-    const glm::vec3 modelingAmbientRgb(0.0f); // or e.g. glm::vec3(0.02f)
+    // For pure physically-based: leave rgb=0.
+    const glm::vec3 modelingAmbientRgb(0.002f); // or e.g. glm::vec3(0.02f)
     out.ambient = glm::vec4(modelingAmbientRgb, 0.0f);
 
     // Exposure:
@@ -219,7 +219,7 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     if (sceneLightCount > 0u && maxSceneLight > 0.0f)
     {
         // Key value: tweakable. 0.18 is classic middle grey.
-        // If you want a slightly brighter default, try 0.25.
+        // For a slightly brighter default, try 0.25.
         constexpr float kKey = 0.18f;
 
         exposure = kKey / maxSceneLight;
@@ -228,6 +228,5 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
         exposure = std::clamp(exposure, 1e-6f, 2.0f);
     }
 
-    // Store exposure in ambient.a (as per your plan)
     out.ambient.a = exposure;
 }

@@ -18,11 +18,12 @@ layout(set = 0, binding = 2, std140) uniform RtCameraUBO
 {
     mat4 invViewProj; // CLIP -> WORLD
     mat4 view;        // WORLD -> VIEW
-    mat4 invView;     // VIEW -> WORLD (NEW)
+    mat4 invView;     // VIEW -> WORLD
     vec4 camPos;      // world
     vec4 clearColor;
 } u_cam;
 
+// Primary ray payload (color)
 layout(location = 0) rayPayloadEXT vec4 payload;
 
 void main()
@@ -33,6 +34,7 @@ void main()
     vec2 uv  = (vec2(pix) + vec2(0.5)) / vec2(size);
     vec2 ndc = uv * 2.0 - 1.0;
 
+    // Reconstruct world-space ray from invViewProj
     vec4 p0h = u_cam.invViewProj * vec4(ndc, 0.0, 1.0);
     vec4 p1h = u_cam.invViewProj * vec4(ndc, 1.0, 1.0);
     vec3 p0  = p0h.xyz / p0h.w;
@@ -43,16 +45,21 @@ void main()
 
     payload = u_cam.clearColor;
 
+    // SBT mapping:
+    //  - Hit[0] = primary closest hit
+    //  - Miss[0] = primary miss
     traceRayEXT(
         u_tlas,
         gl_RayFlagsOpaqueEXT,
         0xFF,
-        0, 0, 0,
+        0, // sbtRecordOffset -> Hit[0]
+        1, // sbtRecordStride
+        0, // missIndex      -> Miss[0]
         ro,
         0.001,
         rd,
         1e30,
-        0
+        0   // payload location
     );
 
     imageStore(u_out, pix, payload);

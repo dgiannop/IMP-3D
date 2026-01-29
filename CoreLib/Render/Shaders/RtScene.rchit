@@ -139,85 +139,25 @@ float G_Smith(float NdotV, float NdotL, float k)
 }
 
 // ------------------------------------------------------------
-// Light conversion helpers (VIEW-space UBO -> WORLD-space for RT rays)
-// ------------------------------------------------------------
-const uint kLightType_Directional = 0u;
-const uint kLightType_Point       = 1u;
-const uint kLightType_Spot        = 2u;
-
-uint light_type(const GpuLight L)
-{
-    return uint(L.pos_type.w + 0.5);
-}
-
-vec3 view_to_world_pos(vec3 v)
-{
-    return (u_cam.invView * vec4(v, 1.0)).xyz;
-}
-
-vec3 view_to_world_dir(vec3 vdir)
-{
-    vec3 w = (u_cam.invView * vec4(vdir, 0.0)).xyz;
-    float len2 = dot(w, w);
-    if (len2 <= 1e-20)
-        return vec3(0.0, 0.0, -1.0);
-    return w * inversesqrt(len2);
-}
-
-struct LightWorld
-{
-    uint  type;
-
-    vec3  posW; // point/spot
-    vec3  dirW; // directional/spot (normalized)
-
-    vec3  color;
-    float intensity;
-
-    float range;    // point/spot
-    float innerCos; // spot
-    float outerCos; // spot
-};
-
-LightWorld light_to_world(const GpuLight L)
-{
-    LightWorld o;
-    o.type      = light_type(L);
-    o.color     = L.color_intensity.rgb;
-    o.intensity = L.color_intensity.a;
-
-    o.posW     = vec3(0.0);
-    o.dirW     = vec3(0.0, 0.0, -1.0);
-    o.range    = 0.0;
-    o.innerCos = 0.0;
-    o.outerCos = 0.0;
-
-    if (o.type == kLightType_Point || o.type == kLightType_Spot)
-    {
-        o.posW  = view_to_world_pos(L.pos_type.xyz);
-        o.range = L.dir_range.w;
-    }
-
-    if (o.type == kLightType_Directional || o.type == kLightType_Spot)
-    {
-        o.dirW = view_to_world_dir(L.dir_range.xyz);
-    }
-
-    if (o.type == kLightType_Spot)
-    {
-        o.innerCos = L.spot_params.x;
-        o.outerCos = L.spot_params.y;
-    }
-
-    return o;
-}
-
-// ------------------------------------------------------------
 // Shadow trace (Directional only, hard shadows)
+//
 // Pipeline layout:
-// - MissIndex: 0 = primary miss (RtScene.rmiss), 1 = shadow miss (RtShadow.rmiss)
-// - Hit groups per ray type: 2 (primary hit, shadow hit) => stride = 2
-// - For shadow ray: sbtRecordOffset = 1 (shadow hit group), missIndex = 1
+//   Group 0: raygen
+//   Group 1: primary miss
+//   Group 2: primary hit
+//   Group 3: shadow miss
+//   Group 4: shadow hit
+//
+// SBT layout in RtSbt:
+//   Miss[0] = group 1 (primary miss)
+//   Miss[1] = group 3 (shadow miss)
+//   Hit[0]  = group 2 (primary hit)
+//   Hit[1]  = group 4 (shadow hit)
+//
+// So for shadow rays:
+//   sbtRecordOffset = 1 (Hit[1])
+//   sbtRecordStride = 1
+//   missIndex       = 1 (Miss[1])
 // ------------------------------------------------------------
 float trace_shadow_dir(vec3 Pw, vec3 Nw, vec3 Lw_dir)
 {
@@ -232,9 +172,9 @@ float trace_shadow_dir(vec3 Pw, vec3 Nw, vec3 Lw_dir)
         u_tlas,
         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT,
         0xFF,
-        1, // sbtRecordOffset: shadow hit group (0=primary, 1=shadow)
-        2, // sbtRecordStride: number of hit groups per ray type
-        1, // missIndex: shadow miss
+        1, // sbtRecordOffset: Hit[1] = shadow hit
+        1, // sbtRecordStride
+        1, // missIndex: Miss[1] = shadow miss
         org,
         0.001,
         dir,
@@ -281,9 +221,9 @@ void main()
 
     // Triangle indices
     const uint base4 = prim * 4u;
-    const uint ia = ind.idx[base4 + 0u];
-    const uint ib = ind.idx[base4 + 1u];
-    const uint ic = ind.idx[base4 + 2u];
+    const uint ia    = ind.idx[base4 + 0u];
+    const uint ib    = ind.idx[base4 + 1u];
+    const uint ic    = ind.idx[base4 + 2u];
 
     vec3 a = pos.p[ia].xyz;
     vec3 b = pos.p[ib].xyz;
@@ -353,7 +293,7 @@ void main()
 
     // Ambient
     float ambStrength = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
-    vec3  ambient = uLights.ambient.rgb * ambStrength * albedo * ao;
+    vec3  ambient     = uLights.ambient.rgb * ambStrength * albedo * ao;
 
     // Direct lighting
     vec3 direct = vec3(0.0);
@@ -372,17 +312,20 @@ void main()
         vec3  L = vec3(0.0);
         float atten = 1.0;
 
-        if (t == 0u) // Directional
+        if (t == 0u) // Directional (HEADLIGHT in view space)
         {
-            // Use the SAME convention for shading and shadows:
-            // dir_range.xyz is light "forward" (view space), so surface->light is -dir.
+            // Convention:
+            //  - dir_range.xyz = light "forward" direction in VIEW space
+            //  - surface->light = -forward (same as raster path)
             vec3 L_view  = normalize(-uLights.lights[i].dir_range.xyz);
+
+            // Convert surface->light to WORLD for shadow rays
             vec3 L_world = normalize((u_cam.invView * vec4(L_view, 0.0)).xyz);
 
             float visibility = trace_shadow_dir(Pw, Nw, L_world);
 
-            L = L_view;            // BRDF uses VIEW space
-            atten *= visibility;   // visibility in [0..1]
+            L      = L_view;      // BRDF uses VIEW space
+            atten *= visibility;  // [0..1]
         }
         else if (t == 1u) // Point (no shadows yet)
         {

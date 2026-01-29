@@ -1838,7 +1838,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         if (scene->showSceneGrid())
         {
-            drawSceneGrid(cmd, vp, scene);
+            // drawSceneGrid(cmd, vp, scene);
         }
 
         return;
