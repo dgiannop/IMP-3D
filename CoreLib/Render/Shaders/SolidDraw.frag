@@ -57,6 +57,8 @@ layout(std140, set = 0, binding = 1) uniform LightsUBO
 
 float saturate(float x) { return clamp(x, 0.0, 1.0); }
 
+vec3 tonemapReinhard(vec3 x) { return x / (1.0 + x); }
+
 void main()
 {
     vec3 N = normalize(nrm);
@@ -84,11 +86,11 @@ void main()
     float diff = pow(NdotL, 1.65); // This is the knob I’d expose as “Solid Contrast” if I ever add a UI slider.
 
     // Lower baseline so shapes don't wash out
-    vec3 lit = base * 0.14;
+    vec3 lit = base * 0.06;
 
     // Very subtle hemisphere shaping to keep the scene readable
     float hemi = saturate(dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5);
-    lit *= mix(0.88, 1.0, hemi);
+    lit *= mix(0.75, 1.0, hemi);
 
     // Diffuse
     lit += base * (c * (I * diff)) * 0.90;
@@ -100,7 +102,9 @@ void main()
 
     // Rim: reduce a bit so it doesn't flatten the shadows
     float rim = pow(1.0 - saturate(dot(N, V)), 3.0);
-    lit += base * rim * 0.020;
+    lit += base * rim * 0.010;
+
+    lit = tonemapReinhard(lit);
 
     fragColor = vec4(lit, 1.0);
 }

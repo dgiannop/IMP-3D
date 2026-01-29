@@ -157,7 +157,7 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     uint32_t sceneLightCount = 0u;
     float    maxSceneLight   = 0.0f;
 
-    if (scene)
+    if (false) // scene)
     {
         const LightHandler* lh = scene->lightHandler();
         if (lh)
@@ -215,7 +215,7 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     // ------------------------------------------------------------
     // Keep ambient minimal (optional). This is NOT exposure.
     // For pure physically-based: leave rgb=0.
-    const glm::vec3 modelingAmbientRgb(0.002f); // or e.g. glm::vec3(0.02f)
+    const glm::vec3 modelingAmbientRgb(0.f); // or e.g. glm::vec3(0.02f)
     out.ambient = glm::vec4(modelingAmbientRgb, 0.0f);
 
     // Exposure:
