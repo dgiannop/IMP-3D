@@ -37,8 +37,8 @@ void RadiusSizer2D::mouseDown(Viewport* vp, Scene* /*scene*/, const CoreEvent& e
     }
     else
     {
-        std::string name = m_overlayHandler.pick(vp, ev.x, ev.y);
-        m_curHandle      = (name != "") ? std::atoi(name.c_str()) : -1;
+        // Pick handle via overlay handler (now returns int handle directly; -1 means none)
+        m_curHandle = m_overlayHandler.pick(vp, ev.x, ev.y);
     }
 
     if (m_curHandle != -1)
@@ -80,7 +80,7 @@ void RadiusSizer2D::render(Viewport* vp, Scene* /*scene*/)
 
     for (size_t i = 0; i < m_handles.size(); ++i)
     {
-        m_overlayHandler.begin_overlay(std::to_string(i));
+        m_overlayHandler.begin_overlay(static_cast<int32_t>(i));
         m_handles[i].construct(vp, m_overlayHandler);
         m_overlayHandler.set_axis(m_handles[i].axis());
         m_overlayHandler.end_overlay();

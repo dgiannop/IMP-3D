@@ -17,30 +17,6 @@ RadiusSizer::RadiusSizer(glm::vec3* radius, glm::vec3* center) : m_radius(radius
     m_handles.emplace_back(glm::ivec3{0, 0, 0}, m_radius, m_center);
 }
 
-// int32_t RadiusSizer::pickHandle(Viewport* vp, Scene* /*scene*/, float x, float y)
-// {
-//     const float maxDistPx = 14.0f;
-
-//     int32_t best   = -1;
-//     float   bestD2 = maxDistPx * maxDistPx;
-
-//     for (int32_t i = 0; i < (int32_t)m_handles.size(); ++i)
-//     {
-//         glm::vec3 hp = m_handles[i].position();
-//         glm::vec3 sp = vp->project(hp);
-//         float     dx = sp.x - x;
-//         float     dy = sp.y - y;
-//         float     d2 = dx * dx + dy * dy;
-
-//         if (d2 < bestD2)
-//         {
-//             bestD2 = d2;
-//             best   = i;
-//         }
-//     }
-//     return best;
-// }
-
 void RadiusSizer::mouseDown(Viewport* vp, Scene* /*scene*/, const CoreEvent& ev)
 {
     // Old behavior: if radius == 0, snap center under cursor and start dragging a radius handle
@@ -56,9 +32,8 @@ void RadiusSizer::mouseDown(Viewport* vp, Scene* /*scene*/, const CoreEvent& ev)
     }
     else
     {
-        // Pick handle via overlay handler (Option A screen-distance picking)
-        std::string name = m_overlayHandler.pick(vp, ev.x, ev.y);
-        m_curHandle      = (name != "") ? std::atoi(name.c_str()) : -1;
+        // Pick handle via overlay handler (now returns int handle directly; -1 means none)
+        m_curHandle = m_overlayHandler.pick(vp, ev.x, ev.y);
     }
 
     if (m_curHandle != -1)
@@ -94,12 +69,11 @@ void RadiusSizer::render(Viewport* vp, Scene* /*scene*/)
 
     for (size_t i = 0; i < m_handles.size(); ++i)
     {
-        m_overlayHandler.begin_overlay(std::to_string(i));
+        m_overlayHandler.begin_overlay(static_cast<int32_t>(i));
         m_handles[i].construct(vp, m_overlayHandler);
         m_overlayHandler.set_axis(m_handles[i].axis());
         m_overlayHandler.end_overlay();
     }
 
     // In Vulkan path, render() is a no-op; Renderer uses overlayHandler() directly.
-    // m_overlayHandler.render(vp);
 }

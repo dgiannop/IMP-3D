@@ -3,14 +3,20 @@
 #include "Viewport.hpp"
 
 // Helper: Setup min/max from size and center
-static void set_min_max_from_center_size(const glm::vec3& center, const glm::vec3& size, glm::vec3& min, glm::vec3& max)
+static void set_min_max_from_center_size(const glm::vec3& center,
+                                         const glm::vec3& size,
+                                         glm::vec3&       min,
+                                         glm::vec3&       max)
 {
     min = center - size * 0.5f;
     max = center + size * 0.5f;
 }
 
 // Helper: Update size and center from min/max
-static void set_center_size_from_min_max(const glm::vec3& min, const glm::vec3& max, glm::vec3& center, glm::vec3& size)
+static void set_center_size_from_min_max(const glm::vec3& min,
+                                         const glm::vec3& max,
+                                         glm::vec3&       center,
+                                         glm::vec3&       size)
 {
     center = (min + max) * 0.5f;
     size   = max - min;
@@ -43,9 +49,8 @@ BoxSizer::BoxSizer(glm::vec3* size, glm::vec3* center) : m_size(size), m_center(
 
 void BoxSizer::mouseDown(Viewport* vp, Scene* /*scene*/, const CoreEvent& ev)
 {
-    // Pick handle
-    std::string name = m_overlayHandler.pick(vp, ev.x, ev.y);
-    m_curHandle      = (name != "") ? std::atoi(name.c_str()) : -1;
+    // Pick handle (OverlayHandler now returns int handle directly; -1 means none)
+    m_curHandle = m_overlayHandler.pick(vp, ev.x, ev.y);
 
     if (m_curHandle != -1)
         m_handles[m_curHandle].beginDrag(vp, ev.x, ev.y);
@@ -71,20 +76,18 @@ void BoxSizer::mouseUp(Viewport* vp, Scene* /*scene*/, const CoreEvent& ev)
 
 void BoxSizer::render(Viewport* vp, Scene* /*scene*/)
 {
-    // make sure min/max follow current size/center
+    // Make sure min/max follow current size/center
     set_min_max_from_center_size(*m_center, *m_size, m_min, m_max);
 
     m_overlayHandler.clear();
 
     for (size_t i = 0; i < m_handles.size(); ++i)
     {
-        m_overlayHandler.begin_overlay(std::to_string(i));
+        m_overlayHandler.begin_overlay(static_cast<int32_t>(i));
         m_handles[i].construct(vp, m_overlayHandler);
         m_overlayHandler.set_axis(m_handles[i].axis());
         m_overlayHandler.end_overlay();
     }
 
-    // m_shapeHandler.render(vp);
     // In Vulkan path, render() is a no-op; Renderer uses overlayHandler() directly.
-    // m_overlayHandler.render(vp);
 }

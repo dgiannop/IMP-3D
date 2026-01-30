@@ -1,6 +1,7 @@
 #include "OverlayHandler.hpp"
 
 #include <cfloat>
+#include <cmath>
 #include <glm/gtx/compatibility.hpp>
 #include <glm/gtx/component_wise.hpp>
 #include <glm/gtx/vector_query.hpp>
@@ -8,11 +9,11 @@
 #include "CoreUtilities.hpp"
 #include "Viewport.hpp"
 
-void OverlayHandler::begin_overlay(const std::string& name)
+void OverlayHandler::begin_overlay(int32_t handle)
 {
     Shape s;
-    s.name = name;
-    s.axis = glm::vec3(0.0f);
+    s.handle = handle;
+    s.axis   = glm::vec3(0.0f);
 
     m_shapes.push_back(std::move(s));
     m_currentShape = static_cast<int32_t>(m_shapes.size()) - 1;
@@ -20,7 +21,7 @@ void OverlayHandler::begin_overlay(const std::string& name)
 
 void OverlayHandler::end_overlay()
 {
-    m_currentShape = -1;
+    m_currentShape = kNoHandle;
 }
 
 void OverlayHandler::add_point(const glm::vec3& point, float size, const glm::vec4& color)
@@ -77,9 +78,11 @@ void OverlayHandler::set_axis(const glm::vec3& axis)
 void OverlayHandler::clear()
 {
     m_shapes.clear();
-    m_currentShape = -1;
+    m_currentShape = kNoHandle;
     m_flatLines.clear();
     m_flatPoints.clear();
+    m_flatPolys.clear();
+    m_lastPicked = kNoHandle;
 }
 
 // -----------------------------------------------------------------------------
@@ -91,9 +94,7 @@ const std::vector<OverlayHandler::Point>& OverlayHandler::points() const
     m_flatPoints.clear();
 
     for (const Shape& s : m_shapes)
-    {
         m_flatPoints.insert(m_flatPoints.end(), s.points.begin(), s.points.end());
-    }
 
     return m_flatPoints;
 }
@@ -115,7 +116,6 @@ const std::vector<OverlayHandler::Line>& OverlayHandler::lines() const
             if (n < 2)
                 continue;
 
-            // (0–1, 1–2, ..., n-2–n-1, n-1–0)
             for (size_t i = 0; i < n; ++i)
             {
                 const glm::vec3& p1 = v[i];
@@ -140,136 +140,38 @@ const std::vector<OverlayHandler::Polygon>& OverlayHandler::polygons() const
     m_flatPolys.clear();
 
     for (const Shape& s : m_shapes)
-    {
         m_flatPolys.insert(m_flatPolys.end(), s.polys.begin(), s.polys.end());
-    }
 
     return m_flatPolys;
 }
 
 // -----------------------------------------------------------------------------
-// Picking
+// Picking (unchanged logic; returns handle instead of string)
 // -----------------------------------------------------------------------------
 
-// const std::string& OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse_y)
-// {
-//     if (!vp || m_shapes.empty())
-//         return m_emptyString;
-
-//     const glm::vec2 mousePos(mouse_x, mouse_y);
-//     const un::ray   ray = vp->ray(mouse_x, mouse_y);
-
-//     float bestDepth    = FLT_MAX;
-//     int   bestShapeIdx = -1;
-
-//     int colinearShapeIdx = -1;
-
-//     // Tuning: same thresholds as your old GL gizmos
-//     constexpr float pointPickRadius   = 8.0f; // pixels
-//     constexpr float linePickRadius    = 8.0f; // pixels
-//     constexpr float axisColinearEps   = 0.1f; // for glm::areCollinear
-//     constexpr float axisNonZeroTarget = 1.0f; // for un::equal(compAdd(abs(axis)), 1)
-
-//     for (int i = 0; i < static_cast<int>(m_shapes.size()); ++i)
-//     {
-//         const Shape& shape = m_shapes[i];
-
-//         // --- test points ---
-//         for (const Point& pt : shape.points)
-//         {
-//             glm::vec3 sp = vp->project(pt.pos); // screen space (x,y in pixels, z depth)
-
-//             if (sp.z <= 0.0f)
-//                 continue;
-
-//             if (glm::distance(mousePos, glm::vec2(sp)) <= pointPickRadius)
-//             {
-//                 if (sp.z < bestDepth)
-//                 {
-//                     bestDepth    = sp.z;
-//                     bestShapeIdx = i;
-//                 }
-//             }
-//         }
-
-//         // --- test lines ---
-//         for (const Line& L : shape.lines)
-//         {
-//             glm::vec3 s1 = vp->project(L.p1);
-//             glm::vec3 s2 = vp->project(L.p2);
-
-//             // Degenerate segment or fully behind camera
-//             if (s1 == s2 || (s1.z <= 0.0f && s2.z <= 0.0f))
-//                 continue;
-
-//             const glm::vec2 a(s1);
-//             const glm::vec2 b(s2);
-
-//             float t = un::closest_point_on_line(mousePos, a, b);
-//             if (t < 0.0f || t > 1.0f)
-//                 continue;
-
-//             glm::vec2 closest = glm::mix(a, b, t);
-//             float     dist    = glm::distance(mousePos, closest);
-
-//             if (dist <= linePickRadius)
-//             {
-//                 float depth = glm::mix(s1.z, s2.z, t);
-//                 if (depth <= 0.0f)
-//                     continue;
-
-//                 if (depth < bestDepth)
-//                 {
-//                     bestDepth    = depth;
-//                     bestShapeIdx = i;
-//                 }
-//             }
-//         }
-
-//         // Remember overlays whose axis is colinear with ray, to prefer them
-//         // only if nothing else was hit (same behavior as your old code).
-//         if (un::equal(glm::compAdd(glm::abs(shape.axis)), axisNonZeroTarget) &&
-//             glm::areCollinear(shape.axis, ray.dir, axisColinearEps))
-//         {
-//             colinearShapeIdx = i;
-//         }
-//     }
-
-//     if (bestShapeIdx >= 0 && bestShapeIdx < static_cast<int>(m_shapes.size()))
-//     {
-//         return m_shapes[bestShapeIdx].name;
-//     }
-
-//     if (colinearShapeIdx >= 0 && colinearShapeIdx < static_cast<int>(m_shapes.size()))
-//     {
-//         return m_shapes[colinearShapeIdx].name;
-//     }
-
-//     return m_emptyString;
-// }
-const std::string& OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse_y)
+int32_t OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse_y)
 {
     if (!vp || m_shapes.empty())
-        return m_emptyString;
+    {
+        m_lastPicked = kNoHandle;
+        return m_lastPicked;
+    }
 
     const glm::vec2 mousePos(mouse_x, mouse_y);
     const un::ray   ray = vp->ray(mouse_x, mouse_y);
 
-    // Best candidate by screen distance, then depth.
     float bestDist     = FLT_MAX;
     float bestDepth    = FLT_MAX;
     int   bestShapeIdx = -1;
 
     int colinearShapeIdx = -1;
 
-    constexpr float pointPickRadius   = 10.0f; // bump a bit for reliability
+    constexpr float pointPickRadius   = 10.0f;
     constexpr float linePickRadius    = 10.0f;
     constexpr float axisColinearEps   = 0.1f;
     constexpr float axisNonZeroTarget = 1.0f;
 
     auto depth_valid = [](float z) noexcept {
-        // Be permissive: different projections encode depth differently.
-        // Reject only NaNs and extreme negatives.
         return std::isfinite(z) && z > -1e6f;
     };
 
@@ -288,7 +190,6 @@ const std::string& OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse
             const float dist = glm::distance(mousePos, glm::vec2(sp));
             if (dist <= pointPickRadius)
             {
-                // Primary: closest in screen space. Secondary: closer depth.
                 if (dist < bestDist || (dist == bestDist && sp.z < bestDepth))
                 {
                     bestDist     = dist;
@@ -307,7 +208,6 @@ const std::string& OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse
             if (!depth_valid(s1.z) && !depth_valid(s2.z))
                 continue;
 
-            // Degenerate segment
             if (s1 == s2)
                 continue;
 
@@ -336,7 +236,7 @@ const std::string& OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse
             }
         }
 
-        // Colinear fallback only if nothing else hit
+        // Colinear fallback only if nothing else hit (legacy)
         if (un::equal(glm::compAdd(glm::abs(shape.axis)), axisNonZeroTarget) &&
             glm::areCollinear(shape.axis, ray.dir, axisColinearEps))
         {
@@ -345,10 +245,17 @@ const std::string& OverlayHandler::pick(Viewport* vp, float mouse_x, float mouse
     }
 
     if (bestShapeIdx >= 0 && bestShapeIdx < static_cast<int>(m_shapes.size()))
-        return m_shapes[bestShapeIdx].name;
+    {
+        m_lastPicked = m_shapes[bestShapeIdx].handle;
+        return m_lastPicked;
+    }
 
     if (colinearShapeIdx >= 0 && colinearShapeIdx < static_cast<int>(m_shapes.size()))
-        return m_shapes[colinearShapeIdx].name;
+    {
+        m_lastPicked = m_shapes[colinearShapeIdx].handle;
+        return m_lastPicked;
+    }
 
-    return m_emptyString;
+    m_lastPicked = kNoHandle;
+    return m_lastPicked;
 }

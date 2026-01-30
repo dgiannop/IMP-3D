@@ -13,17 +13,6 @@ TranslateGizmo::TranslateGizmo(glm::vec3* amount) : m_amount{amount}
         *m_amount = glm::vec3{0.0f};
 }
 
-TranslateGizmo::Axis TranslateGizmo::axisFromPickName(const std::string& s) noexcept
-{
-    if (s == "x" || s == "X")
-        return Axis::X;
-    if (s == "y" || s == "Y")
-        return Axis::Y;
-    if (s == "z" || s == "Z")
-        return Axis::Z;
-    return Axis::None;
-}
-
 glm::vec3 TranslateGizmo::axisDir(Axis a) noexcept
 {
     switch (a)
@@ -80,9 +69,9 @@ void TranslateGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
     if (!vp || !scene || !m_amount)
         return;
 
-    const std::string name = m_overlayHandler.pick(vp, ev.x, ev.y);
-    m_axis                 = axisFromPickName(name);
-    m_dragging             = (m_axis != Axis::None);
+    const int32_t handle = m_overlayHandler.pick(vp, ev.x, ev.y);
+    m_axis               = axisFromHandle(handle);
+    m_dragging           = (m_axis != Axis::None);
 
     if (!m_dragging)
         return;
@@ -144,14 +133,14 @@ void TranslateGizmo::render(Viewport* vp, Scene* scene)
 
     m_overlayHandler.clear();
 
-    auto addAxis = [&](const char* name, const glm::vec3& dir, const glm::vec4& color) {
-        m_overlayHandler.begin_overlay(name);
+    auto addAxis = [&](int32_t handle, const glm::vec3& dir, const glm::vec4& color) {
+        m_overlayHandler.begin_overlay(handle);
         m_overlayHandler.add_line(origin, origin + dir * m_length, 8.f, color);
         m_overlayHandler.set_axis(dir);
         m_overlayHandler.end_overlay();
     };
 
-    addAxis("x", glm::vec3{1, 0, 0}, glm::vec4{1, 0, 0, 1});
-    addAxis("y", glm::vec3{0, 1, 0}, glm::vec4{0, 1, 0, 1});
-    addAxis("z", glm::vec3{0, 0, 1}, glm::vec4{0, 0, 1, 1});
+    addAxis(0, glm::vec3{1, 0, 0}, glm::vec4{1, 0, 0, 1});
+    addAxis(1, glm::vec3{0, 1, 0}, glm::vec4{0, 1, 0, 1});
+    addAxis(2, glm::vec3{0, 0, 1}, glm::vec4{0, 0, 1, 1});
 }

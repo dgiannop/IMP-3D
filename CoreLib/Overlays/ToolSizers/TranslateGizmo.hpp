@@ -1,7 +1,6 @@
 #pragma once
 
 #include <glm/glm.hpp>
-#include <string>
 
 #include "OverlayHandler.hpp"
 
@@ -26,9 +25,7 @@ public:
     explicit TranslateGizmo(glm::vec3* amount);
 
     void mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev);
-
     void mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& ev);
-
     void mouseUp(Viewport* vp, Scene* scene, const CoreEvent& ev);
 
     void render(Viewport* vp, Scene* scene);
@@ -52,7 +49,20 @@ private:
         Z    = 2,
     };
 
-    static Axis      axisFromPickName(const std::string& s) noexcept;
+    static Axis axisFromHandle(int32_t h) noexcept
+    {
+        switch (h)
+        {
+            case 0:
+                return Axis::X;
+            case 1:
+                return Axis::Y;
+            case 2:
+                return Axis::Z;
+            default:
+                return Axis::None;
+        }
+    }
 
     static glm::vec3 axisDir(Axis a) noexcept;
 
@@ -70,9 +80,9 @@ private:
     Axis m_axis     = Axis::None;
     bool m_dragging = false;
 
-    glm::vec3 m_origin  = glm::vec3{0.0f}; ///< selection center at drag start
+    glm::vec3 m_origin     = glm::vec3{0.0f}; ///< selection center at drag start
     glm::vec3 m_baseOrigin = glm::vec3{0.0f};
-    glm::vec3 m_axisDir = glm::vec3{1.0f, 0.0f, 0.0f};
+    glm::vec3 m_axisDir    = glm::vec3{1.0f, 0.0f, 0.0f};
 
     glm::vec3 m_startOnPlane = glm::vec3{0.0f};
     glm::vec3 m_startAmount  = glm::vec3{0.0f}; ///< amount at mouseDown (for stable absolute dragging)

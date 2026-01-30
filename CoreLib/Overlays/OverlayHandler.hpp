@@ -1,7 +1,7 @@
 #pragma once
 
+#include <cstdint>
 #include <glm/glm.hpp>
-#include <string>
 #include <vector>
 
 class Viewport;
@@ -13,33 +13,38 @@ class Viewport;
 ///  - build gizmos (via begin_overlay / add_point / add_line / end_overlay)
 ///  - pick a handle under the mouse (pick)
 ///  - let the Renderer draw them (lines()).
+///
+/// v1.1 change: overlay handles are int32_t (no strings).
+///  - handle == -1 means "none".
 class OverlayHandler
 {
 public:
+    static constexpr int32_t kNoHandle = -1;
+
     struct Point
     {
-        glm::vec3 pos;
-        float     size;
-        glm::vec4 color;
+        glm::vec3 pos   = {};
+        float     size  = 1.0f;
+        glm::vec4 color = {};
     };
 
     struct Line
     {
-        glm::vec3 p1;
-        glm::vec3 p2;
-        float     thickness;
-        glm::vec4 color;
+        glm::vec3 p1        = {};
+        glm::vec3 p2        = {};
+        float     thickness = 1.0f;
+        glm::vec4 color     = {};
     };
 
     struct Polygon
     {
         std::vector<glm::vec3> verts;
-        glm::vec4              color;
+        glm::vec4              color = {};
     };
 
-    /// Begin specifying a new overlay shape with a given name.
-    /// Typically BoxSizer uses std::to_string(handleIndex) as the name.
-    void begin_overlay(const std::string& name);
+    /// Begin specifying a new overlay shape with a given handle.
+    /// Typically tools use stable indices for handles (0..N-1).
+    void begin_overlay(int32_t handle);
 
     /// Add primitives to the current overlay.
     void add_point(const glm::vec3& point, float size, const glm::vec4& color);
@@ -49,7 +54,7 @@ public:
     void add_polygon(const std::vector<glm::vec3>& points, const glm::vec4& color);
 
     /// Set the “axis” for the current overlay.
-    /// Used to prefer handles that are not collinear with the picking ray.
+    /// Used by legacy gizmo picking fallback.
     void set_axis(const glm::vec3& axis);
 
     /// Finish the current overlay.
@@ -58,9 +63,9 @@ public:
     /// Clear all overlays for the next frame.
     void clear();
 
-    /// Picking: returns the name of the overlay under the mouse, or an empty string.
+    /// Picking: returns the overlay handle under the mouse, or kNoHandle (-1).
     /// Uses projected 2D distances in screen space (same coords passed in from CoreEvent).
-    const std::string& pick(Viewport* vp, float mouse_x, float mouse_y);
+    int32_t pick(Viewport* vp, float mouse_x, float mouse_y);
 
     /// Access all overlay lines flattened across all shapes (for Renderer::drawOverlays).
     const std::vector<Point>&   points() const;
@@ -70,7 +75,7 @@ public:
 private:
     struct Shape
     {
-        std::string          name;
+        int32_t              handle = kNoHandle;
         glm::vec3            axis{0.0f};
         std::vector<Point>   points;
         std::vector<Line>    lines;
@@ -78,12 +83,12 @@ private:
     };
 
     std::vector<Shape> m_shapes;
-    int32_t            m_currentShape = -1;
+    int32_t            m_currentShape = kNoHandle;
 
     // Scratch buffers for flattened primitives (for rendering)
     mutable std::vector<Line>    m_flatLines;
     mutable std::vector<Point>   m_flatPoints;
     mutable std::vector<Polygon> m_flatPolys;
 
-    std::string m_emptyString;
+    int32_t m_lastPicked = kNoHandle;
 };
