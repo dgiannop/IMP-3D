@@ -248,6 +248,55 @@ public:
     const std::vector<std::unique_ptr<PropertyBase>>& toolProperties() const noexcept;
 
     // ------------------------------------------------------------
+    // Scene lights
+    // ------------------------------------------------------------
+
+    /**
+     * @brief Create a new light in the active scene.
+     *
+     * This is the primary entry point for UI and tools to add lights.
+     * The light is created via the Scene and LightHandler, and wrapped
+     * in a SceneLight object owned by the Scene.
+     *
+     * @param name Display name for the light
+     * @param type Light type (e.g. Directional, Point, Spot)
+     * @return Pointer to the created SceneLight, or nullptr on failure
+     */
+    [[nodiscard]] SceneLight* createLight(std::string_view name, LightType type);
+
+    /**
+     * @brief Retrieve all lights in the active scene.
+     *
+     * Intended for editor UI, inspectors, and renderer iteration.
+     * The returned pointers remain owned by the Scene.
+     *
+     * @return Vector of SceneLight pointers
+     */
+    [[nodiscard]] std::vector<SceneLight*> sceneLights() const;
+
+    /**
+     * @brief Enable or disable a light.
+     *
+     * This updates the underlying Light data and triggers the appropriate
+     * scene and renderer change counters.
+     *
+     * @param id Light identifier
+     * @param enabled New enabled state
+     */
+    void setLightEnabled(LightId id, bool enabled) noexcept;
+
+    /**
+     * @brief Set the object-to-world transform of a light.
+     *
+     * This affects the light’s position and/or direction depending
+     * on its type, and marks the scene as modified.
+     *
+     * @param id Light identifier
+     * @param m Object-to-world transform matrix
+     */
+    void setLightTransform(LightId id, const glm::mat4& m) noexcept;
+
+    // ------------------------------------------------------------
     // Scene grid
     // ------------------------------------------------------------
 

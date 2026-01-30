@@ -3,6 +3,7 @@
 #include "Command.hpp"
 #include "Config.hpp"
 #include "MaterialEditor.hpp"
+#include "SceneLight.hpp"
 #include "SelectionUtils.hpp" // todo remove this and the functionality of assignMaterial from in here
 #include "Tool.hpp"
 #include "Viewport.hpp"
@@ -505,6 +506,70 @@ const std::vector<std::unique_ptr<PropertyBase>>& Core::toolProperties() const n
     if (m_activeTool)
         return m_activeTool->properties();
     return kEmpty;
+}
+
+// ------------------------------------------------------------
+// Scene lights
+// ------------------------------------------------------------
+
+SceneLight* Core::createLight(std::string_view name, LightType type)
+{
+    if (!m_scene)
+        return nullptr;
+
+    SceneLight* light = m_scene->createSceneLight(name, type);
+    if (!light)
+        return nullptr;
+
+    m_scene->changeCounter()->change();
+    // Mark document / scene as modified so save state updates
+    // m_scene->contentChangeCounter()->change();  TODO: Choose which one to bump
+
+    return light;
+}
+
+std::vector<SceneLight*> Core::sceneLights() const
+{
+    if (!m_scene)
+        return {};
+
+    return m_scene->sceneLights();
+}
+
+void Core::setLightEnabled(LightId id, bool enabled) noexcept
+{
+    if (!m_scene)
+        return;
+
+    LightHandler* lh = m_scene->lightHandler();
+    if (!lh)
+        return;
+
+    if (!lh->setEnabled(id, enabled))
+        return;
+
+    m_scene->changeCounter()->change();
+}
+
+void Core::setLightTransform(LightId id, const glm::mat4& m) noexcept
+{
+    if (!m_scene)
+        return;
+
+    // SceneLight owns the transform, not LightHandler
+    for (SceneLight* sl : m_scene->sceneLights())
+    {
+        if (!sl)
+            continue;
+
+        if (sl->lightId() == id)
+        {
+            sl->model(m);
+            m_scene->changeCounter()->change();
+            // m_scene->contentChangeCounter()->change(); TODO: Choose which one to bump
+            break;
+        }
+    }
 }
 
 void Core::showSceneGrid(bool show) noexcept
