@@ -8,6 +8,8 @@ SceneLight::SceneLight(LightHandler* lightHandler, LightId id, std::string_view 
 
 void SceneLight::idle(Scene* /*scene*/)
 {
+    // SceneLight does not require per-frame maintenance by default.
+    // Animation, gizmo updates, or derived-state refresh can be introduced here later.
 }
 
 glm::mat4 SceneLight::model() const noexcept
@@ -15,9 +17,9 @@ glm::mat4 SceneLight::model() const noexcept
     return m_model;
 }
 
-void SceneLight::model(const glm::mat4& m) noexcept
+void SceneLight::model(const glm::mat4& mtx) noexcept
 {
-    m_model = m;
+    m_model = mtx;
 }
 
 bool SceneLight::visible() const noexcept

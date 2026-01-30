@@ -93,7 +93,7 @@ public:
      * @brief Retrieve all SceneMeshes (const).
      * @return Vector of SceneMesh pointers
      */
-    [[nodiscard]] const std::vector<SceneMesh*> sceneMeshes() const;
+    [[nodiscard]] std::vector<SceneMesh*> sceneMeshes() const;
 
     /**
      * @brief Retrieve all SceneLights (const).
@@ -174,10 +174,10 @@ public:
     [[nodiscard]] const LightHandler* lightHandler() const noexcept;
 
     /** @brief Access renderer. */
-    [[nodiscard]] class Renderer* renderer() noexcept;
+    [[nodiscard]] Renderer* renderer() noexcept;
 
     /** @brief Access renderer (const). */
-    [[nodiscard]] const class Renderer* renderer() const noexcept;
+    [[nodiscard]] const Renderer* renderer() const noexcept;
 
     /** @brief Set the active viewport. */
     void setActiveViewport(Viewport* vp) noexcept;

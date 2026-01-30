@@ -115,37 +115,56 @@ std::vector<SceneMesh*> Scene::sceneMeshes()
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (auto* mesh = dynamic_cast<SceneMesh*>(obj.get()))
-            result.push_back(mesh);
+        if (!obj)
+            continue;
+
+        if (obj->type() != SceneObjectType::Mesh)
+            continue;
+
+        result.push_back(static_cast<SceneMesh*>(obj.get()));
     }
+
     return result;
 }
 
-const std::vector<SceneMesh*> Scene::sceneMeshes() const
+std::vector<SceneMesh*> Scene::sceneMeshes() const
 {
     std::vector<SceneMesh*> result;
     result.reserve(m_sceneObjects.size());
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (auto* mesh = dynamic_cast<SceneMesh*>(obj.get()))
-            result.push_back(mesh);
+        if (!obj)
+            continue;
+
+        if (obj->type() != SceneObjectType::Mesh)
+            continue;
+
+        // SceneObject ownership remains with Scene; returning non-const pointers
+        // mirrors the existing API and supports callers that mutate the meshes.
+        result.push_back(static_cast<SceneMesh*>(obj.get()));
     }
+
     return result;
 }
 
 std::vector<SceneLight*> Scene::sceneLights() const
 {
-    std::vector<SceneLight*> out;
+    std::vector<SceneLight*> result;
+    result.reserve(m_sceneObjects.size());
 
-    out.reserve(m_sceneObjects.size());
     for (const auto& obj : m_sceneObjects)
     {
-        if (auto* l = dynamic_cast<SceneLight*>(obj.get()))
-            out.push_back(l);
+        if (!obj)
+            continue;
+
+        if (obj->type() != SceneObjectType::Light)
+            continue;
+
+        result.push_back(static_cast<SceneLight*>(obj.get()));
     }
 
-    return out;
+    return result;
 }
 
 std::vector<std::unique_ptr<SceneObject>>& Scene::sceneObjects()
@@ -165,11 +184,16 @@ std::vector<SysMesh*> Scene::meshes() const
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (auto* mesh = dynamic_cast<SceneMesh*>(obj.get()))
-        {
-            result.push_back(mesh->sysMesh());
-        }
+        if (!obj)
+            continue;
+
+        if (obj->type() != SceneObjectType::Mesh)
+            continue;
+
+        auto* meshObj = static_cast<SceneMesh*>(obj.get());
+        result.push_back(meshObj->sysMesh());
     }
+
     return result;
 }
 
