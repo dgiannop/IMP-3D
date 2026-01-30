@@ -1836,11 +1836,6 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         drawSelection(cmd, vp, scene);
 
-        if (scene->showSceneGrid())
-        {
-            // drawSceneGrid(cmd, vp, scene);
-        }
-
         return;
     }
 
@@ -1947,11 +1942,6 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                 vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
             });
         }
-
-        if (scene->showSceneGrid())
-        {
-            drawSceneGrid(cmd, vp, scene);
-        }
     }
     // ------------------------------------------------------------
     // Wireframe mode (hidden-line)
@@ -2030,7 +2020,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
     drawSelection(cmd, vp, scene);
 
-    if (scene->showSceneGrid() && vp->drawMode() != DrawMode::SHADED)
+    if (scene->showSceneGrid())
     {
         drawSceneGrid(cmd, vp, scene);
     }

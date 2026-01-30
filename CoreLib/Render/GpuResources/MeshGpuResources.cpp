@@ -10,17 +10,6 @@
 #include "SceneMesh.hpp"
 #include "VkUtilities.hpp"
 
-namespace
-{
-    struct BufferLeak
-    {
-        GpuBuffer buf;
-    };
-
-    static std::vector<BufferLeak> s_leakedMeshBuffers;
-
-} // namespace
-
 // -------------------------------------------------------------
 // Template helper
 // -------------------------------------------------------------

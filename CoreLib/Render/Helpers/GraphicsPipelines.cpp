@@ -28,9 +28,7 @@ void GraphicsPipeline::destroy() noexcept
 namespace
 {
 
-    inline bool checkCommonInputs(const VulkanContext& ctx,
-                                  VkRenderPass         renderPass,
-                                  VkPipelineLayout     layout) noexcept
+    inline bool checkCommonInputs(const VulkanContext& ctx, VkRenderPass renderPass, VkPipelineLayout layout) noexcept
     {
         return ctx.device != VK_NULL_HANDLE &&
                renderPass != VK_NULL_HANDLE &&
@@ -55,9 +53,7 @@ namespace
         return ms;
     }
 
-    inline VkPipelineDepthStencilStateCreateInfo makeDepthState(bool        testEnable,
-                                                                bool        writeEnable,
-                                                                VkCompareOp compareOp) noexcept
+    inline VkPipelineDepthStencilStateCreateInfo makeDepthState(bool testEnable, bool writeEnable, VkCompareOp compareOp) noexcept
     {
         VkPipelineDepthStencilStateCreateInfo ds{};
         ds.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -69,8 +65,7 @@ namespace
         return ds;
     }
 
-    inline VkPipelineColorBlendStateCreateInfo makeOpaqueColorBlend(
-        VkPipelineColorBlendAttachmentState& outAtt) noexcept
+    inline VkPipelineColorBlendStateCreateInfo makeOpaqueColorBlend(VkPipelineColorBlendAttachmentState& outAtt) noexcept
     {
         outAtt                = {};
         outAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
@@ -87,8 +82,7 @@ namespace
         return cb;
     }
 
-    inline VkPipelineColorBlendStateCreateInfo makeAlphaColorBlend(
-        VkPipelineColorBlendAttachmentState& outAtt) noexcept
+    inline VkPipelineColorBlendStateCreateInfo makeAlphaColorBlend(VkPipelineColorBlendAttachmentState& outAtt) noexcept
     {
         outAtt                = {};
         outAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
@@ -112,8 +106,7 @@ namespace
         return cb;
     }
 
-    inline VkPipelineRasterizationStateCreateInfo makeRasterStateFillNoCull(
-        bool depthBias = false) noexcept
+    inline VkPipelineRasterizationStateCreateInfo makeRasterStateFillNoCull(bool depthBias = false) noexcept
     {
         VkPipelineRasterizationStateCreateInfo rs{};
         rs.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -127,8 +120,7 @@ namespace
         return rs;
     }
 
-    inline VkPipelineRasterizationStateCreateInfo makeRasterStateFillBackfaceCull(
-        bool depthBias = false) noexcept
+    inline VkPipelineRasterizationStateCreateInfo makeRasterStateFillBackfaceCull(bool depthBias = false) noexcept
     {
         VkPipelineRasterizationStateCreateInfo rs{};
         rs.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
