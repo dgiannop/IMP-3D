@@ -1,9 +1,8 @@
 #include "Scene.hpp"
 
-#include <iostream>
-
 #include "LightHandler.hpp"
 #include "Renderer.hpp"
+#include "SceneLight.hpp"
 #include "Viewport.hpp"
 
 Scene::Scene() : m_renderer{std::make_unique<Renderer>()},
@@ -22,6 +21,7 @@ Scene::Scene() : m_renderer{std::make_unique<Renderer>()},
     m_materialHandler->changeCounter()->addParent(m_sceneChangeCounter);
     m_imageHandler->changeCounter()->addParent(m_sceneChangeCounter);
     m_contentChangeCounter->addParent(m_sceneChangeCounter);
+    m_lightHandler->changeCounter()->addParent(m_sceneChangeCounter);
     // Ensure default material at index 0
     m_materialHandler->createMaterial("Default");
 }
@@ -97,6 +97,17 @@ SceneMesh* Scene::createSceneMesh(std::string_view name)
     return ptr;
 }
 
+SceneLight* Scene::createSceneLight(std::string_view name, LightType type)
+{
+    const LightId id = m_lightHandler->createLight(name, type);
+
+    auto sl = std::make_unique<SceneLight>(m_lightHandler.get(), id, name);
+
+    SceneLight* ptr = sl.get();
+    m_sceneObjects.push_back(std::move(sl));
+    return ptr;
+}
+
 std::vector<SceneMesh*> Scene::sceneMeshes()
 {
     std::vector<SceneMesh*> result;
@@ -121,6 +132,20 @@ const std::vector<SceneMesh*> Scene::sceneMeshes() const
             result.push_back(mesh);
     }
     return result;
+}
+
+std::vector<SceneLight*> Scene::sceneLights() const
+{
+    std::vector<SceneLight*> out;
+
+    out.reserve(m_sceneObjects.size());
+    for (const auto& obj : m_sceneObjects)
+    {
+        if (auto* l = dynamic_cast<SceneLight*>(obj.get()))
+            out.push_back(l);
+    }
+
+    return out;
 }
 
 std::vector<std::unique_ptr<SceneObject>>& Scene::sceneObjects()

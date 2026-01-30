@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "HoleList.hpp"
@@ -18,8 +19,10 @@
  *  - LightHandler   : ownership + creation/destruction + stable IDs
  *
  * Notes:
- *  - No undo/redo yet (add later by wrapping mutations in History actions).
- *  - No SceneObject behavior here; that goes in SceneLight (wrapper).
+ *  - Undo/redo is intentionally not implemented yet; it can be added later by
+ *    wrapping mutations in History actions.
+ *  - SceneObject behavior does not belong here; that is handled by a SceneLight
+ *    wrapper that references LightId and provides transform/selection/visibility.
  */
 class LightHandler final
 {
@@ -36,7 +39,19 @@ public:
 public:
     void clear() noexcept;
 
-    [[nodiscard]] LightId createLight(const std::string& name, LightType type) noexcept;
+    /**
+     * @brief Creates a new Light with a stable ID.
+     * @param name User-facing display name.
+     * @param type Light type (Directional/Point/Spot).
+     * @return Stable LightId for the created light.
+     */
+    [[nodiscard]] LightId createLight(std::string_view name, LightType type) noexcept;
+
+    /**
+     * @brief Creates a new Light by cloning a source Light.
+     * @param src Source light data.
+     * @return Stable LightId for the created light.
+     */
     [[nodiscard]] LightId createLight(const Light& src) noexcept;
 
     bool destroyLight(LightId id) noexcept;

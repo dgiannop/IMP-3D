@@ -9,7 +9,7 @@
 #include "LightHandler.hpp"
 #include "MaterialHandler.hpp"
 #include "SceneMesh.hpp"
-#include "SceneObject.hpp"
+// #include "SceneObject.hpp"
 #include "SceneQueryCpu.hpp"
 #include "SceneQueryEmbree.hpp"
 #include "SceneSnap.hpp"
@@ -17,7 +17,8 @@
 
 class Viewport;
 class Renderer;
-
+class SceneObject;
+class SceneLight;
 /**
  * @brief Scene-level container and coordinator.
  *
@@ -75,6 +76,14 @@ public:
     [[nodiscard]] SceneMesh* createSceneMesh(std::string_view name = {});
 
     /**
+     * @brief Create and add a new SceneLight.
+     * @param name light name
+     * @param type light type (ex: LightType::Directional)
+     * @return Pointer to the created SceneLight
+     */
+    SceneLight* createSceneLight(std::string_view name, LightType type);
+
+    /**
      * @brief Retrieve all SceneMeshes.
      * @return Vector of SceneMesh pointers
      */
@@ -85,6 +94,12 @@ public:
      * @return Vector of SceneMesh pointers
      */
     [[nodiscard]] const std::vector<SceneMesh*> sceneMeshes() const;
+
+    /**
+     * @brief Retrieve all SceneLights (const).
+     * @return Vector of SceneLight pointers
+     */
+    std::vector<SceneLight*> sceneLights() const;
 
     /**
      * @brief Access scene objects.

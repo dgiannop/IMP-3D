@@ -2,6 +2,8 @@
 
 #include <glm/matrix.hpp>
 
+class Scene;
+
 /**
  * @brief Base class for any object inside a Scene (meshes, lights, cameras).
  *
@@ -21,7 +23,7 @@ public:
      * @brief Per-frame idle/update hook.
      * @param scene Owning scene (may be used to query global state)
      */
-    virtual void idle(class Scene* scene) = 0;
+    virtual void idle(Scene* scene) = 0;
 
     // ------------------------------------------------------------
     // Transform
