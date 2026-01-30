@@ -39,6 +39,7 @@ qt_add_executable(ApplicationUI
     MainUtilities.hpp
     SubWindows/LightsEditorDialog.hpp SubWindows/LightsEditorDialog.cpp SubWindows/LightsEditorDialog.ui
     SubWindows/LightingSettingsDialog.hpp SubWindows/LightingSettingsDialog.cpp SubWindows/LightingSettingsDialog.ui
+    SubWindows/CreateLightDialog.hpp SubWindows/CreateLightDialog.cpp SubWindows/CreateLightDialog.ui
 )
 
 set_target_properties(ApplicationUI PROPERTIES OUTPUT_NAME "Imp3d")
