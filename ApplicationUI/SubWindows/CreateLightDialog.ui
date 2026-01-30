@@ -123,6 +123,21 @@ padding-left: 8px;
       </layout>
      </item>
 
+     <!-- NEW: Name hint row -->
+     <item>
+      <widget class="QLabel" name="nameHintLabel">
+       <property name="styleSheet">
+        <string notr="true">QLabel { color: #6b7580; padding-left: 88px; }</string>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+       <property name="wordWrap">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+
      <!-- Type row -->
      <item>
       <layout class="QHBoxLayout" name="typeRow">

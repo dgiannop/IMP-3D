@@ -27,6 +27,9 @@ public:
     /** @copydoc SubWindowBase::idleEvent */
     void idleEvent(class Core* core) override;
 
+protected:
+    void showEvent(QShowEvent* e) override;
+
 private slots:
     void onCreate();
     void onCancel();
