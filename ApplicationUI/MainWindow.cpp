@@ -9,6 +9,7 @@
 
 #include "Core.hpp"
 #include "MainUtilities.hpp"
+#include "SubWindows/CreateLightDialog.hpp"
 #include "SubWindows/LightingSettingsDialog.hpp"
 #include "SubWindows/LightsEditorDialog.hpp"
 #include "SubWindows/MaterialAssignDialog.hpp"
@@ -107,6 +108,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         m_subWindowManager->addSubWindow("MAT_EDITOR_DIALOG", new MaterialEditorDialog(this));
         m_subWindowManager->addSubWindow("PROPERTIES_DIALOG", new PropertyWindow(this));
         m_subWindowManager->addSubWindow("LIGHT_EDITOR_DIALOG", new LightsEditorDialog(this));
+        m_subWindowManager->addSubWindow("CREATE_LIGHT_DIALOG", new CreateLightDialog(this));
         m_subWindowManager->addSubWindow("LIGHTING_SETTINGS_DIALOG", new LightingSettingsDialog(this));
 
         connect(ui->btnNumPanel, &QPushButton::toggled, this, [=, this](bool checked) {
@@ -128,6 +130,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
                 m_subWindowManager->showSubWindow("ASSIGN_MAT_DIALOG");
             else
                 m_subWindowManager->hideSubWindow("ASSIGN_MAT_DIALOG");
+        });
+
+        connect(ui->btnLightEditor, &QPushButton::toggled, this, [=, this](bool checked) {
+            if (checked)
+                m_subWindowManager->showSubWindow("LIGHT_EDITOR_DIALOG");
+            else
+                m_subWindowManager->hideSubWindow("LIGHT_EDITOR_DIALOG");
+        });
+
+        connect(ui->btnLightEditorPlus, &QPushButton::toggled, this, [=, this](bool checked) {
+            if (checked)
+                m_subWindowManager->showSubWindow("CREATE_LIGHT_DIALOG");
+            else
+                m_subWindowManager->hideSubWindow("CREATE_LIGHT_DIALOG");
         });
 
         connect(m_subWindowManager.get(), &SubWindowManager::onSubWindowClosed, this, &MainWindow::onSubWindowClosed);
@@ -277,6 +293,10 @@ void MainWindow::onSubWindowClosed(QString name, int result)
     else if (name == "TEXTURE_PANEL")
     {
         ui->btnTexEditor->setChecked(false);
+    }
+    else if (name == "LIGHT_EDITOR_DIALOG")
+    {
+        ui->btnLightEditor->setChecked(false);
     }
 }
 
