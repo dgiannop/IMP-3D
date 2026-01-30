@@ -4,9 +4,30 @@
 #include "LightsEditorDialog.hpp"
 
 #include <QAbstractButton>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QSplitter>
 
+#include "Core.hpp"
 #include "SubWindows/ui_LightsEditorDialog.h"
+
+// If SceneLight is in some header, include it here.
+// Adjust include path to your project layout.
+#include "SceneLight.hpp"
+
+namespace
+{
+    static uint64_t counter_stamp(const SysCounterPtr& c) noexcept
+    {
+        return c ? c->value() : 0ull;
+    }
+
+    static QString to_qstring(std::string_view s)
+    {
+        return QString::fromUtf8(s.data(), static_cast<int>(s.size()));
+    }
+
+} // namespace
 
 LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
     SubWindowBase(parent),
@@ -54,7 +75,7 @@ LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
         ui->splitterMain->setCollapsible(m_rightIndex, false);
     }
 
-    // Optional: if your .ui has a Close button like the screenshot windows
+    // Close button
     if (ui->closeButton)
         connect(ui->closeButton, &QAbstractButton::clicked, this, &QWidget::close);
 
@@ -65,6 +86,10 @@ LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
     // Start expanded
     m_leftCollapsed    = false;
     m_lastExpandedSize = sizeHint();
+
+    // Light list defaults
+    if (ui->lightList)
+        ui->lightList->setSelectionMode(QAbstractItemView::SingleSelection);
 }
 
 LightsEditorDialog::~LightsEditorDialog() noexcept
@@ -73,10 +98,95 @@ LightsEditorDialog::~LightsEditorDialog() noexcept
     ui = nullptr;
 }
 
-void LightsEditorDialog::idleEvent(Core* /*core*/)
+void LightsEditorDialog::idleEvent(Core* core)
 {
-    // Intentionally empty for now.
-    // Later: refresh light list based on scene counter, etc.
+    if (!core || !ui || !ui->lightList)
+        return;
+
+    const uint64_t stamp = core->sceneChangeStamp();
+    if (stamp == m_lastSceneStamp)
+        return;
+
+    m_lastSceneStamp = stamp;
+
+    ui->lightList->clear();
+
+    const auto lights = core->sceneLights();
+    for (const SceneLight* light : lights)
+    {
+        if (!light)
+            continue;
+
+        ui->lightList->addItem(QString::fromUtf8(light->name().data(),
+                                                 static_cast<int>(light->name().size())));
+    }
+}
+
+void LightsEditorDialog::rebuildLightList(Core* core)
+{
+    if (!ui || !ui->lightList || !core)
+        return;
+
+    const QString prevSel = currentSelectedName();
+
+    ui->lightList->blockSignals(true);
+    ui->lightList->clear();
+
+    const std::vector<SceneLight*> lights = core->sceneLights();
+
+    for (SceneLight* l : lights)
+    {
+        if (!l)
+            continue;
+
+        // Assumes SceneLight has name() -> std::string_view (or similar).
+        const QString name = to_qstring(l->name());
+
+        QListWidgetItem* item = new QListWidgetItem(name);
+        ui->lightList->addItem(item);
+    }
+
+    ui->lightList->blockSignals(false);
+
+    restoreSelectionByName(prevSel);
+
+    // If nothing selected, select the first item if it exists (optional but nice UX)
+    if (ui->lightList->currentRow() < 0 && ui->lightList->count() > 0)
+        ui->lightList->setCurrentRow(0);
+}
+
+QString LightsEditorDialog::currentSelectedName() const
+{
+    if (!ui || !ui->lightList)
+        return {};
+
+    if (QListWidgetItem* it = ui->lightList->currentItem())
+        return it->text();
+
+    return {};
+}
+
+void LightsEditorDialog::restoreSelectionByName(const QString& name)
+{
+    if (!ui || !ui->lightList)
+        return;
+
+    const QString key = name.trimmed();
+    if (key.isEmpty())
+        return;
+
+    for (int i = 0; i < ui->lightList->count(); ++i)
+    {
+        QListWidgetItem* it = ui->lightList->item(i);
+        if (!it)
+            continue;
+
+        if (QString::compare(it->text(), key, Qt::CaseInsensitive) == 0)
+        {
+            ui->lightList->setCurrentRow(i);
+            return;
+        }
+    }
 }
 
 void LightsEditorDialog::onToggleLeft()
@@ -112,11 +222,11 @@ void LightsEditorDialog::applyCollapsedState(bool collapsed, bool force)
             sizes.push_back((i == m_rightIndex) ? 1 : 0);
         ui->splitterMain->setSizes(sizes);
 
-        // Compute tight width from sizeHint + frame margins (prevents “gap”)
         const int marginW =
-            (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) + (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
+            (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) +
+            (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
 
-        const int newW = ui->rightPanel->sizeHint().width() + marginW + 2; // +2 safety
+        const int newW = ui->rightPanel->sizeHint().width() + marginW + 2;
         setFixedWidth(std::max(newW, minimumSizeHint().width()));
         resize(width(), height());
     }
@@ -124,7 +234,6 @@ void LightsEditorDialog::applyCollapsedState(bool collapsed, bool force)
     {
         ui->leftPanel->setVisible(true);
 
-        // Restore right panel constraints for expanded mode
         ui->rightPanel->setMinimumWidth(m_rightPanelMinW);
         ui->rightPanel->setMaximumWidth(m_rightPanelMaxW);
         ui->rightPanel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);

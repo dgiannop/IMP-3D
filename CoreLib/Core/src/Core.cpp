@@ -582,3 +582,12 @@ bool Core::showSceneGrid() const noexcept
 {
     return m_scene && m_scene->showSceneGrid();
 }
+
+uint64_t Core::sceneChangeStamp() const noexcept
+{
+    if (!m_scene)
+        return 0ull;
+
+    const SysCounterPtr counter = m_scene->changeCounter();
+    return counter ? counter->value() : 0ull;
+}

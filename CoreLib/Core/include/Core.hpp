@@ -306,6 +306,15 @@ public:
     /** @brief Query whether the scene grid is visible. */
     bool showSceneGrid() const noexcept;
 
+    /**
+     * @brief Retrieve a monotonically increasing scene change stamp.
+     *
+     * This value changes whenever the scene topology, lights, materials,
+     * or selection state changes. Intended for UI polling.
+     * Todo: maybe name it to coreChangeStamp and use the contentChangeCounter
+     */
+    [[nodiscard]] uint64_t sceneChangeStamp() const noexcept;
+
 private:
     /** @brief All active viewports. */
     std::vector<std::unique_ptr<Viewport>> m_viewports;
