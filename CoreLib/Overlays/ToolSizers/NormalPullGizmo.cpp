@@ -37,14 +37,14 @@ glm::vec3 NormalPullGizmo::dragPointOnAxisPlane(Viewport*        vp,
 {
     const glm::vec3 aDir = safeNormalize(axisDir, glm::vec3{0.0f, 0.0f, 1.0f});
 
-    // Plane containing axis and facing camera as much as possible.
+    // The drag plane contains the axis and is chosen to face the camera as much as possible.
     const glm::vec3 camPos  = vp->cameraPosition();
     glm::vec3       viewDir = origin - camPos;
     viewDir                 = safeNormalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
 
     glm::vec3 n = glm::cross(aDir, viewDir);
 
-    // Degenerate fallback when axis aligns with view direction.
+    // Fallback when the axis aligns with the view direction.
     if (glm::length2(n) < 1e-10f)
     {
         n = glm::cross(aDir, glm::vec3{0.0f, 0.0f, 1.0f});
@@ -59,33 +59,6 @@ glm::vec3 NormalPullGizmo::dragPointOnAxisPlane(Viewport*        vp,
         return hit;
 
     return origin;
-}
-
-void NormalPullGizmo::buildBillboardSquare(Viewport*        vp,
-                                           const glm::vec3& center,
-                                           float            halfExtentWorld,
-                                           const glm::vec4& color,
-                                           bool             filledForPick)
-{
-    const glm::vec3 r = vp->rightDirection();
-    const glm::vec3 u = vp->upDirection();
-
-    const glm::vec3 p0 = center + (-r - u) * halfExtentWorld;
-    const glm::vec3 p1 = center + (r - u) * halfExtentWorld;
-    const glm::vec3 p2 = center + (r + u) * halfExtentWorld;
-    const glm::vec3 p3 = center + (-r + u) * halfExtentWorld;
-
-    if (filledForPick)
-    {
-        std::vector<glm::vec3> poly = {p0, p1, p2, p3};
-        m_overlayHandler.add_polygon(poly, color);
-        return;
-    }
-
-    m_overlayHandler.add_line(p0, p1, 4.0f, color);
-    m_overlayHandler.add_line(p1, p2, 4.0f, color);
-    m_overlayHandler.add_line(p2, p3, 4.0f, color);
-    m_overlayHandler.add_line(p3, p0, 4.0f, color);
 }
 
 void NormalPullGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
@@ -140,32 +113,49 @@ void NormalPullGizmo::render(Viewport* vp, Scene* scene)
 
     const float px = vp->pixelScale(m_origin);
 
-    // Base length is constant, but can be temporarily extended while dragging (bevel feel).
-    const float baseLen = std::max(0.05f, px * 85.0f);  // ~85px
-    const float tipHalf = std::max(0.0001f, px * 7.0f); // ~14px
+    const float baseLen   = std::max(0.05f, px * 85.0f);  // ~85px
+    const float tipRadius = std::max(0.0001f, px * 7.0f); // ~14px diameter
 
-    // If we are in bevel-like mode (base fixed), grow the stem with the magnitude of amount.
-    // If we are in extrude-like mode (base follows), keep the length constant.
     float len = baseLen;
     if (m_dragging && !m_followAmountBase)
         len = baseLen + std::abs(*m_amount);
 
-    m_axisLenWorld = len;
-    m_tipHalfWorld = tipHalf;
+    m_axisLenWorld   = len;
+    m_tipRadiusWorld = tipRadius;
+
+    // Yellow gizmo like the reference.
+    const glm::vec4 col = glm::vec4{1.0f, 1.0f, 0.0f, 1.0f};
+
+    // Slightly translucent fill so the disk reads as a handle without being too heavy.
+    const glm::vec4 fillCol = glm::vec4{1.0f, 1.0f, 0.0f, 0.85f};
+
+    // Thinner stem to match the reference.
+    const float stemThicknessPx = 5.0f;
 
     m_overlayHandler.clear();
     m_overlayHandler.begin_overlay(kHandle);
 
-    const glm::vec3 base = (m_dragging && m_followAmountBase) ? (m_origin + m_axis * (*m_amount)) : m_origin;
-
+    const glm::vec3 base  = (m_dragging && m_followAmountBase) ? (m_origin + m_axis * (*m_amount)) : m_origin;
     const glm::vec3 stemA = base;
     const glm::vec3 stemB = base + m_axis * m_axisLenWorld;
 
-    m_overlayHandler.add_line(stemA, stemB, 8.0f, glm::vec4{1, 1, 1, 1});
+    // Stem.
+    m_overlayHandler.add_line(stemA, stemB, stemThicknessPx, col);
 
-    buildBillboardSquare(vp, stemB, m_tipHalfWorld, glm::vec4{1, 1, 1, 0.25f}, true);
-    buildBillboardSquare(vp, stemB, m_tipHalfWorld, glm::vec4{1, 1, 1, 1}, false);
+    // Tip disk should face the camera (billboard) to avoid the "tilted/shaded" look.
+    const glm::vec3 r = vp->rightDirection();
+    const glm::vec3 u = vp->upDirection();
+    const glm::vec3 n = safeNormalize(glm::cross(r, u), glm::vec3{0.0f, 0.0f, 1.0f});
 
-    m_overlayHandler.set_axis(m_axis);
+    // The overlay axis hint is used as the circle plane normal by add_filled_circle().
+    m_overlayHandler.set_axis(n);
+
+    // Filled disk (also serves as the pick target via polygon interior hit-test).
+    m_overlayHandler.add_filled_circle(stemB, m_tipRadiusWorld, fillCol, 2.0f, 48);
+
+    // Optional crisp outline. If polygon outlines are not emitted by the renderer yet,
+    // this still leaves a visible filled disk (the important part).
+    m_overlayHandler.add_filled_circle(stemB, m_tipRadiusWorld, col, 2.0f, 48);
+
     m_overlayHandler.end_overlay();
 }

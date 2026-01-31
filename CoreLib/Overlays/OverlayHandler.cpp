@@ -77,6 +77,27 @@ static bool pointInPolygon2D(const glm::vec2&              p,
     return inside;
 }
 
+static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
+{
+    const float l2 = glm::dot(v, v);
+    if (l2 <= 1e-20f)
+        return fallback;
+    return v / std::sqrt(l2);
+}
+
+static void orthonormalBasis(const glm::vec3& n, glm::vec3& outU, glm::vec3& outV) noexcept
+{
+    // Builds a stable basis (u,v) perpendicular to n.
+    const glm::vec3 nn = safeNormalize(n, glm::vec3(0.0f, 0.0f, 1.0f));
+
+    const glm::vec3 a = (std::abs(nn.z) < 0.999f)
+                            ? glm::vec3(0.0f, 0.0f, 1.0f)
+                            : glm::vec3(0.0f, 1.0f, 0.0f);
+
+    outU = safeNormalize(glm::cross(a, nn), glm::vec3(1.0f, 0.0f, 0.0f));
+    outV = safeNormalize(glm::cross(nn, outU), glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
 // -----------------------------------------------------------------------------
 // OverlayHandler
 // -----------------------------------------------------------------------------
@@ -101,8 +122,7 @@ OverlayHandler::Overlay* OverlayHandler::current() noexcept
 
 void OverlayHandler::begin_overlay(int32_t id)
 {
-    // End previous implicitly if caller forgot.
-    // This keeps the builder robust during rapid refactors.
+    // Ends the previous overlay implicitly to keep builder state robust.
     m_buildIndex = (int32_t)m_overlays.size();
 
     Overlay o = {};
@@ -168,6 +188,14 @@ void OverlayHandler::add_point(const glm::vec3& p,
 void OverlayHandler::add_polygon(const std::vector<glm::vec3>& verts,
                                  const glm::vec4&              color)
 {
+    add_polygon(verts, color, false, 2.5f);
+}
+
+void OverlayHandler::add_polygon(const std::vector<glm::vec3>& verts,
+                                 const glm::vec4&              color,
+                                 bool                          filled,
+                                 float                         thicknessPx)
+{
     Overlay* o = current();
     if (!o)
         return;
@@ -175,11 +203,52 @@ void OverlayHandler::add_polygon(const std::vector<glm::vec3>& verts,
     if (verts.size() < 3)
         return;
 
-    Polygon poly = {};
-    poly.verts   = verts;
-    poly.color   = color;
+    Polygon poly     = {};
+    poly.verts       = verts;
+    poly.color       = color;
+    poly.filled      = filled;
+    poly.thicknessPx = thicknessPx;
 
     o->polygons.push_back(std::move(poly));
+}
+
+void OverlayHandler::add_filled_circle(const glm::vec3& center,
+                                       float            radius,
+                                       const glm::vec4& color,
+                                       float            thicknessPx,
+                                       int              segments)
+{
+    Overlay* o = current();
+    if (!o)
+        return;
+
+    if (radius <= 0.0f)
+        return;
+
+    segments = std::max(3, segments);
+
+    const glm::vec3 n = safeNormalize(o->axis, glm::vec3(0.0f, 0.0f, 1.0f));
+
+    glm::vec3 u, v;
+    orthonormalBasis(n, u, v);
+
+    std::vector<glm::vec3> verts;
+    verts.reserve((size_t)segments);
+
+    const float twoPi = 6.2831853071795864769f;
+
+    for (int i = 0; i < segments; ++i)
+    {
+        const float t = (float)i / (float)segments;
+        const float a = t * twoPi;
+
+        const float cs = std::cos(a);
+        const float sn = std::sin(a);
+
+        verts.push_back(center + (u * cs + v * sn) * radius);
+    }
+
+    add_polygon(verts, color, true, thicknessPx);
 }
 
 int32_t OverlayHandler::pick(const Viewport* vp, float x, float y) const

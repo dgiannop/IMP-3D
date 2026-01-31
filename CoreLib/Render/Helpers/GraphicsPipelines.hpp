@@ -158,6 +158,13 @@ namespace vkutil
                                const VkPipelineVertexInputStateCreateInfo& vi,
                                GraphicsPipeline&                           out);
 
+    bool createOverlayFillPipeline(const VulkanContext&                        ctx,
+                                   VkRenderPass                                renderPass,
+                                   VkPipelineLayout                            layout,
+                                   VkSampleCountFlagBits                       sampleCount,
+                                   const VkPipelineVertexInputStateCreateInfo& vi,
+                                   GraphicsPipeline&                           out);
+
     /**
      * @brief Triangle-based selection (ID / highlight).
      *

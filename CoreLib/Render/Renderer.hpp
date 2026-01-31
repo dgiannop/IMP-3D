@@ -171,6 +171,13 @@ public:
         glm::vec4 color     = glm::vec4(1.0f);
     };
 
+    struct OverlayFillVertex
+    {
+        glm::vec3 pos;
+        glm::vec4 color;
+    };
+    static_assert(sizeof(OverlayFillVertex) == (3 + 4) * 4);
+
     struct ViewportUboState
     {
         std::vector<GpuBuffer>     mvpBuffers;
@@ -199,6 +206,7 @@ private:
     // Grid / overlays / selection (raster path)
     void drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
     void ensureOverlayVertexCapacity(std::size_t requiredVertexCount);
+    void ensureOverlayFillVertexCapacity(std::size_t requiredVertexCount);
     void drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
 
     // Lights (shared helper for raster + RT)
@@ -295,7 +303,8 @@ private:
     GraphicsPipeline m_wireHiddenPipeline{};  // hidden edges (wireframe, depth GREATER)
     GraphicsPipeline m_wireOverlayPipeline{}; // solid-mode wire overlay with depth bias
 
-    GraphicsPipeline m_overlayPipeline{}; // gizmo / overlay lines
+    GraphicsPipeline m_overlayPipeline{};     // gizmo / overlay lines
+    GraphicsPipeline m_overlayFillPipeline{}; // gizmo / overlay triangles
 
     GraphicsPipeline m_selVertPipeline{};       // selection verts visible
     GraphicsPipeline m_selEdgePipeline{};       // selection edges visible
@@ -336,6 +345,9 @@ private:
 
     GpuBuffer   m_overlayVertexBuffer;
     std::size_t m_overlayVertexCapacity = 0;
+
+    GpuBuffer   m_overlayFillVertexBuffer;
+    std::size_t m_overlayFillVertexCapacity = 0;
 
 private:
     // ============================================================

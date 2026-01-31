@@ -217,6 +217,10 @@ void Renderer::shutdown() noexcept
     m_overlayVertexBuffer.destroy();
     m_overlayVertexCapacity = 0;
 
+    if (m_overlayFillVertexBuffer.valid())
+        m_overlayFillVertexBuffer.destroy();
+    m_overlayFillVertexCapacity = 0;
+
     m_materialCount      = 0;
     m_curMaterialCounter = 0;
     m_framesInFlight     = 0;
@@ -288,6 +292,7 @@ void Renderer::destroyPipelines() noexcept
     destroyPipe(m_wireHiddenPipeline);
     destroyPipe(m_wireOverlayPipeline);
     destroyPipe(m_overlayPipeline);
+    destroyPipe(m_overlayFillPipeline);
 
     destroyPipe(m_selVertPipeline);
     destroyPipe(m_selEdgePipeline);
@@ -984,6 +989,33 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     viOverlay.pVertexAttributeDescriptions    = overlayAttrs;
 
     // ------------------------------------------------------------
+    // Overlay fill vertex input (triangles)
+    // ------------------------------------------------------------
+    VkVertexInputBindingDescription overlayFillBinding{};
+    overlayFillBinding.binding   = 0;
+    overlayFillBinding.stride    = sizeof(OverlayFillVertex);
+    overlayFillBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription overlayFillAttrs[2]{};
+
+    overlayFillAttrs[0].location = 0;
+    overlayFillAttrs[0].binding  = 0;
+    overlayFillAttrs[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    overlayFillAttrs[0].offset   = static_cast<uint32_t>(offsetof(OverlayFillVertex, pos));
+
+    overlayFillAttrs[1].location = 1;
+    overlayFillAttrs[1].binding  = 0;
+    overlayFillAttrs[1].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+    overlayFillAttrs[1].offset   = static_cast<uint32_t>(offsetof(OverlayFillVertex, color));
+
+    VkPipelineVertexInputStateCreateInfo viOverlayFill{};
+    viOverlayFill.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    viOverlayFill.vertexBindingDescriptionCount   = 1;
+    viOverlayFill.pVertexBindingDescriptions      = &overlayFillBinding;
+    viOverlayFill.vertexAttributeDescriptionCount = 2;
+    viOverlayFill.pVertexAttributeDescriptions    = overlayFillAttrs;
+
+    // ------------------------------------------------------------
     // Main mesh / wireframe / overlay pipelines via helpers
     // ------------------------------------------------------------
 
@@ -1059,7 +1091,7 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         return false;
     }
 
-    // Overlay (gizmos)
+    // Overlay (gizmos) - wide lines
     if (!vkutil::createOverlayPipeline(m_ctx,
                                        renderPass,
                                        m_pipelineLayout,
@@ -1068,6 +1100,18 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
                                        m_overlayPipeline))
     {
         std::cerr << "RendererVK: createOverlayPipeline failed.\n";
+        return false;
+    }
+
+    // Overlay fill (gizmos) - triangles
+    if (!vkutil::createOverlayFillPipeline(m_ctx,
+                                           renderPass,
+                                           m_pipelineLayout,
+                                           m_ctx.sampleCount,
+                                           viOverlayFill,
+                                           m_overlayFillPipeline))
+    {
+        std::cerr << "RendererVK: createOverlayFillPipeline failed.\n";
         return false;
     }
 
@@ -2805,30 +2849,55 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
         return;
 
     // -------------------------------------------------------------------------
-    // Collect all overlay geometry into a single line list (existing pipeline).
-    //
-    // Notes:
-    //  - OverlayHandler is now grouped: overlays -> overlay -> {lines, points, polygons}.
-    //  - We render polygons as "edge lines" so the existing wide-line overlay pipeline
-    //    can draw the center ring/circle cleanly.
-    //  - Points are optional; for now, render them as small crosses (2 lines).
+    // Build two batches:
+    //  - lineVertices: wide-line pipeline (existing)
+    //  - fillVertices: triangle list pipeline (new)
     // -------------------------------------------------------------------------
 
-    std::vector<OverlayVertex> vertices;
-    vertices.reserve(512); // conservative; grows as needed
+    std::vector<OverlayVertex>     lineVertices = {};
+    std::vector<OverlayFillVertex> fillVertices = {};
+
+    lineVertices.reserve(512);
+    fillVertices.reserve(512);
 
     auto pushLine = [&](const glm::vec3& a, const glm::vec3& b, float thickness, const glm::vec4& color) {
-        OverlayVertex v0{};
-        v0.pos       = a;
-        v0.thickness = thickness;
-        v0.color     = color;
-        vertices.push_back(v0);
+        OverlayVertex v0 = {};
+        v0.pos           = a;
+        v0.thickness     = thickness;
+        v0.color         = color;
+        lineVertices.push_back(v0);
 
-        OverlayVertex v1{};
-        v1.pos       = b;
-        v1.thickness = thickness;
-        v1.color     = color;
-        vertices.push_back(v1);
+        OverlayVertex v1 = {};
+        v1.pos           = b;
+        v1.thickness     = thickness;
+        v1.color         = color;
+        lineVertices.push_back(v1);
+    };
+
+    auto pushTri = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec4& color) {
+        OverlayFillVertex v0 = {};
+        v0.pos               = a;
+        v0.color             = color;
+        fillVertices.push_back(v0);
+
+        OverlayFillVertex v1 = {};
+        v1.pos               = b;
+        v1.color             = color;
+        fillVertices.push_back(v1);
+
+        OverlayFillVertex v2 = {};
+        v2.pos               = c;
+        v2.color             = color;
+        fillVertices.push_back(v2);
+    };
+
+    auto triangulateFan = [&](const std::vector<glm::vec3>& pts, const glm::vec4& color) {
+        if (pts.size() < 3)
+            return;
+
+        const glm::vec3& v0 = pts[0];
+        for (size_t i = 1; i + 1 < pts.size(); ++i)
+            pushTri(v0, pts[i], pts[i + 1], color);
     };
 
     for (const OverlayHandler::Overlay& ov : ovs)
@@ -2837,29 +2906,31 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
         // Lines
         // ------------------------------------------------------------
         for (const OverlayHandler::Line& L : ov.lines)
-        {
-            // Your OverlayHandler.hpp defines endpoints as a/b.
             pushLine(L.a, L.b, L.thickness, L.color);
-        }
 
         // ------------------------------------------------------------
-        // Polygons -> edge lines (line loop)
+        // Polygons
         // ------------------------------------------------------------
         for (const OverlayHandler::Polygon& P : ov.polygons)
         {
             const std::vector<glm::vec3>& pts = P.verts;
-            if (pts.size() < 2)
+            if (pts.size() < 3)
                 continue;
 
-            // Use a reasonable default thickness for polygon outlines.
-            // If you later want per-polygon thickness, add it to OverlayHandler::Polygon.
-            constexpr float kPolyThicknessPx = 2.5f;
-
-            for (size_t i = 0; i < pts.size(); ++i)
+            if (P.filled)
             {
-                const glm::vec3& a = pts[i];
-                const glm::vec3& b = pts[(i + 1) % pts.size()];
-                pushLine(a, b, kPolyThicknessPx, P.color);
+                triangulateFan(pts, P.color);
+            }
+            else
+            {
+                const float thicknessPx = (P.thicknessPx > 0.0f) ? P.thicknessPx : 2.5f;
+
+                for (size_t i = 0; i < pts.size(); ++i)
+                {
+                    const glm::vec3& a = pts[i];
+                    const glm::vec3& b = pts[(i + 1) % pts.size()];
+                    pushLine(a, b, thicknessPx, P.color);
+                }
             }
         }
 
@@ -2868,15 +2939,12 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
         // ------------------------------------------------------------
         for (const OverlayHandler::Point& pt : ov.points)
         {
-            // Screen-ish size: use pixelScale around point to convert px -> world.
-            // The handle size is in pixels; we convert to world using viewport scale.
             const float pxW = vp->pixelScale(pt.p);
             const float sW  = std::max(0.00001f, pxW * (pt.size * 0.5f));
 
             const glm::vec3 r = vp->rightDirection();
             const glm::vec3 u = vp->upDirection();
 
-            // Slightly thinner than axis lines by default.
             constexpr float kPointThicknessPx = 2.0f;
 
             pushLine(pt.p - r * sW, pt.p + r * sW, kPointThicknessPx, pt.color);
@@ -2884,23 +2952,65 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
         }
     }
 
-    const std::size_t vertexCount = vertices.size();
-    if (vertexCount == 0)
+    // -------------------------------------------------------------------------
+    // Draw filled polys FIRST (so outlines sit on top)
+    // -------------------------------------------------------------------------
+    if (!fillVertices.empty())
+    {
+        const std::size_t fillCount = fillVertices.size();
+
+        ensureOverlayFillVertexCapacity(fillCount);
+        if (m_overlayFillVertexBuffer.valid() && m_overlayFillPipeline.valid())
+        {
+            const VkDeviceSize byteSize = static_cast<VkDeviceSize>(fillCount * sizeof(OverlayFillVertex));
+            m_overlayFillVertexBuffer.upload(fillVertices.data(), byteSize);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayFillPipeline.handle());
+
+            PushConstants pc = {};
+            pc.model         = glm::mat4(1.0f);
+            pc.color         = glm::vec4(1.0f);
+            pc.overlayParams = glm::vec4(static_cast<float>(vp->width()),
+                                         static_cast<float>(vp->height()),
+                                         1.0f,
+                                         0.0f);
+
+            vkCmdPushConstants(cmd,
+                               m_pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0,
+                               sizeof(PushConstants),
+                               &pc);
+
+            VkBuffer     vb      = m_overlayFillVertexBuffer.buffer();
+            VkDeviceSize offset0 = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset0);
+
+            vkCmdDraw(cmd, static_cast<uint32_t>(fillCount), 1, 0, 0);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Draw lines AFTER
+    // -------------------------------------------------------------------------
+    if (lineVertices.empty())
         return;
 
-    ensureOverlayVertexCapacity(vertexCount);
+    const std::size_t lineCount = lineVertices.size();
+
+    ensureOverlayVertexCapacity(lineCount);
     if (!m_overlayVertexBuffer.valid())
         return;
 
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(vertexCount * sizeof(OverlayVertex));
-    m_overlayVertexBuffer.upload(vertices.data(), byteSize);
+    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(lineCount * sizeof(OverlayVertex));
+    m_overlayVertexBuffer.upload(lineVertices.data(), byteSize);
 
     if (!m_overlayPipeline.valid())
         return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayPipeline.handle());
 
-    PushConstants pc{};
+    PushConstants pc = {};
     pc.model         = glm::mat4(1.0f);
     pc.color         = glm::vec4(1.0f);
     pc.overlayParams = glm::vec4(static_cast<float>(vp->width()),
@@ -2919,7 +3029,7 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
     VkDeviceSize offset0 = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset0);
 
-    vkCmdDraw(cmd, static_cast<uint32_t>(vertexCount), 1, 0, 0);
+    vkCmdDraw(cmd, static_cast<uint32_t>(lineCount), 1, 0, 0);
 }
 
 void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
@@ -2949,6 +3059,35 @@ void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
     }
 
     m_overlayVertexCapacity = requiredVertexCount;
+}
+
+void Renderer::ensureOverlayFillVertexCapacity(std::size_t requiredVertexCount)
+{
+    if (requiredVertexCount == 0)
+        return;
+
+    if (requiredVertexCount <= m_overlayFillVertexCapacity && m_overlayFillVertexBuffer.valid())
+        return;
+
+    if (m_overlayFillVertexBuffer.valid())
+        m_overlayFillVertexBuffer.destroy();
+
+    const VkDeviceSize bufferSize = static_cast<VkDeviceSize>(requiredVertexCount * sizeof(OverlayFillVertex));
+
+    m_overlayFillVertexBuffer.create(m_ctx.device,
+                                     m_ctx.physicalDevice,
+                                     bufferSize,
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                     /*persistentMap*/ true);
+
+    if (!m_overlayFillVertexBuffer.valid())
+    {
+        m_overlayFillVertexCapacity = 0;
+        return;
+    }
+
+    m_overlayFillVertexCapacity = requiredVertexCount;
 }
 
 //==================================================================

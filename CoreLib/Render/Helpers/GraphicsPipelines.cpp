@@ -777,6 +777,96 @@ namespace vkutil
     }
 
     // ---------------------------------------------------------
+    // Overlay Fill (filled gizmos / circles / discs)
+    // ---------------------------------------------------------
+    bool createOverlayFillPipeline(const VulkanContext&                        ctx,
+                                   VkRenderPass                                renderPass,
+                                   VkPipelineLayout                            layout,
+                                   VkSampleCountFlagBits                       sampleCount,
+                                   const VkPipelineVertexInputStateCreateInfo& vi,
+                                   GraphicsPipeline&                           out)
+    {
+        out.destroy();
+
+        if (!checkCommonInputs(ctx, renderPass, layout))
+            return false;
+
+        out.m_device = ctx.device;
+
+        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+
+        ShaderStage vs =
+            vkutil::loadStage(ctx.device, shaderDir, "OverlayFill.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+        ShaderStage fs =
+            vkutil::loadStage(ctx.device, shaderDir, "OverlayFill.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+        if (!vs.isValid() || !fs.isValid())
+        {
+            std::cerr << "GraphicsPipelines: Failed to load OverlayFill shaders.\n";
+            out.destroy();
+            return false;
+        }
+
+        VkPipelineShaderStageCreateInfo stages[2] = {
+            vs.stageInfo(),
+            fs.stageInfo(),
+        };
+
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        ia.primitiveRestartEnable = VK_FALSE;
+
+        VkPipelineViewportStateCreateInfo      vp = makeViewportState();
+        VkPipelineRasterizationStateCreateInfo rs = makeRasterStateFillNoCull(false);
+        VkPipelineMultisampleStateCreateInfo   ms = makeMultisampleState(sampleCount);
+
+        // overlayPreset: depth OFF
+        VkPipelineDepthStencilStateCreateInfo ds =
+            makeDepthState(false, false, VK_COMPARE_OP_LESS);
+
+        VkPipelineColorBlendAttachmentState att{};
+        VkPipelineColorBlendStateCreateInfo cb = makeAlphaColorBlend(att);
+
+        VkDynamicState dynStates[] = {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+        };
+        VkPipelineDynamicStateCreateInfo dyn =
+            vkutil::makeDynamicState(dynStates, static_cast<uint32_t>(std::size(dynStates)));
+
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.stageCount          = 2;
+        info.pStages             = stages;
+        info.pVertexInputState   = &vi;
+        info.pInputAssemblyState = &ia;
+        info.pViewportState      = &vp;
+        info.pRasterizationState = &rs;
+        info.pMultisampleState   = &ms;
+        info.pDepthStencilState  = &ds;
+        info.pColorBlendState    = &cb;
+        info.pDynamicState       = &dyn;
+        info.layout              = layout;
+        info.renderPass          = renderPass;
+        info.subpass             = 0;
+
+        if (vkCreateGraphicsPipelines(ctx.device,
+                                      VK_NULL_HANDLE,
+                                      1,
+                                      &info,
+                                      nullptr,
+                                      &out.m_pipeline) != VK_SUCCESS)
+        {
+            std::cerr << "GraphicsPipelines: vkCreateGraphicsPipelines(OverlayFill) failed.\n";
+            out.destroy();
+            return false;
+        }
+
+        return true;
+    }
+
+    // ---------------------------------------------------------
     // Selection (triangles)
     // ---------------------------------------------------------
     bool createSelectionTriPipeline(const VulkanContext&                        ctx,

@@ -22,7 +22,7 @@ class Viewport;
  *
  * Notes:
  *  - The overlay axis is a hint for tool logic / render coloring / constraints.
- *  - Polygons are primarily used for center disks/rings; treat interior as hittable.
+ *  - Polygons are primarily used for center disks/rings/filled shapes; treat interior as hittable.
  */
 class OverlayHandler
 {
@@ -44,8 +44,10 @@ public:
 
     struct Polygon
     {
-        std::vector<glm::vec3> verts; // world space
-        glm::vec4              color = glm::vec4(1.0f);
+        std::vector<glm::vec3> verts       = {};
+        glm::vec4              color       = glm::vec4{1.0f};
+        bool                   filled      = false; // render filled tris
+        float                  thicknessPx = 2.5f;  // outline thickness (stroke pass)
     };
 
     struct Overlay
@@ -120,6 +122,34 @@ public:
      */
     void add_polygon(const std::vector<glm::vec3>& verts,
                      const glm::vec4&              color);
+
+    /**
+     * @brief Adds a polygon (world space). Used for filled shapes.
+     *
+     * Picking treats the polygon interior as hittable.
+     */
+    void add_polygon(const std::vector<glm::vec3>& verts,
+                     const glm::vec4&              color,
+                     bool                          filled,
+                     float                         thicknessPx = 2.5f);
+
+    /**
+     * @brief Adds a filled circle as a polygon fan approximation.
+     *
+     * The circle is generated in a plane whose normal is the current overlay axis hint.
+     * If the axis hint is degenerate, +Z is used.
+     *
+     * @param center      World-space center.
+     * @param radius      World-space radius.
+     * @param color       Fill color.
+     * @param thicknessPx Outline thickness in pixels (stroke pass).
+     * @param segments    Tessellation segments (>= 3).
+     */
+    void add_filled_circle(const glm::vec3& center,
+                           float            radius,
+                           const glm::vec4& color,
+                           float            thicknessPx = 2.5f,
+                           int              segments    = 32);
 
     /**
      * @brief Picks the overlay id under the mouse in screen space.

@@ -151,6 +151,8 @@ set(SHADERS
     Overlay.vert
     Overlay.geom
     Overlay.frag
+    OverlayFill.vert
+    OverlayFill.frag
     Selection.vert
     Selection.frag
     SelectionVert.frag

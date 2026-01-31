@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <glm/glm.hpp>
-#include <vector>
 
 #include "OverlayHandler.hpp"
 
@@ -43,12 +42,6 @@ private:
                                                  float            mx,
                                                  float            my) const;
 
-    void buildBillboardSquare(Viewport*        vp,
-                              const glm::vec3& center,
-                              float            halfExtentWorld,
-                              const glm::vec4& color,
-                              bool             filledForPick);
-
 private:
     float* m_amount = nullptr; ///< Tool-owned scalar delta (0 = no-op)
 
@@ -63,7 +56,7 @@ private:
     glm::vec3 m_startHit    = glm::vec3{0.0f};
     float     m_startParam  = 0.0f;
 
-    // Size tuning (world units at pivot, derived from pixelScale)
-    float m_axisLenWorld = 0.2f;
-    float m_tipHalfWorld = 0.015f;
+    // Size tuning (world units at pivot, derived from pixelScale).
+    float m_axisLenWorld   = 0.2f;
+    float m_tipRadiusWorld = 0.015f;
 };
