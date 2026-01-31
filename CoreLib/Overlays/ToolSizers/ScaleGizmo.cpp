@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <glm/gtx/norm.hpp>
 
 #include "Scene.hpp"
 #include "SelectionUtils.hpp"
@@ -15,70 +14,6 @@ ScaleGizmo::ScaleGizmo(glm::vec3* scale) : m_scale(scale)
 {
     if (m_scale)
         *m_scale = glm::vec3{1.0f};
-}
-
-glm::vec3 ScaleGizmo::axisDir(Mode m) noexcept
-{
-    switch (m)
-    {
-        case Mode::X:
-            return glm::vec3{1.0f, 0.0f, 0.0f};
-        case Mode::Y:
-            return glm::vec3{0.0f, 1.0f, 0.0f};
-        case Mode::Z:
-            return glm::vec3{0.0f, 0.0f, 1.0f};
-        default:
-            return glm::vec3{0.0f};
-    }
-}
-
-glm::vec3 ScaleGizmo::dragPointOnAxisPlane(Viewport*        vp,
-                                           const glm::vec3& origin,
-                                           Mode             axisMode,
-                                           float            mx,
-                                           float            my) const
-{
-    const glm::vec3 aDir = axisDir(axisMode);
-    if (glm::length2(aDir) < 1e-12f)
-        return origin;
-
-    // Plane containing the axis and facing the camera.
-    const glm::vec3 camPos  = vp->cameraPosition();
-    glm::vec3       viewDir = origin - camPos;
-
-    if (glm::length2(viewDir) < 1e-8f)
-        viewDir = glm::vec3{0.0f, 0.0f, -1.0f};
-    else
-        viewDir = glm::normalize(viewDir);
-
-    glm::vec3 n = glm::cross(aDir, viewDir);
-
-    // Degenerate fallback when axis aligns with view direction.
-    if (glm::length2(n) < 1e-8f)
-    {
-        n = glm::cross(aDir, glm::vec3{0.0f, 0.0f, 1.0f});
-        if (glm::length2(n) < 1e-8f)
-            n = glm::cross(aDir, glm::vec3{0.0f, 1.0f, 0.0f});
-    }
-
-    n = glm::normalize(glm::cross(aDir, n)); // plane normal
-
-    glm::vec3 hit = glm::vec3{0.0f};
-    if (vp->rayPlaneHit(mx, my, origin, n, hit))
-        return hit;
-
-    return origin;
-}
-
-glm::vec3 ScaleGizmo::dragPointOnViewPlane(Viewport*        vp,
-                                           const glm::vec3& origin,
-                                           float            mx,
-                                           float            my) const
-{
-    glm::vec3 hit = glm::vec3{0.0f};
-    if (vp->rayViewPlaneHit(mx, my, origin, hit))
-        return hit;
-    return origin;
 }
 
 void ScaleGizmo::buildBillboardSquare(Viewport*        vp,
@@ -122,29 +57,27 @@ void ScaleGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
 
     m_startScale = *m_scale;
 
-    // Pivot stabilization.
-    m_baseOrigin = sel::selection_center_bounds(scene);
-    m_origin     = m_baseOrigin;
+    // Pivot.
+    m_origin = sel::selection_center_bounds(scene);
 
-    if (m_mode == Mode::Uniform)
+    // Screen-space anchor.
+    m_startMx = ev.x;
+    m_startMy = ev.y;
+}
+
+glm::vec3 ScaleGizmo::axisDir(Mode m) noexcept
+{
+    switch (m)
     {
-        // Screen-space anchored uniform scaling (DCC feel).
-        m_startMx = ev.x;
-        m_startMy = ev.y;
-
-        // m_startParam not used for uniform anymore, keep it sane anyway.
-        m_startParam = std::max(1e-6f, m_startScale.x);
-
-        m_axisDir = glm::vec3{0.0f};
-        return;
+        case Mode::X:
+            return glm::vec3{1.0f, 0.0f, 0.0f};
+        case Mode::Y:
+            return glm::vec3{0.0f, 1.0f, 0.0f};
+        case Mode::Z:
+            return glm::vec3{0.0f, 0.0f, 1.0f};
+        default:
+            return glm::vec3{0.0f};
     }
-
-    m_axisDir    = axisDir(m_mode);
-    m_startHit   = dragPointOnAxisPlane(vp, m_origin, m_mode, ev.x, ev.y);
-    m_startParam = glm::dot(m_startHit - m_origin, m_axisDir);
-
-    if (std::abs(m_startParam) < 1e-6f)
-        m_startParam = (m_startParam < 0.0f) ? -1e-6f : 1e-6f;
 }
 
 void ScaleGizmo::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& ev)
@@ -155,41 +88,55 @@ void ScaleGizmo::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& ev)
     if (!m_dragging || m_mode == Mode::None)
         return;
 
-    glm::vec3 s = m_startScale;
+    // Tune: pixels for doubling.
+    const float pixelsPerDoubling = 120.0f;
+    const float k                 = 1.0f / pixelsPerDoubling;
+
+    // Mouse delta in "screen-up" coordinates.
+    const float     dx = (ev.x - m_startMx);
+    const float     dy = (ev.y - m_startMy);
+    const glm::vec2 mouse2D(dx, -dy);
+
+    float t = 0.0f;
 
     if (m_mode == Mode::Uniform)
     {
-        // Screen-space drag -> exponential scale factor.
-        // Drag up increases scale, drag down decreases.
-        const float dy = (m_startMy - ev.y);
+        // Center handle: simple vertical drag feels best.
+        t = -dy; // drag up => positive
+    }
+    else
+    {
+        // Axis handles: project the axis onto screen using viewport basis.
+        const glm::vec3 dir = axisDir(m_mode);
 
-        // Tune: pixels for doubling. 120px per 2x feels good.
-        const float pixelsPerDoubling = 120.0f;
-        const float k                 = 1.0f / pixelsPerDoubling;
+        const float ax = glm::dot(dir, vp->rightDirection());
+        const float ay = glm::dot(dir, vp->upDirection());
 
-        const float factor = std::pow(2.0f, dy * k);
-        const float s0     = std::max(0.0001f, m_startScale.x);
+        glm::vec2 axis2D(ax, ay);
 
-        const float sNew = glm::clamp(s0 * factor, 0.0001f, 10000.0f);
+        const float len2 = axis2D.x * axis2D.x + axis2D.y * axis2D.y;
 
-        *m_scale = glm::vec3{sNew, sNew, sNew};
-        return;
+        if (len2 < 1e-8f)
+        {
+            // Axis points toward/away from camera (no clear screen direction).
+            // Fall back to vertical drag.
+            t = -dy;
+        }
+        else
+        {
+            axis2D /= std::sqrt(len2);
+
+            // Drag "along the axis on screen" increases scale.
+            t = glm::dot(mouse2D, axis2D);
+        }
     }
 
-    const glm::vec3 curHit   = dragPointOnAxisPlane(vp, m_origin, m_mode, ev.x, ev.y);
-    const float     curParam = glm::dot(curHit - m_origin, m_axisDir);
+    const float factor = std::pow(2.0f, t * k);
 
-    const float k        = curParam / m_startParam;
-    const float kClamped = glm::clamp(k, 0.0001f, 10000.0f);
+    const float s0 = std::max(0.0001f, m_startScale.x);
+    const float s  = glm::clamp(s0 * factor, 0.0001f, 10000.0f);
 
-    if (m_mode == Mode::X)
-        s.x *= kClamped;
-    if (m_mode == Mode::Y)
-        s.y *= kClamped;
-    if (m_mode == Mode::Z)
-        s.z *= kClamped;
-
-    *m_scale = s;
+    *m_scale = glm::vec3{s, s, s};
 }
 
 void ScaleGizmo::mouseUp(Viewport*, Scene*, const CoreEvent&)
@@ -211,19 +158,16 @@ void ScaleGizmo::render(Viewport* vp, Scene* scene)
     const float px = vp->pixelScale(origin);
 
     // Pixel-tuned sizes (world units at pivot).
-    m_centerHalfWorld  = std::max(0.0001f, px * 10.0f); // ~20px box
+    m_centerHalfWorld  = std::max(0.0001f, px * 10.0f); // ~20px square
     m_axisLenWorld     = std::max(0.05f, px * 70.0f);   // ~70px stem
     m_axisBoxHalfWorld = std::max(0.0001f, px * 7.0f);  // ~14px tip square
 
     m_overlayHandler.clear();
 
-    // -----------------------------------------------------------------
-    // Center handle (uniform scale) - handle 3
-    // -----------------------------------------------------------------
+    // Center handle (3)
     {
         m_overlayHandler.begin_overlay(static_cast<int32_t>(Mode::Uniform));
 
-        // Make pick target a bit larger than the visible square.
         const float pickHalf = m_centerHalfWorld * 1.35f;
 
         buildBillboardSquare(vp, origin, pickHalf, glm::vec4{1, 1, 1, 0.2f}, true);
@@ -233,9 +177,7 @@ void ScaleGizmo::render(Viewport* vp, Scene* scene)
         m_overlayHandler.end_overlay();
     }
 
-    // -----------------------------------------------------------------
-    // Axis stems + billboard tip squares (handles 0/1/2)
-    // -----------------------------------------------------------------
+    // Axis stems + billboard tips (0/1/2)
     auto addAxis = [&](Mode mode, const glm::vec3& dir, const glm::vec4& color) {
         const int32_t h = static_cast<int32_t>(mode);
 

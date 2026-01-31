@@ -14,23 +14,17 @@ class Viewport;
 struct CoreEvent;
 
 /**
- * @brief World-axis scale gizmo (uniform + per-axis).
+ * @brief World-axis scale gizmo (uniform-only behavior, stretch-like visuals).
  *
- * The gizmo owns overlay generation and picking. It writes scale factors into
- * a tool-owned parameter:
- *  - (1,1,1) is a no-op
- *  - (sx,sy,sz) scales around the current selection pivot
+ * Renders the same axis + center handles as Stretch, but ANY handle performs
+ * UNIFORM scale. The gizmo always writes:
+ *   *m_scale = (s,s,s)
  *
- * Handles:
- *  - 0: X axis scale
- *  - 1: Y axis scale
- *  - 2: Z axis scale
- *  - 3: Center (uniform scale)
- *
- * Tool contract:
- *  - mouseDown/Drag/Up forward to the gizmo
- *  - tool calls propertiesChanged(scene) after Drag to rebuild preview
- *  - on mouseUp tool commits and resets scale back to (1,1,1)
+ * Handles (pickable):
+ *  - 0: X (acts as uniform scale)
+ *  - 1: Y (acts as uniform scale)
+ *  - 2: Z (acts as uniform scale)
+ *  - 3: Center (acts as uniform scale)
  */
 class ScaleGizmo final
 {
@@ -73,19 +67,6 @@ private:
         }
     }
 
-    static glm::vec3 axisDir(Mode m) noexcept;
-
-    [[nodiscard]] glm::vec3 dragPointOnAxisPlane(Viewport*        vp,
-                                                 const glm::vec3& origin,
-                                                 Mode             axisMode,
-                                                 float            mx,
-                                                 float            my) const;
-
-    [[nodiscard]] glm::vec3 dragPointOnViewPlane(Viewport*        vp,
-                                                 const glm::vec3& origin,
-                                                 float            mx,
-                                                 float            my) const;
-
     void buildBillboardSquare(Viewport*        vp,
                               const glm::vec3& center,
                               float            halfExtentWorld,
@@ -100,15 +81,8 @@ private:
     Mode m_mode     = Mode::None;
     bool m_dragging = false;
 
-    glm::vec3 m_baseOrigin = glm::vec3{0.0f}; ///< pivot without current preview
-    glm::vec3 m_origin     = glm::vec3{0.0f}; ///< pivot with current preview
-
-    glm::vec3 m_startScale = glm::vec3{1.0f};
-    glm::vec3 m_axisDir    = glm::vec3{0.0f};
-
-    // Drag anchors
-    glm::vec3 m_startHit   = glm::vec3{0.0f};
-    float     m_startParam = 1.0f; // axis distance (axis mode); unused for uniform now
+    glm::vec3 m_origin     = glm::vec3{0.0f}; ///< pivot
+    glm::vec3 m_startScale = glm::vec3{1.0f}; ///< captured at mouseDown
 
     // Uniform drag anchor (screen space)
     float m_startMx = 0.0f;
@@ -118,4 +92,6 @@ private:
     float m_centerHalfWorld  = 0.02f;
     float m_axisLenWorld     = 0.2f;
     float m_axisBoxHalfWorld = 0.015f;
+
+    static glm::vec3 axisDir(Mode m) noexcept;
 };
