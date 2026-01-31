@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include <glm/glm.hpp>
-#include <vector>
 
 #include "OverlayHandler.hpp"
 
@@ -49,15 +48,8 @@ public:
     /// Build overlays for the current frame (axes + center disk).
     void render(Viewport* vp, Scene* scene);
 
-    OverlayHandler& overlayHandler() noexcept
-    {
-        return m_overlayHandler;
-    }
-
-    const OverlayHandler& overlayHandler() const noexcept
-    {
-        return m_overlayHandler;
-    }
+    OverlayHandler&       overlayHandler() noexcept { return m_overlayHandler; }
+    const OverlayHandler& overlayHandler() const noexcept { return m_overlayHandler; }
 
 private:
     enum class Mode : int32_t
@@ -121,4 +113,5 @@ private:
     // Pixel-tuned sizes converted to world units at the pivot each frame.
     float m_centerRadiusWorld = 0.05f;
     float m_axisLengthWorld   = 1.0f;
+    float m_tipRadiusWorld    = 0.02f;
 };

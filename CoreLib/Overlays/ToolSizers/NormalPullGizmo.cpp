@@ -130,7 +130,7 @@ void NormalPullGizmo::render(Viewport* vp, Scene* scene)
     const glm::vec4 fillCol = glm::vec4{1.0f, 1.0f, 0.0f, 0.85f};
 
     // Thinner stem to match the reference.
-    const float stemThicknessPx = 5.0f;
+    const float stemThicknessPx = 4.0f;
 
     m_overlayHandler.clear();
     m_overlayHandler.begin_overlay(kHandle);

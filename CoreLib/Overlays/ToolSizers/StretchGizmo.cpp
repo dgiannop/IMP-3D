@@ -192,11 +192,16 @@ void StretchGizmo::render(Viewport* vp, Scene* scene)
 
     const float px = vp->pixelScale(origin);
 
-    m_centerHalfWorld  = std::max(0.0001f, px * 10.0f);
-    m_axisLenWorld     = std::max(0.05f, px * 70.0f);
-    m_axisBoxHalfWorld = std::max(0.0001f, px * 7.0f);
+    m_centerHalfWorld    = std::max(0.0001f, px * 10.0f);
+    m_axisLenWorld       = std::max(0.05f, px * 70.0f);
+    m_axisTipRadiusWorld = std::max(0.0001f, px * 7.0f);
 
     m_overlayHandler.clear();
+
+    // Camera-facing normal for billboarded tip disks.
+    const glm::vec3 right = vp->rightDirection();
+    const glm::vec3 up    = vp->upDirection();
+    const glm::vec3 faceN = glm::normalize(glm::cross(right, up));
 
     // Center handle (uniform) - 3
     {
@@ -219,13 +224,27 @@ void StretchGizmo::render(Viewport* vp, Scene* scene)
 
         m_overlayHandler.begin_overlay(h);
 
-        m_overlayHandler.add_line(stemA, stemB, 8.0f, color);
+        // Axis stem thickness matches the NormalPull gizmo.
+        m_overlayHandler.add_line(stemA, stemB, 4.0f, color);
 
-        const glm::vec3 tipCenter = stemB;
-        buildBillboardSquare(vp, tipCenter, m_axisBoxHalfWorld, glm::vec4{color.r, color.g, color.b, 0.25f}, true);
-        buildBillboardSquare(vp, tipCenter, m_axisBoxHalfWorld, color, false);
+        // Tip is a camera-facing filled disk. The polygon interior is used for picking.
+        m_overlayHandler.set_axis(faceN);
+        m_overlayHandler.add_filled_circle(stemB,
+                                           m_axisTipRadiusWorld,
+                                           glm::vec4{color.r, color.g, color.b, 0.25f},
+                                           2.0f,
+                                           48);
 
+        // Optional crisp outline.
+        m_overlayHandler.add_filled_circle(stemB,
+                                           m_axisTipRadiusWorld,
+                                           glm::vec4{color.r, color.g, color.b, 1.0f},
+                                           2.0f,
+                                           48);
+
+        // Axis hint remains the actual axis direction for tool logic / constraints.
         m_overlayHandler.set_axis(dir);
+
         m_overlayHandler.end_overlay();
     };
 

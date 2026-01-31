@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include <glm/glm.hpp>
-#include <vector>
 
 #include "OverlayHandler.hpp"
 
@@ -104,7 +103,7 @@ private:
     float m_startMy = 0.0f;
 
     // Size tuning (world units at pivot, derived from pixelScale)
-    float m_centerHalfWorld  = 0.02f;
-    float m_axisLenWorld     = 0.2f;
-    float m_axisBoxHalfWorld = 0.015f;
+    float m_centerHalfWorld    = 0.02f;
+    float m_axisLenWorld       = 0.2f;
+    float m_axisTipRadiusWorld = 0.015f;
 };
