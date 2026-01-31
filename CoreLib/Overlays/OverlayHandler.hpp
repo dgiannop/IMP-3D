@@ -1,3 +1,6 @@
+//=============================================================================
+// OverlayHandler.hpp
+//=============================================================================
 #pragma once
 
 #include <cstdint>
@@ -6,89 +9,149 @@
 
 class Viewport;
 
-/// OverlayHandler
-///
-/// Collects per-frame overlay shapes made of points, lines and polygons.
-/// Used by tools (BoxSizer, etc.) to:
-///  - build gizmos (via begin_overlay / add_point / add_line / end_overlay)
-///  - pick a handle under the mouse (pick)
-///  - let the Renderer draw them (lines()).
-///
-/// v1.1 change: overlay handles are int32_t (no strings).
-///  - handle == -1 means "none".
+/**
+ * @file OverlayHandler.hpp
+ * @brief Lightweight overlay geometry builder + picking support.
+ *
+ * The tool layer builds overlay primitives each frame (lines, points, polygons)
+ * grouped into "overlays" identified by an int32 handle id.
+ *
+ * The renderer consumes the generated overlays to draw gizmos/handles.
+ *
+ * Picking:
+ *  - pick() returns the overlay id of the best hit, or -1 if none.
+ *  - points and lines are distance-tested in screen space.
+ *  - polygons support interior hit-testing (screen-space point-in-poly).
+ *
+ * Notes:
+ *  - The overlay axis is a hint for tool logic / render coloring / constraints.
+ *  - Polygons are primarily used for center disks/rings; treat interior as hittable.
+ */
 class OverlayHandler
 {
 public:
-    static constexpr int32_t kNoHandle = -1;
+    struct Line
+    {
+        glm::vec3 a         = glm::vec3(0.0f);
+        glm::vec3 b         = glm::vec3(0.0f);
+        float     thickness = 1.0f; // in pixels (renderer may treat as hint)
+        glm::vec4 color     = glm::vec4(1.0f);
+    };
 
     struct Point
     {
-        glm::vec3 pos   = {};
-        float     size  = 1.0f;
-        glm::vec4 color = {};
-    };
-
-    struct Line
-    {
-        glm::vec3 p1        = {};
-        glm::vec3 p2        = {};
-        float     thickness = 1.0f;
-        glm::vec4 color     = {};
+        glm::vec3 p     = glm::vec3(0.0f);
+        float     size  = 6.0f; // in pixels (renderer may treat as hint)
+        glm::vec4 color = glm::vec4(1.0f);
     };
 
     struct Polygon
     {
-        std::vector<glm::vec3> verts;
-        glm::vec4              color = {};
+        std::vector<glm::vec3> verts; // world space
+        glm::vec4              color = glm::vec4(1.0f);
     };
 
-    /// Begin specifying a new overlay shape with a given handle.
-    /// Typically tools use stable indices for handles (0..N-1).
-    void begin_overlay(int32_t handle);
+    struct Overlay
+    {
+        int32_t id = -1;
 
-    /// Add primitives to the current overlay.
-    void add_point(const glm::vec3& point, float size, const glm::vec4& color);
+        // Optional axis hint. Tools can use this to infer constraints.
+        glm::vec3 axis = glm::vec3(0.0f);
 
-    void add_line(const glm::vec3& p1, const glm::vec3& p2, float thickness, const glm::vec4& color);
+        std::vector<Line>    lines;
+        std::vector<Point>   points;
+        std::vector<Polygon> polygons;
+    };
 
-    void add_polygon(const std::vector<glm::vec3>& points, const glm::vec4& color);
+public:
+    OverlayHandler()  = default;
+    ~OverlayHandler() = default;
 
-    /// Set the “axis” for the current overlay.
-    /// Used by legacy gizmo picking fallback.
-    void set_axis(const glm::vec3& axis);
+    OverlayHandler(const OverlayHandler&)            = default;
+    OverlayHandler& operator=(const OverlayHandler&) = default;
 
-    /// Finish the current overlay.
+    OverlayHandler(OverlayHandler&&) noexcept            = default;
+    OverlayHandler& operator=(OverlayHandler&&) noexcept = default;
+
+public:
+    /**
+     * @brief Clears all overlays.
+     */
+    void clear() noexcept;
+
+    /**
+     * @brief Begins building a new overlay with the given id.
+     *
+     * You must call end_overlay() after emitting primitives.
+     */
+    void begin_overlay(int32_t id);
+
+    /**
+     * @brief Ends the current overlay.
+     */
     void end_overlay();
 
-    /// Clear all overlays for the next frame.
-    void clear();
+    /**
+     * @brief Sets axis hint for the current overlay (world-space direction).
+     */
+    void set_axis(const glm::vec3& axis);
 
-    /// Picking: returns the overlay handle under the mouse, or kNoHandle (-1).
-    /// Uses projected 2D distances in screen space (same coords passed in from CoreEvent).
-    int32_t pick(Viewport* vp, float mouse_x, float mouse_y);
+    /**
+     * @brief Sets axis hint for the current overlay from integer axis.
+     */
+    void set_axis(const glm::ivec3& axis);
 
-    /// Access all overlay lines flattened across all shapes (for Renderer::drawOverlays).
-    const std::vector<Point>&   points() const;
-    const std::vector<Line>&    lines() const;
-    const std::vector<Polygon>& polygons() const;
+    /**
+     * @brief Adds a line segment (world space).
+     */
+    void add_line(const glm::vec3& a,
+                  const glm::vec3& b,
+                  float            thicknessPx,
+                  const glm::vec4& color);
+
+    /**
+     * @brief Adds a point (world space).
+     */
+    void add_point(const glm::vec3& p,
+                   float            sizePx,
+                   const glm::vec4& color);
+
+    /**
+     * @brief Adds a polygon (world space). Used for disks/rings/filled shapes.
+     *
+     * Picking treats the polygon interior as hittable.
+     */
+    void add_polygon(const std::vector<glm::vec3>& verts,
+                     const glm::vec4&              color);
+
+    /**
+     * @brief Picks the overlay id under the mouse in screen space.
+     *
+     * @param vp Viewport used for project().
+     * @param x  Mouse x in pixels (top-left origin).
+     * @param y  Mouse y in pixels (top-left origin).
+     * @return overlay id, or -1 if no hit.
+     */
+    [[nodiscard]] int32_t pick(const Viewport* vp, float x, float y) const;
+
+    /**
+     * @brief Returns overlays for rendering.
+     */
+    [[nodiscard]] const std::vector<Overlay>& overlays() const noexcept
+    {
+        return m_overlays;
+    }
 
 private:
-    struct Shape
-    {
-        int32_t              handle = kNoHandle;
-        glm::vec3            axis{0.0f};
-        std::vector<Point>   points;
-        std::vector<Line>    lines;
-        std::vector<Polygon> polys;
-    };
+    Overlay* current() noexcept;
 
-    std::vector<Shape> m_shapes;
-    int32_t            m_currentShape = kNoHandle;
+private:
+    std::vector<Overlay> m_overlays;
 
-    // Scratch buffers for flattened primitives (for rendering)
-    mutable std::vector<Line>    m_flatLines;
-    mutable std::vector<Point>   m_flatPoints;
-    mutable std::vector<Polygon> m_flatPolys;
+    // Build state
+    int32_t m_buildIndex = -1;
 
-    int32_t m_lastPicked = kNoHandle;
+    // Pick tuning (screen space)
+    float m_pickPointRadiusPx = 12.0f;
+    float m_pickLineRadiusPx  = 10.0f;
 };

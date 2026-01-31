@@ -2800,26 +2800,88 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
     if (!vp)
         return;
 
-    const auto& lines = overlays.lines();
-    if (lines.empty())
+    const std::vector<OverlayHandler::Overlay>& ovs = overlays.overlays();
+    if (ovs.empty())
         return;
 
-    std::vector<OverlayVertex> vertices;
-    vertices.reserve(lines.size() * 2);
+    // -------------------------------------------------------------------------
+    // Collect all overlay geometry into a single line list (existing pipeline).
+    //
+    // Notes:
+    //  - OverlayHandler is now grouped: overlays -> overlay -> {lines, points, polygons}.
+    //  - We render polygons as "edge lines" so the existing wide-line overlay pipeline
+    //    can draw the center ring/circle cleanly.
+    //  - Points are optional; for now, render them as small crosses (2 lines).
+    // -------------------------------------------------------------------------
 
-    for (const auto& L : lines)
-    {
+    std::vector<OverlayVertex> vertices;
+    vertices.reserve(512); // conservative; grows as needed
+
+    auto pushLine = [&](const glm::vec3& a, const glm::vec3& b, float thickness, const glm::vec4& color) {
         OverlayVertex v0{};
-        v0.pos       = L.p1;
-        v0.thickness = L.thickness;
-        v0.color     = L.color;
+        v0.pos       = a;
+        v0.thickness = thickness;
+        v0.color     = color;
         vertices.push_back(v0);
 
         OverlayVertex v1{};
-        v1.pos       = L.p2;
-        v1.thickness = L.thickness;
-        v1.color     = L.color;
+        v1.pos       = b;
+        v1.thickness = thickness;
+        v1.color     = color;
         vertices.push_back(v1);
+    };
+
+    for (const OverlayHandler::Overlay& ov : ovs)
+    {
+        // ------------------------------------------------------------
+        // Lines
+        // ------------------------------------------------------------
+        for (const OverlayHandler::Line& L : ov.lines)
+        {
+            // Your OverlayHandler.hpp defines endpoints as a/b.
+            pushLine(L.a, L.b, L.thickness, L.color);
+        }
+
+        // ------------------------------------------------------------
+        // Polygons -> edge lines (line loop)
+        // ------------------------------------------------------------
+        for (const OverlayHandler::Polygon& P : ov.polygons)
+        {
+            const std::vector<glm::vec3>& pts = P.verts;
+            if (pts.size() < 2)
+                continue;
+
+            // Use a reasonable default thickness for polygon outlines.
+            // If you later want per-polygon thickness, add it to OverlayHandler::Polygon.
+            constexpr float kPolyThicknessPx = 2.5f;
+
+            for (size_t i = 0; i < pts.size(); ++i)
+            {
+                const glm::vec3& a = pts[i];
+                const glm::vec3& b = pts[(i + 1) % pts.size()];
+                pushLine(a, b, kPolyThicknessPx, P.color);
+            }
+        }
+
+        // ------------------------------------------------------------
+        // Points -> small cross (optional)
+        // ------------------------------------------------------------
+        for (const OverlayHandler::Point& pt : ov.points)
+        {
+            // Screen-ish size: use pixelScale around point to convert px -> world.
+            // The handle size is in pixels; we convert to world using viewport scale.
+            const float pxW = vp->pixelScale(pt.p);
+            const float sW  = std::max(0.00001f, pxW * (pt.size * 0.5f));
+
+            const glm::vec3 r = vp->rightDirection();
+            const glm::vec3 u = vp->upDirection();
+
+            // Slightly thinner than axis lines by default.
+            constexpr float kPointThicknessPx = 2.0f;
+
+            pushLine(pt.p - r * sW, pt.p + r * sW, kPointThicknessPx, pt.color);
+            pushLine(pt.p - u * sW, pt.p + u * sW, kPointThicknessPx, pt.color);
+        }
     }
 
     const std::size_t vertexCount = vertices.size();
@@ -2830,16 +2892,13 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
     if (!m_overlayVertexBuffer.valid())
         return;
 
-    const VkDeviceSize byteSize =
-        static_cast<VkDeviceSize>(vertexCount * sizeof(OverlayVertex));
+    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(vertexCount * sizeof(OverlayVertex));
     m_overlayVertexBuffer.upload(vertices.data(), byteSize);
 
     if (!m_overlayPipeline.valid())
         return;
 
-    vkCmdBindPipeline(cmd,
-                      VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      m_overlayPipeline.handle());
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayPipeline.handle());
 
     PushConstants pc{};
     pc.model         = glm::mat4(1.0f);
