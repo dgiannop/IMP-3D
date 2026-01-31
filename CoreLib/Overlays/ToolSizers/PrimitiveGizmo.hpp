@@ -121,7 +121,7 @@ private:
     // Render tuning (world units at center, derived from pixelScale)
     float m_centerHalfWorld = 0.02f;
     float m_axisLenWorld    = 0.2f;
-    float m_tipHalfWorld    = 0.015f;
+    float m_tipRadiusWorld  = 0.015f;
 
     // Min size clamp per axis
     float m_minSize = 0.0001f;

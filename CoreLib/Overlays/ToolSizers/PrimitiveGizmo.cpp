@@ -4,7 +4,6 @@
 #include "PrimitiveGizmo.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <glm/gtx/norm.hpp>
 
 #include "Scene.hpp"
@@ -98,7 +97,7 @@ void PrimitiveGizmo::buildBillboardSquare(Viewport*        vp,
                                           const glm::vec4& color,
                                           bool             filledForPick)
 {
-    // Use frozen basis during drag to prevent sign-flip flicker.
+    // Uses frozen basis during drag to prevent sign-flip flicker.
     glm::vec3 r = glm::vec3{1.0f, 0.0f, 0.0f};
     glm::vec3 u = glm::vec3{0.0f, 1.0f, 0.0f};
 
@@ -178,7 +177,7 @@ void PrimitiveGizmo::mouseDown(Viewport* vp, Scene*, const CoreEvent& ev)
     if (!m_dragging)
         return;
 
-    // Freeze billboard basis for this drag (prevents flicker).
+    // Freezes billboard basis for this drag (prevents flicker).
     m_bbRight = safeNormalize(vp->rightDirection(), glm::vec3{1.0f, 0.0f, 0.0f});
     m_bbUp    = safeNormalize(vp->upDirection(), glm::vec3{0.0f, 1.0f, 0.0f});
 
@@ -252,9 +251,14 @@ void PrimitiveGizmo::render(Viewport* vp, Scene*)
 
     m_centerHalfWorld = std::max(0.0001f, px * 10.0f);
     m_axisLenWorld    = std::max(0.05f, px * 70.0f);
-    m_tipHalfWorld    = std::max(0.0001f, px * 7.0f);
+    m_tipRadiusWorld  = std::max(0.0001f, px * 7.0f);
 
     m_overlayHandler.clear();
+
+    // Camera-facing normal for billboarded tip disks.
+    const glm::vec3 right = m_dragging ? m_bbRight : vp->rightDirection();
+    const glm::vec3 up    = m_dragging ? m_bbUp : vp->upDirection();
+    const glm::vec3 faceN = safeNormalize(glm::cross(right, up), glm::vec3{0.0f, 0.0f, 1.0f});
 
     // Center handle
     {
@@ -277,11 +281,25 @@ void PrimitiveGizmo::render(Viewport* vp, Scene*)
 
         m_overlayHandler.begin_overlay(h);
 
-        m_overlayHandler.add_line(stemA, stemB, 8.0f, color);
+        // Gizmo stem thickness matches the other gizmos (NormalPull/Translate/Stretch).
+        m_overlayHandler.add_line(stemA, stemB, 4.0f, color);
 
-        buildBillboardSquare(vp, stemB, m_tipHalfWorld, glm::vec4{color.r, color.g, color.b, 0.25f}, true);
-        buildBillboardSquare(vp, stemB, m_tipHalfWorld, color, false);
+        // Tip is a camera-facing filled disk. The polygon interior is used for picking.
+        m_overlayHandler.set_axis(faceN);
+        m_overlayHandler.add_filled_circle(stemB,
+                                           m_tipRadiusWorld,
+                                           glm::vec4{color.r, color.g, color.b, 0.25f},
+                                           2.5f,
+                                           48);
 
+        // Crisp cap pass.
+        m_overlayHandler.add_filled_circle(stemB,
+                                           m_tipRadiusWorld,
+                                           glm::vec4{color.r, color.g, color.b, 1.0f},
+                                           2.5f,
+                                           48);
+
+        // Axis hint remains the actual face axis for tool logic / constraints.
         m_overlayHandler.set_axis(axis);
         m_overlayHandler.end_overlay();
     };
