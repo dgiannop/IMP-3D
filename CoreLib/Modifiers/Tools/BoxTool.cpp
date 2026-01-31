@@ -9,8 +9,7 @@
 BoxTool::BoxTool() : m_sceneMesh{nullptr},
                      m_size{1.f},
                      m_center{0.f},
-                     m_segs{3},
-                     m_boxSizer{&m_size, &m_center}
+                     m_segs{3}
 
 {
     addProperty("Width", PropertyType::FLOAT, &m_size.x);
@@ -47,25 +46,25 @@ void BoxTool::propertiesChanged(Scene* scene)
 
 void BoxTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_boxSizer.mouseDown(vp, scene, event);
+    m_gizmo.mouseDown(vp, scene, event);
 }
 
 void BoxTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_boxSizer.mouseDrag(vp, scene, event);
+    m_gizmo.mouseDrag(vp, scene, event);
 }
 
 void BoxTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_boxSizer.mouseUp(vp, scene, event);
+    m_gizmo.mouseUp(vp, scene, event);
 }
 
 void BoxTool::render(Viewport* vp, Scene* scene)
 {
-    m_boxSizer.render(vp, scene);
+    m_gizmo.render(vp, scene);
 }
 
 OverlayHandler* BoxTool::overlayHandler()
 {
-    return &m_boxSizer.overlayHandler();
+    return &m_gizmo.overlayHandler();
 }

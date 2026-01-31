@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BoxSizer.hpp"
+#include "PrimitiveGizmo.hpp"
 #include "Scene.hpp"
 #include "Tool.hpp"
 
@@ -47,5 +47,5 @@ private:
     // float m_radius    = 0.f;
     // int   m_roundSegs = 4;
 
-    BoxSizer m_boxSizer;
+    PrimitiveGizmo m_gizmo{&m_center, &m_size};
 };
