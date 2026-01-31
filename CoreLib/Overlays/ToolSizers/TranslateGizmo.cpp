@@ -36,8 +36,9 @@ glm::vec3 TranslateGizmo::dragPointOnAxisPlane(Viewport*        vp,
 {
     const glm::vec3 aDir = axisDir(axis);
 
-    // Prefer actual view direction if available
-    const glm::vec3 camPos  = vp->cameraPosition(); // adapt name if needed
+    // Build a plane that contains the axis and faces the camera as much as possible.
+    // We choose plane normal: n = normalize(cross(aDir, cross(aDir, viewDir))).
+    const glm::vec3 camPos  = vp->cameraPosition();
     glm::vec3       viewDir = origin - camPos;
 
     if (glm::length2(viewDir) < 1e-8f)
@@ -52,16 +53,15 @@ glm::vec3 TranslateGizmo::dragPointOnAxisPlane(Viewport*        vp,
         if (glm::length2(n) < 1e-8f)
             n = glm::cross(aDir, glm::vec3{0.0f, 1.0f, 0.0f});
     }
-    n = glm::normalize(glm::cross(aDir, n)); // plane normal
 
-    const un::ray ray = vp->ray(mx, my); // adapt if needed
+    // plane normal is perpendicular to axis, stable even when view aligns with axis
+    n = glm::normalize(glm::cross(aDir, n));
 
-    const float denom = glm::dot(n, ray.dir);
-    if (std::abs(denom) < 1e-8f)
-        return origin;
+    glm::vec3 hit{};
+    if (vp->rayPlaneHit(mx, my, origin, n, hit))
+        return hit;
 
-    const float t = glm::dot(n, (origin - ray.org)) / denom;
-    return ray.org + ray.dir * t;
+    return origin;
 }
 
 void TranslateGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
