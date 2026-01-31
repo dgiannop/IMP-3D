@@ -2,6 +2,7 @@
 
 #include <span>
 
+#include "NormalPullGizmo.hpp"
 #include "Tool.hpp"
 
 class Scene;
@@ -46,7 +47,7 @@ public:
     void render(Viewport* vp, Scene* scene) override;
 
     /** @copydoc Tool::overlayHandler */
-    // OverlayHandler* overlayHandler() override;
+    OverlayHandler* overlayHandler() override;
 
 public:
     /**
@@ -70,4 +71,6 @@ public:
 private:
     float m_amount = 0.f;  ///< Current extrusion amount.
     bool  m_group  = true; ///< Whether extrusion operates as a connected group.
+
+    NormalPullGizmo m_gizmo{&m_amount};
 };

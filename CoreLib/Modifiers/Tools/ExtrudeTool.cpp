@@ -29,6 +29,9 @@ void ExtrudeTool::propertiesChanged(Scene* scene)
     if (un::is_zero(m_amount))
         return;
 
+    // For now, drive polys. You can expand this later:
+    //  - VERTS mode -> extrudeVerts
+    //  - EDGES mode -> extrudeEdges
     auto polyMap = sel::to_polys(scene);
 
     for (auto& [mesh, polys] : polyMap)
@@ -40,22 +43,51 @@ void ExtrudeTool::propertiesChanged(Scene* scene)
     }
 }
 
-void ExtrudeTool::mouseDown(Viewport* /*vp*/, Scene* /*scene*/, const CoreEvent& /*event*/)
+void ExtrudeTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
+    if (!vp || !scene)
+        return;
+
+    // Reset preview delta at interaction start.
+    m_amount = 0.0f;
+
+    m_gizmo.mouseDown(vp, scene, event);
+    propertiesChanged(scene);
 }
 
-void ExtrudeTool::mouseDrag(Viewport* vp, Scene* /*scene*/, const CoreEvent& event)
+void ExtrudeTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_amount += event.deltaX * vp->pixelScale();
-    m_amount += event.deltaY * vp->pixelScale();
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.mouseDrag(vp, scene, event);
+    propertiesChanged(scene);
 }
 
-void ExtrudeTool::mouseUp(Viewport* /*vp*/, Scene* /*scene*/, const CoreEvent& /*event*/)
+void ExtrudeTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.mouseUp(vp, scene, event);
+
+    scene->commitMeshChanges();
+
+    // Reset for next interaction.
+    m_amount = 0.0f;
 }
 
-void ExtrudeTool::render(Viewport* /*vp*/, Scene* /*scene*/)
+void ExtrudeTool::render(Viewport* vp, Scene* scene)
 {
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.render(vp, scene);
+}
+
+OverlayHandler* ExtrudeTool::overlayHandler()
+{
+    return &m_gizmo.overlayHandler();
 }
 
 // ------------------------------------------------------------
