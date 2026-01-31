@@ -1,0 +1,6 @@
+#ifndef OVERLAYSETTINGS_HPP
+#define OVERLAYSETTINGS_HPP
+
+// Stub for now
+
+#endif // OVERLAYSETTINGS_HPP

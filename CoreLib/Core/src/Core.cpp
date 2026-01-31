@@ -2,9 +2,10 @@
 
 #include "Command.hpp"
 #include "Config.hpp"
+#include "LightingSettings.hpp"
 #include "MaterialEditor.hpp"
 #include "SceneLight.hpp"
-#include "SelectionUtils.hpp" // todo remove this and the functionality of assignMaterial from in here
+#include "SelectionUtils.hpp"
 #include "Tool.hpp"
 #include "Viewport.hpp"
 
@@ -506,6 +507,28 @@ const std::vector<std::unique_ptr<PropertyBase>>& Core::toolProperties() const n
     if (m_activeTool)
         return m_activeTool->properties();
     return kEmpty;
+}
+
+// ------------------------------------------------------------
+// Lighting settings
+// ------------------------------------------------------------
+
+LightingSettings Core::lightingSettings() const noexcept
+{
+    if (!m_scene)
+        return {};
+
+    return m_scene->lightingSettings();
+}
+
+void Core::setLightingSettings(const LightingSettings& settings) noexcept
+{
+    if (!m_scene)
+        return;
+
+    m_scene->setLightingSettings(settings);
+
+    m_scene->changeCounter()->change();
 }
 
 // ------------------------------------------------------------

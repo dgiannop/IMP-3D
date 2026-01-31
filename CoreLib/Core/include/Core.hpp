@@ -8,6 +8,7 @@
 #include "CoreDocument.hpp"
 #include "CoreTypes.hpp"
 #include "ItemFactory.hpp"
+#include "LightingSettings.hpp"
 #include "Renderer.hpp"
 #include "Scene.hpp"
 #include "SceneFormat.hpp"
@@ -246,6 +247,28 @@ public:
 
     /** @brief Access current tool properties. */
     const std::vector<std::unique_ptr<PropertyBase>>& toolProperties() const noexcept;
+
+    // ------------------------------------------------------------
+    // Lighting settings
+    // ------------------------------------------------------------
+
+    /**
+     * @brief Retrieve current lighting settings for the active scene.
+     *
+     * Intended for editor UI (lighting panel) to populate controls.
+     * Returns a copy so the UI can edit and re-submit safely.
+     */
+    [[nodiscard]] LightingSettings lightingSettings() const noexcept;
+
+    /**
+     * @brief Apply lighting settings to the active scene.
+     *
+     * Updates the scene's lighting policy (headlight/scene lights/exposure/etc)
+     * and marks rendering as needed.
+     *
+     * @param settings New lighting settings
+     */
+    void setLightingSettings(const LightingSettings& settings) noexcept;
 
     // ------------------------------------------------------------
     // Scene lights

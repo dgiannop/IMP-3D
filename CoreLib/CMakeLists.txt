@@ -216,8 +216,8 @@ target_include_directories(CoreLib PUBLIC
     ${tinygltf_SOURCE_DIR}
     ${opensubdiv_SOURCE_DIR}
     ${EMBREE_INCLUDE_DIR}
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR} # todo, keep only this one. Remove those subdirs bellow and add them into the include paths ex: #include "Scene/Query/...hpp"
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Core/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Core/include/VK>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene/Query>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene/Materials>
@@ -227,6 +227,7 @@ target_include_directories(CoreLib PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/Helpers>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/GpuResources>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/Subdivision>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/Settings>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Utilities>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/CoreModules/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Modifiers>

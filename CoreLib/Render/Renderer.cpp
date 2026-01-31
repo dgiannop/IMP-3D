@@ -269,6 +269,20 @@ void Renderer::waitDeviceIdle() noexcept
     vkDeviceWaitIdle(m_ctx.device);
 }
 
+void Renderer::setLightingSettings(const LightingSettings& settings) noexcept
+{
+    m_lightingSettings = settings;
+
+    // Mirror the obvious headlight controls into the renderer headlight.
+    m_headlight.enabled   = m_lightingSettings.useHeadlight;
+    m_headlight.intensity = m_lightingSettings.headlightIntensity;
+}
+
+const LightingSettings& Renderer::lightingSettings() const noexcept
+{
+    return m_lightingSettings;
+}
+
 //==================================================================
 // Pipeline destruction (swapchain-level)
 //==================================================================
@@ -650,7 +664,7 @@ void Renderer::updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t fram
         return;
 
     GpuLightsUBO lights{};
-    buildGpuLightsUBO(m_headlight, *vp, scene, lights);
+    buildGpuLightsUBO(m_lightingSettings, m_headlight, *vp, scene, lights);
     ubo.lightBuffers[frameIndex].upload(&lights, sizeof(lights));
 }
 
@@ -1795,6 +1809,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         {
             GpuLightsUBO lights{};
             buildGpuLightsUBO(
+                m_lightingSettings,
                 m_headlight, // Renderer-owned modeling light
                 *vp,
                 scene,

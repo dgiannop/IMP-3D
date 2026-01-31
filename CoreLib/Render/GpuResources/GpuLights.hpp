@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 #include "GpuLight.hpp"
+#include "LightingSettings.hpp"
 
 class Scene;
 class Viewport;
@@ -47,7 +48,8 @@ struct HeadlightSettings
  *  - This function is renderer-oriented because it depends on the viewport view matrix.
  *  - Scene lights are expected to be in WORLD space and will be transformed to VIEW space here.
  */
-void buildGpuLightsUBO(const HeadlightSettings& headlight,
+void buildGpuLightsUBO(const LightingSettings&  settings,
+                       const HeadlightSettings& headlight,
                        const Viewport&          vp,
                        const Scene*             scene,
                        GpuLightsUBO&            out) noexcept;

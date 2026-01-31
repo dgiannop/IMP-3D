@@ -1,0 +1,6 @@
+#ifndef RENDERSETTINGS_HPP
+#define RENDERSETTINGS_HPP
+
+// Stub for now
+
+#endif // RENDERSETTINGS_HPP

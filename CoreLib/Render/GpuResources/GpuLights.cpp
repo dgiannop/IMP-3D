@@ -1,5 +1,5 @@
 // ============================================================
-// GpuLights.cpp (or wherever buildGpuLightsUBO lives)
+// GpuLights.cpp
 // ============================================================
 
 #include "GpuLights.hpp"
@@ -9,14 +9,14 @@
 
 #include "Light.hpp"
 #include "LightHandler.hpp"
+#include "LightingSettings.hpp"
 #include "Scene.hpp"
 #include "Viewport.hpp"
 
 namespace
 {
-    constexpr bool kUseFixedSunForHeadlight = false; // set true for RT shadow testing
-
-    constexpr float kEps = 1e-8f;
+    constexpr bool  kUseFixedSunForHeadlight = false; // set true for RT shadow testing
+    constexpr float kEps                     = 1e-8f;
 
     static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
     {
@@ -122,9 +122,43 @@ namespace
         return safeNormalize(fwd, glm::vec3(0, 0, -1));
     }
 
+    static LightingSettings::ModePolicy policyForDrawMode(const LightingSettings& s, DrawMode mode) noexcept
+    {
+        switch (mode)
+        {
+            case DrawMode::SOLID:
+                return s.solidPolicy;
+            case DrawMode::SHADED:
+                return s.shadedPolicy;
+            case DrawMode::RAY_TRACE:
+                return s.rtPolicy;
+            default:
+                return LightingSettings::ModePolicy::Both;
+        }
+    }
+
+    static bool allowHeadlight(const LightingSettings& s, DrawMode mode) noexcept
+    {
+        if (!s.useHeadlight)
+            return false;
+
+        const auto p = policyForDrawMode(s, mode);
+        return (p == LightingSettings::ModePolicy::HeadlightOnly || p == LightingSettings::ModePolicy::Both);
+    }
+
+    static bool allowSceneLights(const LightingSettings& s, DrawMode mode) noexcept
+    {
+        if (!s.useSceneLights)
+            return false;
+
+        const auto p = policyForDrawMode(s, mode);
+        return (p == LightingSettings::ModePolicy::SceneOnly || p == LightingSettings::ModePolicy::Both);
+    }
+
 } // namespace
 
-void buildGpuLightsUBO(const HeadlightSettings& headlight,
+void buildGpuLightsUBO(const LightingSettings&  settings,
+                       const HeadlightSettings& headlight,
                        const Viewport&          vp,
                        const Scene*             scene,
                        GpuLightsUBO&            out) noexcept
@@ -133,31 +167,35 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     out.info    = glm::uvec4(0u);
     out.ambient = glm::vec4(0.f);
 
-    const glm::mat4 V = vp.view(); // WORLD -> VIEW
+    const glm::mat4 V  = vp.view(); // WORLD -> VIEW
+    const DrawMode  dm = vp.drawMode();
 
     // ------------------------------------------------------------
-    // 1) Modeling light first (optional)
+    // 1) Modeling headlight (optional)
     // ------------------------------------------------------------
-    if (headlight.enabled)
+    // Render-time "modeling light" specified in VIEW space. This is not a SceneLight.
+    // Controlled via LightingSettings + HeadlightSettings.
+    if (allowHeadlight(settings, dm) && headlight.enabled && headlight.intensity > 0.0f)
     {
         glm::vec3 dirWorld = {};
 
         if (kUseFixedSunForHeadlight)
             dirWorld = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f)); // fixed sun
         else
-            dirWorld = viewportForwardWorld(vp); // headlight
+            dirWorld = viewportForwardWorld(vp); // headlight follows camera forward
 
         const glm::vec3 dirView = viewDir(V, dirWorld);
         pushLight(out, makeDirectionalView(dirView, headlight.color, headlight.intensity));
     }
 
     // ------------------------------------------------------------
-    // 2) Scene lights
+    // 2) Scene lights (optional)
     // ------------------------------------------------------------
+    // Scene lights live in WORLD space. We convert to VIEW space here for shaders.
     uint32_t sceneLightCount = 0u;
     float    maxSceneLight   = 0.0f;
 
-    if (scene)
+    if (allowSceneLights(settings, dm) && scene)
     {
         const LightHandler* lh = scene->lightHandler();
         if (lh)
@@ -169,8 +207,8 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
                 if (!l || !l->enabled)
                     continue;
 
-                // For exposure estimation: use intensity * max(color channel)
-                // (This matches how your shader scales radiance.)
+                // Exposure estimation uses intensity * max(color channel).
+                // This roughly tracks peak radiance contribution for default scenes.
                 const float cmax = std::max(l->color.x, std::max(l->color.y, l->color.z));
                 maxSceneLight    = std::max(maxSceneLight, std::max(0.0f, l->intensity) * std::max(0.0f, cmax));
                 ++sceneLightCount;
@@ -213,20 +251,20 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     // ------------------------------------------------------------
     // 3) Ambient.rgb and Ambient.a = EXPOSURE
     // ------------------------------------------------------------
-    // Keep ambient minimal (optional). This is NOT exposure.
-    // For pure physically-based: leave rgb=0.
-    const glm::vec3 modelingAmbientRgb(0.f); // or e.g. glm::vec3(0.02f)
-    out.ambient = glm::vec4(modelingAmbientRgb, 0.0f);
+    // ambient.rgb is a small "fill" term (optional) and is not physically based.
+    // We expose it as a UI knob for modeling convenience.
+    const float fill = std::max(0.0f, settings.ambientFill);
+    out.ambient      = glm::vec4(fill, fill, fill, 0.0f);
 
     // Exposure:
-    // - If there are scene lights, use a "middle-grey" style key / maxLight.
-    // - If there are NO scene lights, keep exposure = 1 so headlight-only scenes look normal.
+    // - Keep the existing simple auto-exposure behavior based on scene lights.
+    // - Multiply by settings.exposure so the UI can bias brighter/darker without
+    //   completely changing the auto logic.
     float exposure = 1.0f;
 
     if (sceneLightCount > 0u && maxSceneLight > 0.0f)
     {
-        // Key value: tweakable. 0.18 is classic middle grey.
-        // For a slightly brighter default, try 0.25.
+        // Key value: 0.18 is classic middle grey.
         constexpr float kKey = 0.18f;
 
         exposure = kKey / maxSceneLight;
@@ -234,6 +272,9 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
         // Clamp to sane bounds so extreme files don't go totally black/white.
         exposure = std::clamp(exposure, 1e-6f, 2.0f);
     }
+
+    // User bias (defaults to 1.0).
+    exposure *= std::max(0.0f, settings.exposure);
 
     out.ambient.a = exposure;
 }

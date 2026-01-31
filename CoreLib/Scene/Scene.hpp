@@ -7,9 +7,9 @@
 #include "CoreTypes.hpp"
 #include "GpuResources/TextureHandler.hpp"
 #include "LightHandler.hpp"
+#include "LightingSettings.hpp"
 #include "MaterialHandler.hpp"
 #include "SceneMesh.hpp"
-// #include "SceneObject.hpp"
 #include "SceneQueryCpu.hpp"
 #include "SceneQueryEmbree.hpp"
 #include "SceneSnap.hpp"
@@ -198,6 +198,24 @@ public:
     [[nodiscard]] bool showSceneGrid() const noexcept;
 
     /**
+     * @brief Retrieve current lighting settings.
+     *
+     * This is scene-owned render policy (headlight/scene lights/exposure/etc).
+     * Intended for Core/UI access.
+     */
+    [[nodiscard]] const LightingSettings& lightingSettings() const noexcept;
+
+    /**
+     * @brief Apply lighting settings.
+     *
+     * Stores the new settings and forwards them to the renderer so
+     * subsequent draws use the updated lighting policy.
+     *
+     * @param settings New lighting settings
+     */
+    void setLightingSettings(const LightingSettings& settings) noexcept;
+
+    /**
      * @brief Adjust subdivision level.
      * @param levelDelta Relative subdivision change
      */
@@ -289,6 +307,9 @@ private:
 
     /** @brief Scene grid visibility flag. */
     bool m_showGrid;
+
+    /** @brief Scene-owned lighting settings (render policy). */
+    LightingSettings m_lightingSettings = {};
 
     /** @brief Scene query change counter. */
     SysCounterPtr m_sceneQueryCounter;

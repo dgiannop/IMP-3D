@@ -317,6 +317,21 @@ bool Scene::showSceneGrid() const noexcept
     return m_showGrid;
 }
 
+const LightingSettings& Scene::lightingSettings() const noexcept
+{
+    return m_lightingSettings;
+}
+
+void Scene::setLightingSettings(const LightingSettings& settings) noexcept
+{
+    m_lightingSettings = settings;
+
+    if (m_renderer)
+        m_renderer->setLightingSettings(m_lightingSettings);
+
+    markModified();
+}
+
 void Scene::subdivisionLevel(int level) noexcept
 {
     for (SceneMesh* mesh : sceneMeshes())

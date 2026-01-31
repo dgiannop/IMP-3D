@@ -22,6 +22,7 @@
 #include "GpuLights.hpp"
 #include "GraphicsPipelines.hpp"
 #include "GridRendererVK.hpp"
+#include "LightingSettings.hpp"
 #include "Material.hpp"
 #include "OverlayHandler.hpp"
 #include "RenderGeometry.hpp" // for render::geom::...
@@ -91,6 +92,22 @@ public:
     void idle(Scene* scene);
     void waitDeviceIdle() noexcept;
 
+    // ------------------------------------------------------------
+    // Lighting settings
+    // ------------------------------------------------------------
+
+    /**
+     * @brief Apply lighting settings (render policy).
+     *
+     * Called by Scene when UI changes lighting controls.
+     */
+    void setLightingSettings(const LightingSettings& settings) noexcept;
+
+    /**
+     * @brief Retrieve current lighting settings.
+     */
+    [[nodiscard]] const LightingSettings& lightingSettings() const noexcept;
+
 public:
     // ============================================================
     // Public API: Rendering entry points
@@ -109,7 +126,7 @@ public:
 
 public:
     // ============================================================
-    // Shader-visible structs (must match GLSL/std140/std430 expectations)
+    // Shader-visible structs (must match GLSL/std140/std430)
     // ============================================================
 
     // set=0 binding=0 (raster path)
@@ -328,6 +345,9 @@ private:
     std::vector<DescriptorSet>                      m_materialSets;
 
     HeadlightSettings m_headlight = {};
+
+    /** @brief Scene-driven lighting policy (headlight/scene lights/exposure/etc). */
+    LightingSettings m_lightingSettings = {};
 
 private:
     // ============================================================
