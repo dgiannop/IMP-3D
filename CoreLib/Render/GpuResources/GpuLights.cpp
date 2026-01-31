@@ -157,7 +157,7 @@ void buildGpuLightsUBO(const HeadlightSettings& headlight,
     uint32_t sceneLightCount = 0u;
     float    maxSceneLight   = 0.0f;
 
-    if (false) // scene)
+    if (scene)
     {
         const LightHandler* lh = scene->lightHandler();
         if (lh)

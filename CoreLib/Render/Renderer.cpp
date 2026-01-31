@@ -1800,10 +1800,12 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                 scene,
                 lights);
 
-            static uint64_t count = 0;
-            if (lights.info.x > 0 && count++ < 3)
+            static uint32_t count = 0;
+            if (count != lights.info.x)
             {
-                std::cout << "lightCount=" << lights.info.x
+                count = lights.info.x;
+
+                std::cerr << "lightCount=" << lights.info.x
                           << " ambient=(" << lights.ambient.x << "," << lights.ambient.y << "," << lights.ambient.z << "," << lights.ambient.w << ")\n";
                 if (lights.info.x > 0)
                 {
