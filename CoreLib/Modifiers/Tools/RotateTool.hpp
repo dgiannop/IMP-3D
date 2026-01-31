@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include "RotateGizmo.hpp"
 #include "SelectionUtils.hpp"
 #include "Tool.hpp"
 
@@ -11,9 +12,21 @@ struct CoreEvent;
 
 /**
  * @class RotateTool
- * @brief Very basic rotate tool (WIP). Rotates selected verts around selection center.
+ * @brief Interactive rotation tool using a world-axis rotate gizmo.
  *
- * Dragging adjusts Yaw by default (screen X delta). You can also edit Pitch/Roll as properties.
+ * This tool performs an interactive, preview-based rotation of the current
+ * selection around its center using a RotateGizmo.
+ *
+ * Design notes:
+ *  - Rotation is applied as a *delta* (Euler angles in degrees).
+ *  - During interaction, geometry is previewed by aborting and reapplying
+ *    mesh changes on each update.
+ *  - On mouse release, the preview is committed and the delta is reset.
+ *  - The gizmo owns all overlay rendering and picking logic; the tool only
+ *    applies the resulting parameter changes.
+ *
+ * This mirrors the interaction model used by TranslateTool and other
+ * core transform tools.
  */
 class RotateTool final : public Tool
 {
@@ -32,11 +45,7 @@ public:
     OverlayHandler* overlayHandler() override;
 
 private:
-    glm::vec3 m_anglesDeg{0.0f}; ///< Pitch(X), Yaw(Y), Roll(Z) in degrees
+    glm::vec3 m_anglesDeg{0.0f}; ///< Pitch(X), Yaw(Y), Roll(Z) in degrees (delta while dragging)
 
-    // Drag state
-    glm::vec3 m_startAnglesDeg{0.0f};
-    glm::vec3 m_pivot{0.0f};
-    int32_t   m_startX = 0;
-    int32_t   m_startY = 0;
+    RotateGizmo m_gizmo{&m_anglesDeg};
 };

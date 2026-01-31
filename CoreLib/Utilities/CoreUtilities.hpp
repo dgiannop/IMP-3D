@@ -134,6 +134,27 @@ namespace un
     }
 
     /**
+     * @brief Normalize a vector safely with a fallback.
+     *      * Behaves like `glm::normalize()` but avoids NaNs for tiny or invalid inputs.
+     * If the vector length is near zero or non-finite, the provided fallback
+     * vector is returned instead.
+     *      * @param v        Input vector.
+     * @param fallback Vector to return if @p v is degenerate.
+     * @param eps      Threshold under which the vector is treated as zero.
+     * @return Normalized vector, or @p fallback on degenerate input.
+     * @ingroup MathUtils
+     */
+    inline glm::vec3 safe_normalize(const glm::vec3& v,
+                                    const glm::vec3& fallback,
+                                    float            eps = 1e-8f)
+    {
+        float len2 = glm::dot(v, v);
+        if (len2 > eps * eps && std::isfinite(len2))
+            return v / std::sqrt(len2);
+        return fallback;
+    }
+
+    /**
      * @brief Find the closest point on a segment to a point (parametric form).
      *
      * @param pt Query point.
