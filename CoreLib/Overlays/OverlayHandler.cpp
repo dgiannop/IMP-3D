@@ -193,9 +193,6 @@ int32_t OverlayHandler::pick(const Viewport* vp, float x, float y) const
     float   bestDist2 = std::numeric_limits<float>::infinity();
     float   bestDepth = std::numeric_limits<float>::infinity();
 
-    const float pointR2 = m_pickPointRadiusPx * m_pickPointRadiusPx;
-    const float lineR2  = m_pickLineRadiusPx * m_pickLineRadiusPx;
-
     // We scan all overlays and all their shapes.
     // We prefer smallest screen distance; tie-breaker is nearest depth (smaller z).
     for (const Overlay& o : m_overlays)
