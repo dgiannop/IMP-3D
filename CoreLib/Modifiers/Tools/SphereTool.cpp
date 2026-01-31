@@ -11,8 +11,7 @@ SphereTool::SphereTool() :
     m_center{0.f},
     m_axis{0, 1, 0},
     m_sides{22},
-    m_rings{16},
-    m_radiusResizer{&m_radius, &m_center}
+    m_rings{16}
 {
     addProperty("Radius X", PropertyType::FLOAT, &m_radius.x);
     addProperty("Radius Y", PropertyType::FLOAT, &m_radius.y);
@@ -49,25 +48,25 @@ void SphereTool::propertiesChanged(Scene* scene)
 
 void SphereTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_radiusResizer.mouseDown(vp, scene, event);
+    m_gizmo.mouseDown(vp, scene, event);
 }
 
 void SphereTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_radiusResizer.mouseDrag(vp, scene, event);
+    m_gizmo.mouseDrag(vp, scene, event);
 }
 
 void SphereTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_radiusResizer.mouseUp(vp, scene, event);
+    m_gizmo.mouseUp(vp, scene, event);
 }
 
 void SphereTool::render(Viewport* vp, Scene* scene)
 {
-    m_radiusResizer.render(vp, scene);
+    m_gizmo.render(vp, scene);
 }
 
 OverlayHandler* SphereTool::overlayHandler()
 {
-    return &m_radiusResizer.overlayHandler();
+    return &m_gizmo.overlayHandler();
 }

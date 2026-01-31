@@ -1,9 +1,6 @@
-// CylinderTool.cpp
 #include "CylinderTool.hpp"
 
-#include <glm/gtc/epsilon.hpp>
-#include <limits>
-
+#include "CylinderGizmo.hpp"
 #include "Primitives.hpp"
 #include "Scene.hpp"
 #include "SceneMesh.hpp"
@@ -12,12 +9,12 @@ CylinderTool::CylinderTool() :
     m_sceneMesh{nullptr},
     m_radius{0.5f},
     m_height{1.0f},
-    m_center{0.f},
+    m_center{glm::vec3{0.f}},
     m_sides{24},
     m_segments{4},
-    m_axis{0, 1, 0},
+    m_axis{glm::ivec3{0, 1, 0}},
     m_caps{true},
-    m_radiusResizer{&m_radius, &m_height, &m_center, &m_axis}
+    m_gizmo{&m_center, &m_radius, &m_height}
 {
     addProperty("Radius", PropertyType::FLOAT, &m_radius, 0.f);
     addProperty("Height", PropertyType::FLOAT, &m_height, 0.f);
@@ -33,7 +30,7 @@ CylinderTool::CylinderTool() :
     addProperty("Caps", PropertyType::BOOL, &m_caps);
 }
 
-void CylinderTool::activate(Scene*)
+void CylinderTool::activate(Scene* scene)
 {
 }
 
@@ -42,13 +39,9 @@ void CylinderTool::propertiesChanged(Scene* scene)
     scene->abortMeshChanges();
 
     if (!m_sceneMesh)
-    {
         m_sceneMesh = scene->createSceneMesh();
-    }
 
-    const float eps = std::numeric_limits<float>::epsilon();
-
-    if (glm::epsilonNotEqual(m_radius, 0.0f, eps) && glm::epsilonNotEqual(m_height, 0.0f, eps))
+    if (m_radius > 0.0f && m_height > 0.0f)
     {
         SysMesh* mesh = m_sceneMesh->sysMesh();
 
@@ -61,25 +54,25 @@ void CylinderTool::propertiesChanged(Scene* scene)
 
 void CylinderTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_radiusResizer.mouseDown(vp, scene, event);
+    m_gizmo.mouseDown(vp, scene, event);
 }
 
 void CylinderTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_radiusResizer.mouseDrag(vp, scene, event);
+    m_gizmo.mouseDrag(vp, scene, event);
 }
 
 void CylinderTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_radiusResizer.mouseUp(vp, scene, event);
+    m_gizmo.mouseUp(vp, scene, event);
 }
 
 void CylinderTool::render(Viewport* vp, Scene* scene)
 {
-    m_radiusResizer.render(vp, scene);
+    m_gizmo.render(vp, scene);
 }
 
 OverlayHandler* CylinderTool::overlayHandler()
 {
-    return &m_radiusResizer.overlayHandler();
+    return &m_gizmo.overlayHandler();
 }

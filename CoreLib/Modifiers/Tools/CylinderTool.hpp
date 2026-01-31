@@ -1,9 +1,11 @@
+//=============================================================================
 // CylinderTool.hpp
+//=============================================================================
 #pragma once
 
 #include <glm/glm.hpp>
 
-#include "RadiusSizer2D.hpp"
+#include "CylinderGizmo.hpp"
 #include "Tool.hpp"
 
 class Scene;
@@ -54,14 +56,27 @@ public:
     OverlayHandler* overlayHandler() override;
 
 private:
-    SceneMesh* m_sceneMesh = nullptr; ///< Temporary mesh used during interactive preview.
+    static float clampRadius(float r) noexcept;
+    static float clampHeight(float h) noexcept;
 
-    float         m_radius = 0.5f; ///< Cylinder radius.
-    float         m_height = 1.0f; ///< Cylinder height.
-    glm::vec3     m_center{0.f};   ///< World-space cylinder center.
-    int           m_sides    = 24; ///< Radial subdivision count.
-    int           m_segments = 1;  ///< Height subdivision count.
-    glm::ivec3    m_axis{0, 1, 0}; ///< Orientation axis for cylinder placement.
-    bool          m_caps = true;   ///< Whether to create caps.
-    RadiusSizer2D m_radiusResizer; ///< Helper for interactive radius adjustments.
+    void applyRadiusToExtents(float r) noexcept;
+    void applyHeightToExtents(float h) noexcept;
+
+    void updateDerivedParamsFromExtents() noexcept;
+
+    void rebuildPreview(Scene* scene);
+
+private:
+    SceneMesh* m_sceneMesh = nullptr;
+
+    float     m_radius = 0.5f;
+    float     m_height = 1.0f;
+    glm::vec3 m_center = glm::vec3{0.f};
+
+    int        m_sides    = 24;
+    int        m_segments = 4;
+    glm::ivec3 m_axis     = glm::ivec3{0, 1, 0};
+    bool       m_caps     = true;
+
+    CylinderGizmo m_gizmo;
 };

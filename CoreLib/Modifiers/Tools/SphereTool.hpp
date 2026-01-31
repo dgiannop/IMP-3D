@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include "ExtentsGizmo.hpp"
 #include "RadiusSizer.hpp"
 #include "Tool.hpp"
 
@@ -57,5 +58,5 @@ private:
     glm::ivec3 m_axis{0, 1, 0};  ///< Orientation axis for sphere placement.
     bool       m_smooth = false; ///< Whether normals are smoothed.
 
-    RadiusSizer m_radiusResizer; ///< Helper for interactive radius adjustments.
+    ExtentsGizmo m_gizmo = {&m_center, &m_radius}; ///< Helper for interactive radius adjustments.
 };
