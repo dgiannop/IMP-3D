@@ -804,6 +804,7 @@ void MainWindow::initSideMenu()
     menuStackedWidget->addButton(0, "Box", ButtonType::Tool, "BoxTool", QKeySequence(Qt::SHIFT | Qt::Key_B));
     menuStackedWidget->addButton(0, "Sphere", ButtonType::Tool, "SphereTool", QKeySequence(Qt::SHIFT | Qt::Key_S));
     menuStackedWidget->addButton(0, "Cylinder", ButtonType::Tool, "CylinderTool", QKeySequence(Qt::SHIFT | Qt::Key_C));
+    menuStackedWidget->addButton(0, "Plane", ButtonType::Tool, "PlaneTool", QKeySequence(Qt::SHIFT | Qt::Key_P));
     // menuStackedWidget->addButton(0, "Quad Sphere", ButtonType::Tool, "QuadBallTool", QKeySequence(Qt::SHIFT | Qt::Key_Q));
 
     // menuStackedWidget->addButton(0, "Plane", ButtonType::Tool, "PlaneTool", QKeySequence(Qt::SHIFT | Qt::Key_P));

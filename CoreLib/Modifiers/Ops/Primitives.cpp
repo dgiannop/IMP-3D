@@ -580,4 +580,158 @@ namespace Primitives
         emit_cap(true);
     }
 
+    void createPlane(SysMesh* mesh, glm::vec3 center, glm::ivec3 axis, glm::vec2 size, glm::ivec2 segs)
+    {
+        if (!mesh)
+            return;
+
+        const int sx = std::max(1, segs.x);
+        const int sy = std::max(1, segs.y);
+
+        size.x = std::max(0.0f, size.x);
+        size.y = std::max(0.0f, size.y);
+
+        if (un::is_zero(size.x) || un::is_zero(size.y))
+            return;
+
+        // ---------------------------------------------------------------------
+        // Maps (0 = normals (dim 3), 1 = uvs (dim 2))
+        // ---------------------------------------------------------------------
+        const int normMap = [&] {
+            const int m = mesh->map_find(0);
+            return (m >= 0) ? m : mesh->map_create(0, 0, 3);
+        }();
+
+        const int textMap = [&] {
+            const int m = mesh->map_find(1);
+            return (m >= 0) ? m : mesh->map_create(1, 0, 2);
+        }();
+
+        // ---------------------------------------------------------------------
+        // Axis frame: axis is plane normal (major axis).
+        // Build a stable (uAxis, vAxis) basis for the plane.
+        // ---------------------------------------------------------------------
+        glm::vec3 N = glm::vec3(axis);
+        if (un::is_zero(N))
+            N = glm::vec3(0.0f, 1.0f, 0.0f);
+        N = un::safe_normalize(N);
+
+        glm::vec3 helper = (std::abs(N.y) < 0.9f) ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+
+        glm::vec3 uAxis = glm::cross(helper, N);
+        if (un::is_zero(uAxis))
+            uAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+        uAxis = un::safe_normalize(uAxis);
+
+        glm::vec3 vAxis = glm::cross(N, uAxis);
+        if (un::is_zero(vAxis))
+            vAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+        vAxis = un::safe_normalize(vAxis);
+
+        // Half extents along plane axes.
+        const float hx = 0.5f * size.x;
+        const float hy = 0.5f * size.y;
+
+        // ---------------------------------------------------------------------
+        // Shared lattice for POSITION verts (sx+1 by sy+1)
+        // ---------------------------------------------------------------------
+        const int SX = sx + 1;
+        const int SY = sy + 1;
+
+        std::vector<int32_t> grid(static_cast<size_t>(SX * SY), -1);
+
+        auto Gref = [&](int x, int y) -> int32_t& {
+            return grid[static_cast<size_t>(y * SX + x)];
+        };
+
+        auto vert = [&](int x, int y) -> int32_t {
+            int32_t& id = Gref(x, y);
+            if (id >= 0)
+                return id;
+
+            const float fx = static_cast<float>(x) / static_cast<float>(sx); // 0..1
+            const float fy = static_cast<float>(y) / static_cast<float>(sy); // 0..1
+
+            const float ox = (fx - 0.5f) * (2.0f * hx); // -hx..+hx
+            const float oy = (fy - 0.5f) * (2.0f * hy); // -hy..+hy
+
+            const glm::vec3 p = center + uAxis * ox + vAxis * oy;
+
+            id = mesh->create_vert(p);
+            return id;
+        };
+
+        auto create_nrm_corner = [&](const glm::vec3& n) -> int32_t {
+            return mesh->map_create_vert(normMap, glm::value_ptr(n));
+        };
+
+        auto create_uv_corner = [&](const glm::vec2& uv) -> int32_t {
+            return mesh->map_create_vert(textMap, &uv.x);
+        };
+
+        // ---------------------------------------------------------------------
+        // Emit one quad cell with face-varying UVs/normals, enforcing CCW vs N.
+        // a,b,c,d are candidate winding.
+        // UVs are [0..1] across plane: u along +uAxis, v along +vAxis.
+        // ---------------------------------------------------------------------
+        auto emit = [&](int32_t a, int32_t b, int32_t c, int32_t d, float u0, float u1, float v0, float v1) {
+            glm::vec2 uvA{u0, v0};
+            glm::vec2 uvB{u1, v0};
+            glm::vec2 uvC{u1, v1};
+            glm::vec2 uvD{u0, v1};
+
+            int32_t nA = create_nrm_corner(N);
+            int32_t nB = create_nrm_corner(N);
+            int32_t nC = create_nrm_corner(N);
+            int32_t nD = create_nrm_corner(N);
+
+            int32_t tA = create_uv_corner(uvA);
+            int32_t tB = create_uv_corner(uvB);
+            int32_t tC = create_uv_corner(uvC);
+            int32_t tD = create_uv_corner(uvD);
+
+            const glm::vec3 pa = mesh->vert_position(a);
+            const glm::vec3 pb = mesh->vert_position(b);
+            const glm::vec3 pd = mesh->vert_position(d);
+
+            if (glm::dot(glm::cross(pb - pa, pd - pa), N) < 0.0f)
+            {
+                std::swap(b, d);
+                std::swap(tB, tD);
+                std::swap(nB, nD);
+            }
+
+            SysPolyVerts pv{a, b, c, d};
+            SysPolyVerts nr{nA, nB, nC, nD};
+            SysPolyVerts uv{tA, tB, tC, tD};
+
+            const int32_t pid = mesh->create_poly(pv, 0);
+            mesh->map_create_poly(normMap, pid, nr);
+            mesh->map_create_poly(textMap, pid, uv);
+        };
+
+        // ---------------------------------------------------------------------
+        // Build quads (sx * sy)
+        // ---------------------------------------------------------------------
+        for (int y = 0; y < sy; ++y)
+        {
+            const float v0 = static_cast<float>(y) / static_cast<float>(sy);
+            const float v1 = static_cast<float>(y + 1) / static_cast<float>(sy);
+
+            for (int x = 0; x < sx; ++x)
+            {
+                const float u0 = static_cast<float>(x) / static_cast<float>(sx);
+                const float u1 = static_cast<float>(x + 1) / static_cast<float>(sx);
+
+                const int32_t v00 = vert(x, y);
+                const int32_t v10 = vert(x + 1, y);
+                const int32_t v11 = vert(x + 1, y + 1);
+                const int32_t v01 = vert(x, y + 1);
+
+                // Candidate winding: v00 -> v10 -> v11 -> v01
+                emit(v00, v10, v11, v01, u0, u1, v0, v1);
+            }
+        }
+    }
+
 } // namespace Primitives

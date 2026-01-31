@@ -49,4 +49,21 @@ namespace Primitives
      */
     void createCylinder(SysMesh* mesh, glm::vec3 center, glm::ivec3 axis, float radius, float height, int sides, int segs, bool caps);
 
+    /**
+     * @brief Creates a segmented plane (grid of quads) with face-varying normals and UVs.
+     *
+     * - Shared POSITION verts via a (segs.x+1) x (segs.y+1) lattice.
+     * - UVs are face-varying: unique map vert per corner, spanning [0..1].
+     * - Normals are face-varying: unique map vert per corner, flat per face.
+     *
+     * Axis is the plane normal direction (major axis via ivec3: e.g. {0,1,0}).
+     *
+     * @param mesh   Target mesh
+     * @param center Plane center
+     * @param axis   Plane normal (major axis)
+     * @param size   Plane size in its local U/V directions (width/height)
+     * @param segs   Subdivision counts (>= 1 per axis)
+     */
+    void createPlane(SysMesh* mesh, glm::vec3 center, glm::ivec3 axis, glm::vec2 size, glm::ivec2 segs);
+
 } // namespace Primitives
