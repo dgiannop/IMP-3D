@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include "ScaleGizmo.hpp"
 #include "SelectionUtils.hpp"
 #include "Tool.hpp"
 
@@ -10,8 +11,10 @@ class Viewport;
 struct CoreEvent;
 
 /**
- * @class ScaleTool
- * @brief Very basic uniform scale tool (WIP). Scales selected verts about selection center.
+ * @brief Uniform scale tool (preview-based).
+ *
+ * The tool previews changes by aborting the previous preview and re-applying the
+ * current scale delta. The delta resets to 1.0 after commit.
  */
 class ScaleTool final : public Tool
 {
@@ -30,10 +33,8 @@ public:
     OverlayHandler* overlayHandler() override;
 
 private:
-    float m_scale = 1.0f; ///< Uniform scale factor (1 = no-op)
+    float     m_uniformScale = 1.0f;            ///< UI-facing scalar (1=no-op)
+    glm::vec3 m_scale        = glm::vec3{1.0f}; ///< Gizmo-facing scale factors
 
-    // Drag state
-    float     m_startScale = 1.0f;
-    glm::vec3 m_pivot{0.0f};
-    int32_t   m_startX = 0;
+    ScaleGizmo m_gizmo{&m_scale};
 };

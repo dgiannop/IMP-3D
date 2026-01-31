@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include "SelectionUtils.hpp"
+#include "StretchGizmo.hpp"
 #include "Tool.hpp"
 
 class Scene;
@@ -11,9 +12,11 @@ struct CoreEvent;
 
 /**
  * @class StretchTool
- * @brief Very basic stretch tool (no gizmo). Non-uniform scale about selection center.
+ * @brief Stretch tool with gizmo. Non-uniform scale about selection center.
  *
- * Dragging maps X delta -> scale X, Y delta -> scale Y. Z is edited via property.
+ * Gizmo outputs m_scale:
+ *  - uniform via center handle
+ *  - per-axis via X/Y/Z handles
  */
 class StretchTool final : public Tool
 {
@@ -34,9 +37,5 @@ public:
 private:
     glm::vec3 m_scale{1.0f, 1.0f, 1.0f}; ///< Per-axis scale
 
-    // Drag state
-    glm::vec3 m_startScale{1.0f, 1.0f, 1.0f};
-    glm::vec3 m_pivot{0.0f};
-    int32_t   m_startX = 0;
-    int32_t   m_startY = 0;
+    StretchGizmo m_gizmo{&m_scale};
 };

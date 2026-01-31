@@ -23,6 +23,8 @@ StretchTool::StretchTool()
     addProperty("X", PropertyType::FLOAT, &m_scale.x);
     addProperty("Y", PropertyType::FLOAT, &m_scale.y);
     addProperty("Z", PropertyType::FLOAT, &m_scale.z);
+
+    m_scale = glm::vec3{1.0f, 1.0f, 1.0f};
 }
 
 void StretchTool::activate(Scene*)
@@ -49,55 +51,57 @@ void StretchTool::propertiesChanged(Scene* scene)
         for (int32_t vi : verts)
         {
             const glm::vec3 p = mesh->vert_position(vi);
-            const glm::vec3 r = p - pivot;
-            mesh->move_vert(vi, pivot + glm::vec3{r.x * s.x, r.y * s.y, r.z * s.z});
+            mesh->move_vert(vi, pivot + (p - pivot) * s);
         }
     }
 }
 
-void StretchTool::mouseDown(Viewport*, Scene* scene, const CoreEvent& event)
+void StretchTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    if (!scene)
+    if (!vp || !scene)
         return;
 
-    m_startScale = m_scale;
-    m_pivot      = sel::selection_center_bounds(scene);
-    m_startX     = event.x;
-    m_startY     = event.y;
+    // Reset preview at interaction start.
+    m_scale = glm::vec3{1.0f, 1.0f, 1.0f};
+
+    m_gizmo.mouseDown(vp, scene, event);
+    propertiesChanged(scene);
 }
 
-void StretchTool::mouseDrag(Viewport*, Scene* scene, const CoreEvent& event)
+void StretchTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    if (!scene)
+    if (!vp || !scene)
         return;
 
-    const int32_t dx = event.x - m_startX;
-    const int32_t dy = event.y - m_startY;
+    m_gizmo.mouseDrag(vp, scene, event);
 
-    // Same exponential mapping as uniform scale, per-axis.
-    constexpr float k  = 1.0f / 100.0f;
-    const float     fx = std::pow(2.0f, float(dx) * k);
-    const float     fy = std::pow(2.0f, float(-dy) * k);
-
-    m_scale = m_startScale;
-    m_scale.x *= fx;
-    m_scale.y *= fy;
     m_scale = clampScale(m_scale);
+
+    propertiesChanged(scene);
 }
 
-void StretchTool::mouseUp(Viewport*, Scene* scene, const CoreEvent&)
+void StretchTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    if (scene)
-        scene->commitMeshChanges();
+    if (!scene)
+        return;
 
+    m_gizmo.mouseUp(vp, scene, event);
+
+    scene->commitMeshChanges();
+
+    // Reset for next interaction.
     m_scale = glm::vec3{1.0f, 1.0f, 1.0f};
 }
 
-void StretchTool::render(Viewport*, Scene*)
+void StretchTool::render(Viewport* vp, Scene* scene)
 {
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.render(vp, scene);
 }
 
 OverlayHandler* StretchTool::overlayHandler()
 {
-    return nullptr;
+    return &m_gizmo.overlayHandler();
 }
