@@ -1,21 +1,20 @@
 #include "BevelTool.hpp"
 
 #include <SysMesh.hpp>
-#include <vector>
 
-#include "BevelTool.hpp"
 #include "CoreUtilities.hpp"
 #include "HeMeshBridge.hpp"
 #include "Ops/Bevel.hpp"
 #include "Scene.hpp"
 #include "SelectionUtils.hpp"
-#include "SysMesh.hpp"
 #include "Viewport.hpp"
 
 BevelTool::BevelTool()
 {
     addProperty("Amount", PropertyType::FLOAT, &m_amount, 0.f, 10000.f, 0.05f);
     addProperty("Group edges", PropertyType::BOOL, &m_group);
+
+    m_gizmo.setFollowAmountBase(false);
 }
 
 void BevelTool::activate(Scene* /*scene*/)
@@ -44,6 +43,7 @@ void BevelTool::propertiesChanged(Scene* scene)
             auto sel = mesh->selected_verts();
             if (!sel.empty())
                 ops::sys::bevelVerts(mesh, sel, m_amount);
+
             continue;
         }
 
@@ -52,6 +52,7 @@ void BevelTool::propertiesChanged(Scene* scene)
             auto sel = mesh->selected_polys();
             if (!sel.empty())
                 ops::sys::bevelPolys(mesh, sel, m_amount, m_group);
+
             continue;
         }
 
@@ -66,16 +67,49 @@ void BevelTool::propertiesChanged(Scene* scene)
     }
 }
 
-void BevelTool::mouseDown(Viewport* /*vp*/, Scene* /*scene*/, const CoreEvent& /*event*/)
+void BevelTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
+    if (!vp || !scene)
+        return;
+
+    // Reset preview delta at interaction start.
+    m_amount = 0.0f;
+
+    m_gizmo.mouseDown(vp, scene, event);
+    propertiesChanged(scene);
 }
 
-void BevelTool::mouseDrag(Viewport* vp, Scene* /*scene*/, const CoreEvent& event)
+void BevelTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
-    m_amount += event.deltaX * vp->pixelScale();
-    m_amount += event.deltaY * vp->pixelScale();
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.mouseDrag(vp, scene, event);
+    propertiesChanged(scene);
 }
 
-void BevelTool::mouseUp(Viewport* /*vp*/, Scene* /*scene*/, const CoreEvent& /*event*/)
+void BevelTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
 {
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.mouseUp(vp, scene, event);
+
+    scene->commitMeshChanges();
+
+    // Reset for next interaction.
+    m_amount = 0.0f;
+}
+
+void BevelTool::render(Viewport* vp, Scene* scene)
+{
+    if (!vp || !scene)
+        return;
+
+    m_gizmo.render(vp, scene);
+}
+
+OverlayHandler* BevelTool::overlayHandler()
+{
+    return &m_gizmo.overlayHandler();
 }

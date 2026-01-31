@@ -1,9 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <span>
 #include <utility>
 
+#include "NormalPullGizmo.hpp"
 #include "Tool.hpp"
 
 class Scene;
@@ -58,6 +58,12 @@ public:
     /** @copydoc Tool::mouseUp */
     void mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event) override;
 
+    /** @copydoc Tool::render */
+    void render(Viewport* vp, Scene* scene) override;
+
+    /** @copydoc Tool::overlayHandler */
+    OverlayHandler* overlayHandler() override;
+
 public:
     // static void bevelEdges(SysMesh* mesh, std::span<const IndexPair> edges, float width);
 
@@ -68,4 +74,6 @@ public:
 private:
     float m_amount = 0.0f; ///< Bevel width.
     bool  m_group  = true; ///< Group behavior.
+
+    NormalPullGizmo m_gizmo{&m_amount};
 };

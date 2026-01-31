@@ -4,6 +4,7 @@
 #include "NormalPullGizmo.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <glm/gtx/norm.hpp>
 
 #include "Scene.hpp"
@@ -100,7 +101,6 @@ void NormalPullGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
 
     m_startAmount = *m_amount;
 
-    // Drag anchor stays fixed during the drag for stability.
     m_origin = sel::selection_center_bounds(scene);
     m_axis   = safeNormalize(sel::selection_normal(scene), glm::vec3{0.0f, 0.0f, 1.0f});
 
@@ -116,7 +116,6 @@ void NormalPullGizmo::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& ev)
     if (!m_dragging)
         return;
 
-    // Compute amount relative to fixed drag anchor (m_origin).
     const glm::vec3 curHit   = dragPointOnAxisPlane(vp, m_origin, m_axis, ev.x, ev.y);
     const float     curParam = glm::dot(curHit - m_origin, m_axis);
 
@@ -141,25 +140,29 @@ void NormalPullGizmo::render(Viewport* vp, Scene* scene)
 
     const float px = vp->pixelScale(m_origin);
 
-    // Pixel-tuned sizes (world units at pivot).
-    m_axisLenWorld = std::max(0.05f, px * 85.0f);  // ~85px stem
-    m_tipHalfWorld = std::max(0.0001f, px * 7.0f); // ~14px tip
+    // Base length is constant, but can be temporarily extended while dragging (bevel feel).
+    const float baseLen = std::max(0.05f, px * 85.0f);  // ~85px
+    const float tipHalf = std::max(0.0001f, px * 7.0f); // ~14px
+
+    // If we are in bevel-like mode (base fixed), grow the stem with the magnitude of amount.
+    // If we are in extrude-like mode (base follows), keep the length constant.
+    float len = baseLen;
+    if (m_dragging && !m_followAmountBase)
+        len = baseLen + std::abs(*m_amount);
+
+    m_axisLenWorld = len;
+    m_tipHalfWorld = tipHalf;
 
     m_overlayHandler.clear();
-
     m_overlayHandler.begin_overlay(kHandle);
 
-    // Visual follow: while dragging, the gizmo base moves with the preview amount
-    // so it appears attached to the extruded surface.
-    const glm::vec3 base = m_dragging ? (m_origin + m_axis * (*m_amount)) : m_origin;
+    const glm::vec3 base = (m_dragging && m_followAmountBase) ? (m_origin + m_axis * (*m_amount)) : m_origin;
 
     const glm::vec3 stemA = base;
     const glm::vec3 stemB = base + m_axis * m_axisLenWorld;
 
-    // Stem
     m_overlayHandler.add_line(stemA, stemB, 8.0f, glm::vec4{1, 1, 1, 1});
 
-    // Tip (billboard square)
     buildBillboardSquare(vp, stemB, m_tipHalfWorld, glm::vec4{1, 1, 1, 0.25f}, true);
     buildBillboardSquare(vp, stemB, m_tipHalfWorld, glm::vec4{1, 1, 1, 1}, false);
 
