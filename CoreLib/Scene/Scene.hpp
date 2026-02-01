@@ -5,14 +5,18 @@
 
 #include <SysMesh.hpp>
 #include <SysMeshScene.hpp>
+#include <cstdint>
+#include <memory>
+#include <string_view>
+#include <vector>
 #include <vulkan/vulkan_core.h>
 
 #include "CoreTypes.hpp"
 #include "GpuResources/TextureHandler.hpp"
 #include "LightHandler.hpp"
-#include "LightOverlaySystem.hpp"
 #include "LightingSettings.hpp"
 #include "MaterialHandler.hpp"
+#include "OverlayHandler.hpp"
 #include "SceneMesh.hpp"
 #include "SceneQueryCpu.hpp"
 #include "SceneQueryEmbree.hpp"
@@ -298,11 +302,12 @@ public:
      * @brief Access scene-level overlays for OBJECTS mode.
      *
      * Used to visualize selectable non-mesh objects (lights, cameras, etc).
+     * Note: These are render-ready overlays consumed by Renderer::drawOverlays().
      */
-    [[nodiscard]] LightOverlaySystem& objectOverlays() noexcept;
+    [[nodiscard]] OverlayHandler& objectOverlays() noexcept;
 
     /** @brief Access scene-level overlays for OBJECTS mode (const). */
-    [[nodiscard]] const LightOverlaySystem& objectOverlays() const noexcept;
+    [[nodiscard]] const OverlayHandler& objectOverlays() const noexcept;
 
     // ------------------------------------------------------------
     // Misc
@@ -412,5 +417,5 @@ private:
     SysCounterPtr m_contentChangeCounter;
 
     /** @brief Scene-level overlays for OBJECTS selection mode. */
-    LightOverlaySystem m_objectOverlays = {};
+    OverlayHandler m_objectOverlays = {};
 };

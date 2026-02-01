@@ -1,18 +1,21 @@
+//=============================================================================
+// Core.cpp
+//=============================================================================
 #include "Core.hpp"
 
 #include "Command.hpp"
 #include "Config.hpp"
-#include "LightingSettings.hpp"
 #include "MaterialEditor.hpp"
+#include "Renderer.hpp"
 #include "SceneLight.hpp"
-#include "SceneLightOverlays.hpp" //todo
 #include "SelectionUtils.hpp"
 #include "Tool.hpp"
 #include "Viewport.hpp"
 
-Core::Core() : m_scene{std::make_unique<Scene>()},
-               m_document{std::make_unique<CoreDocument>(m_scene.get())},
-               m_materialEditor{std::make_unique<MaterialEditor>(m_scene.get())}
+Core::Core() :
+    m_scene{std::make_unique<Scene>()},
+    m_document{std::make_unique<CoreDocument>(m_scene.get())},
+    m_materialEditor{std::make_unique<MaterialEditor>(m_scene.get())}
 {
     config::registerSceneFormats(m_document->formatFactory());
     config::registerTools(m_toolFactory);
@@ -24,114 +27,135 @@ Core::~Core()
     destroy();
 }
 
+// ------------------------------------------------------------
+// Device / swapchain lifetime
+// ------------------------------------------------------------
+
 void Core::initializeDevice(const VulkanContext& ctx)
 {
-    (void)m_scene->initDevice(ctx);
+    if (m_scene)
+        (void)m_scene->initDevice(ctx);
 }
 
 void Core::initializeSwapchain(VkRenderPass renderPass)
 {
-    (void)m_scene->initSwapchain(renderPass);
+    if (m_scene)
+        (void)m_scene->initSwapchain(renderPass);
 }
 
 void Core::destroySwapchainResources()
 {
-    m_scene->destroySwapchainResources();
+    if (m_scene)
+        m_scene->destroySwapchainResources();
 }
 
 void Core::destroy()
 {
-    if (m_scene)
-    {
-        m_scene->destroy();
-        m_scene.reset();
-    }
+    if (!m_scene)
+        return;
+
+    m_scene->destroy();
+    m_scene.reset();
 }
+
+// ------------------------------------------------------------
+// Viewports
+// ------------------------------------------------------------
 
 Viewport* Core::createViewport()
 {
     m_viewports.emplace_back(std::make_unique<Viewport>(m_pan, m_rot, m_dist));
-    m_viewports.back()->changeCounter()->addParent(m_scene->changeCounter());
+
+    // Viewport changes should trigger redraws via scene change counter.
+    if (m_scene)
+        m_viewports.back()->changeCounter()->addParent(m_scene->changeCounter());
+
     return m_viewports.back().get();
 }
 
 void Core::initializeViewport(Viewport* vp) noexcept
 {
+    if (!vp)
+        return;
+
     vp->initialize();
+
     if (m_scene)
         m_scene->setActiveViewport(vp);
 }
 
 void Core::resizeViewport(Viewport* vp, int w, int h) noexcept
 {
-    vp->resize(w, h);
+    if (vp)
+        vp->resize(w, h);
 }
 
 void Core::viewportRotate(Viewport* vp, float deltaX, float deltaY) noexcept
 {
-    vp->rotate(deltaX, deltaY);
+    if (vp)
+        vp->rotate(deltaX, deltaY);
 }
 
 void Core::viewportPan(Viewport* vp, float deltaX, float deltaY) noexcept
 {
-    vp->pan(deltaX, deltaY);
+    if (vp)
+        vp->pan(deltaX, deltaY);
 }
 
 void Core::viewportZoom(Viewport* vp, float deltaX, float deltaY) noexcept
 {
-    vp->zoom(deltaX, deltaY);
+    if (vp)
+        vp->zoom(deltaX, deltaY);
 }
 
 void Core::viewMode(Viewport* vp, ViewMode mode) noexcept
 {
-    vp->viewMode(mode);
+    if (vp)
+        vp->viewMode(mode);
 }
 
 ViewMode Core::viewMode(Viewport* vp) const noexcept
 {
-    return vp->viewMode();
+    return vp ? vp->viewMode() : ViewMode::PERSPECTIVE;
 }
 
 void Core::drawMode(Viewport* vp, DrawMode mode) noexcept
 {
-    vp->drawMode(mode);
+    if (vp)
+        vp->drawMode(mode);
 }
 
 DrawMode Core::drawMode(Viewport* vp) const noexcept
 {
-    return vp->drawMode();
+    return vp ? vp->drawMode() : DrawMode::SOLID;
 }
+
+// ------------------------------------------------------------
+// Input dispatch
+// ------------------------------------------------------------
 
 void Core::mousePressEvent(Viewport* vp, CoreEvent event) noexcept
 {
     if (m_activeTool)
-    {
         m_activeTool->mouseDown(vp, m_scene.get(), event);
-    }
 }
 
 void Core::mouseMoveEvent(Viewport* vp, CoreEvent event) noexcept
 {
     if (m_activeTool)
-    {
         m_activeTool->mouseMove(vp, m_scene.get(), event);
-    }
 }
 
 void Core::mouseDragEvent(Viewport* vp, CoreEvent event) noexcept
 {
     if (m_activeTool)
-    {
         m_activeTool->mouseDrag(vp, m_scene.get(), event);
-    }
 }
 
 void Core::mouseReleaseEvent(Viewport* vp, CoreEvent event) noexcept
 {
     if (m_activeTool)
-    {
         m_activeTool->mouseUp(vp, m_scene.get(), event);
-    }
 }
 
 void Core::mouseWheelEvent(Viewport* vp, CoreEvent event) noexcept
@@ -146,9 +170,8 @@ void Core::mouseWheelEvent(Viewport* vp, CoreEvent event) noexcept
 bool Core::keyPressEvent(Viewport* vp, CoreEvent event) noexcept
 {
     if (m_activeTool)
-    {
         return m_activeTool->keyPress(vp, m_scene.get(), event);
-    }
+
     return false;
 }
 
@@ -160,115 +183,105 @@ void Core::setActiveViewport(Viewport* vp) noexcept
 
 Viewport* Core::activeViewport() const noexcept
 {
-    return m_scene->activeViewport();
+    return m_scene ? m_scene->activeViewport() : nullptr;
 }
+
+// ------------------------------------------------------------
+// Tools & commands
+// ------------------------------------------------------------
 
 void Core::setActiveTool(const std::string& name)
 {
+    if (!m_scene)
+        return;
+
     if (m_activeTool)
-    {
         m_activeTool->deactivate(m_scene.get());
-    }
 
     m_activeTool = m_toolFactory.createItem(name);
-
     if (!m_activeTool)
-    {
         throw std::runtime_error("Core::setActiveTool(): Tool \"" + name + "\" not found.");
-    }
 
-    if (m_activeTool)
-    {
-        m_activeTool->activate(m_scene.get());
-    }
+    m_activeTool->activate(m_scene.get());
     m_scene->changeCounter()->change();
 }
 
 bool Core::runCommand(const std::string& name)
 {
+    if (!m_scene)
+        return false;
+
     if (m_activeTool)
-    {
         m_activeTool->deactivate(m_scene.get());
-    }
 
     auto command = m_commandFactory.createItem(name);
     if (!command)
-    {
         throw std::runtime_error("Core::runCommand(): Command \"" + name + "\" not found.");
-    }
 
     try
     {
-        if (command->execute(m_scene.get()))
-        {
+        const bool ok = command->execute(m_scene.get());
+        if (ok)
             m_scene->commitMeshChanges();
-            return true;
-        }
+        else
+            m_scene->abortMeshChanges();
 
-        m_scene->abortMeshChanges();
-        return false;
+        return ok;
     }
     catch (...)
     {
         m_scene->abortMeshChanges();
         throw;
     }
-
-    m_scene->abortMeshChanges();
-    return false;
 }
 
 bool Core::runAction(const std::string& name, int value)
 {
+    if (!m_scene)
+        return false;
+
     if (name == "Subdivide")
     {
         m_scene->subdivisionLevel(value);
     }
     else if (name == "Undo")
     {
-        // If a tool is mid-operation, first undo the preview (abort),
-        // NOT the previously committed scene step.
-        // if (m_scene->hasPendingMeshChanges())
-        // {
-        //     m_scene->abortMeshChanges();
-        //     return true;
-        // }
         m_scene->commitMeshChanges();
 
         if (m_scene->history().undo_step())
-        {
             setActiveTool("SelectTool");
-        }
     }
     else if (name == "Redo")
     {
-        // Redo while preview edits exist is undefined/confusing; ignore/disable.
-        // if (m_scene->hasPendingMeshChanges())
-        //     return true;
-
         if (m_scene->history().redo_step())
             return true;
     }
     else if (name == "ToggleSnapping")
     {
-        // std::cerr << "ToggleSnapping = " << value << std::endl;
+        // TODO: snapping policy toggle
     }
     else
     {
         throw std::runtime_error("Core::runAction(): Action \"" + name + "\" not found.");
     }
+
     return true;
 }
 
 void Core::selectionMode(SelectionMode mode)
 {
-    m_scene->selectionMode(mode);
+    if (m_scene)
+        m_scene->selectionMode(mode);
 }
 
 SelectionMode Core::selectionMode() const
 {
-    return m_scene->selectionMode();
+    return m_scene ? m_scene->selectionMode() : SelectionMode::VERTS;
 }
+
+// ------------------------------------------------------------
+// Scene state & rendering
+// ------------------------------------------------------------
 
 SceneStats Core::sceneStats() const noexcept
 {
@@ -281,14 +294,7 @@ void Core::idle()
         m_scene->idle();
 
     if (m_activeTool)
-    {
         m_activeTool->idle(m_scene.get());
-    }
-
-    // if (m_sceneMonitor->changed())
-    // {
-    //     m_sceneInfo->update(m_scene.get());
-    // }
 }
 
 bool Core::needsRender() noexcept
@@ -296,7 +302,6 @@ bool Core::needsRender() noexcept
     return m_scene && m_scene->needsRender();
 }
 
-// void Core::renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
 void Core::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
 {
     if (!vp || !fc.cmd || !m_scene)
@@ -307,27 +312,32 @@ void Core::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
 
 void Core::render(Viewport* vp, const RenderFrameContext& fc)
 {
-    if (!m_scene)
+    if (!vp || !m_scene)
         return;
 
     m_scene->render(vp, fc);
 
     if (m_activeTool)
-    {
         m_activeTool->render(vp, m_scene.get());
-    }
 
-    auto renderer = m_scene->renderer();
+    Renderer* renderer = m_scene->renderer();
     if (!renderer)
         return;
 
-    if (m_scene->selectionMode() == SelectionMode::OBJECTS)
-    {
-        m_objectOverlays.clear();
-        scene_overlays::appendLights(vp, m_scene.get(), m_objectOverlays);
-        renderer->drawOverlays(fc.cmd, vp, m_objectOverlays);
-    }
+    // --------------------------------------------------------
+    // Scene-owned OBJECTS overlays
+    // --------------------------------------------------------
+    // if (m_scene->selectionMode() == SelectionMode::OBJECTS)
+    // {
+    //     // Core does not build these overlays anymore; Scene owns them.
+    //     // Adapt the next line if your LightOverlaySystem API differs.
+    //     OverlayHandler& oh = m_scene->objectOverlays().overlayHandler();
+    //     renderer->drawOverlays(fc.cmd, vp, oh);
+    // }
 
+    // --------------------------------------------------------
+    // Tool overlays
+    // --------------------------------------------------------
     if (m_activeTool)
     {
         if (OverlayHandler* oh = m_activeTool->overlayHandler())
@@ -336,6 +346,10 @@ void Core::render(Viewport* vp, const RenderFrameContext& fc)
         }
     }
 }
+
+// ------------------------------------------------------------
+// File operations
+// ------------------------------------------------------------
 
 bool Core::requestNew() noexcept
 {
@@ -366,7 +380,7 @@ bool Core::openFile(const std::filesystem::path& path)
     if (!m_document)
         return false;
 
-    LoadOptions opt{};
+    LoadOptions opt       = {};
     opt.mergeIntoExisting = false;
     opt.triangulate       = false;
 
@@ -378,7 +392,7 @@ bool Core::saveFile()
     if (!m_document)
         return false;
 
-    SaveOptions opt{};
+    SaveOptions opt    = {};
     opt.selectedOnly   = false;
     opt.compressNative = false;
     opt.triangulate    = false;
@@ -391,7 +405,7 @@ bool Core::saveFileAs(const std::filesystem::path& path)
     if (!m_document)
         return false;
 
-    SaveOptions opt{};
+    SaveOptions opt    = {};
     opt.selectedOnly   = false;
     opt.compressNative = false;
     opt.triangulate    = false;
@@ -404,7 +418,7 @@ bool Core::importFile(const std::filesystem::path& path)
     if (!m_document)
         return false;
 
-    LoadOptions opt{};
+    LoadOptions opt       = {};
     opt.mergeIntoExisting = true;
     opt.triangulate       = false;
 
@@ -416,7 +430,7 @@ bool Core::exportFile(const std::filesystem::path& path)
     if (!m_document)
         return false;
 
-    SaveOptions opt{};
+    SaveOptions opt    = {};
     opt.selectedOnly   = false;
     opt.compressNative = false;
     opt.triangulate    = false;
@@ -429,9 +443,13 @@ std::string Core::filePath() const noexcept
     if (!m_document || !m_document->hasFilePath())
         return {};
 
-    // UI-friendly: return filename only, not full path
+    // UI-friendly: return filename only, not full path.
     return m_document->filePath().filename().string();
 }
+
+// ------------------------------------------------------------
+// Materials
+// ------------------------------------------------------------
 
 MaterialEditor* Core::materialEditor() noexcept
 {
@@ -464,21 +482,17 @@ void Core::assignMaterial(int32_t materialId) noexcept
 
         if (useSelection)
         {
-            // Assign only to selected polys
             const auto& selPolys = mesh->selected_polys();
             for (int32_t pi : selPolys)
             {
-                // optional: mesh->poly_valid(pi)
                 mesh->set_poly_material(pi, static_cast<uint32_t>(materialId));
             }
         }
         else
         {
-            // Assign to all polys
             const int32_t polyCount = mesh->num_polys();
             for (int32_t pi = 0; pi < polyCount; ++pi)
             {
-                // optional: if (!mesh->poly_valid(pi)) continue;
                 mesh->set_poly_material(pi, static_cast<uint32_t>(materialId));
             }
         }
@@ -487,28 +501,25 @@ void Core::assignMaterial(int32_t materialId) noexcept
     m_scene->changeCounter()->change();
 }
 
+// ------------------------------------------------------------
+// Tool properties (UI polling)
+// ------------------------------------------------------------
+
 bool Core::toolPropertyGroupChanged() noexcept
 {
-    if (m_activeTool)
-    {
-        return m_activeTool->propertyGroupChanged();
-    }
-    return false;
+    return m_activeTool ? m_activeTool->propertyGroupChanged() : false;
 }
 
 bool Core::toolPropertyValuesChanged() noexcept
 {
-    // if (m_activeTool)
-    // return m_activeTool->propertyValuesChanged(); // todo: already used in Tool.cpp
+    // TODO: implement once Tool exposes a reliable "values changed" stamp.
     return true;
 }
 
 const std::vector<std::unique_ptr<PropertyBase>>& Core::toolProperties() const noexcept
 {
     static const std::vector<std::unique_ptr<PropertyBase>> kEmpty = {};
-    if (m_activeTool)
-        return m_activeTool->properties();
-    return kEmpty;
+    return m_activeTool ? m_activeTool->properties() : kEmpty;
 }
 
 // ------------------------------------------------------------
@@ -529,12 +540,11 @@ void Core::setLightingSettings(const LightingSettings& settings) noexcept
         return;
 
     m_scene->setLightingSettings(settings);
-
     m_scene->changeCounter()->change();
 }
 
 // ------------------------------------------------------------
-// Scene lights
+// Scene lights (UI façade)
 // ------------------------------------------------------------
 
 SceneLight* Core::createLight(std::string_view name, LightType type)
@@ -547,9 +557,6 @@ SceneLight* Core::createLight(std::string_view name, LightType type)
         return nullptr;
 
     m_scene->changeCounter()->change();
-    // Mark document / scene as modified so save state updates
-    // m_scene->contentChangeCounter()->change();  TODO: Choose which one to bump
-
     return light;
 }
 
@@ -581,7 +588,7 @@ void Core::setLightTransform(LightId id, const glm::mat4& m) noexcept
     if (!m_scene)
         return;
 
-    // SceneLight owns the transform, not LightHandler
+    // SceneLight owns the transform (and writes to LightHandler as needed).
     for (SceneLight* sl : m_scene->sceneLights())
     {
         if (!sl)
@@ -591,11 +598,14 @@ void Core::setLightTransform(LightId id, const glm::mat4& m) noexcept
         {
             sl->model(m);
             m_scene->changeCounter()->change();
-            // m_scene->contentChangeCounter()->change(); TODO: Choose which one to bump
             break;
         }
     }
 }
+
+// ------------------------------------------------------------
+// Scene grid
+// ------------------------------------------------------------
 
 void Core::showSceneGrid(bool show) noexcept
 {

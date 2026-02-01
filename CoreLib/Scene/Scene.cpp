@@ -8,6 +8,7 @@
 #include "LightHandler.hpp"
 #include "Renderer.hpp"
 #include "SceneLight.hpp"
+#include "SceneLightOverlays.hpp"
 #include "SceneObject.hpp"
 #include "Viewport.hpp"
 
@@ -108,6 +109,9 @@ SceneMesh* Scene::createSceneMesh(std::string_view name)
 
 SceneLight* Scene::createSceneLight(std::string_view name, LightType type)
 {
+    if (!m_lightHandler)
+        return nullptr;
+
     const LightId id = m_lightHandler->createLight(name, type);
 
     auto sl = std::make_unique<SceneLight>(m_lightHandler.get(), id, name);
@@ -387,12 +391,12 @@ void Scene::setSelectedObject(SceneObject* obj) noexcept
     m_sceneChangeCounter->change();
 }
 
-LightOverlaySystem& Scene::objectOverlays() noexcept
+OverlayHandler& Scene::objectOverlays() noexcept
 {
     return m_objectOverlays;
 }
 
-const LightOverlaySystem& Scene::objectOverlays() const noexcept
+const OverlayHandler& Scene::objectOverlays() const noexcept
 {
     return m_objectOverlays;
 }
@@ -477,10 +481,26 @@ void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
 
 void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
+    if (!vp)
+        return;
+
     vp->apply();
 
     if (m_renderer)
         m_renderer->render(vp, this, fc);
+
+    // ------------------------------------------------------------
+    // OBJECTS mode overlays (lights/cameras/etc)
+    // ------------------------------------------------------------
+    if (m_selectionMode == SelectionMode::OBJECTS)
+    {
+        if (!m_renderer || !fc.cmd)
+            return;
+
+        m_objectOverlays.clear();
+        scene_overlays::appendLights(vp, this, m_objectOverlays);
+        m_renderer->drawOverlays(fc.cmd, vp, m_objectOverlays);
+    }
 }
 
 SysCounterPtr Scene::changeCounter() const noexcept

@@ -1,3 +1,6 @@
+//=============================================================================
+// Core.hpp
+//=============================================================================
 #pragma once
 
 #include <filesystem>
@@ -9,33 +12,24 @@
 #include "CoreTypes.hpp"
 #include "ItemFactory.hpp"
 #include "LightingSettings.hpp"
-#include "Renderer.hpp"
 #include "Scene.hpp"
 #include "SceneFormat.hpp"
 #include "VulkanContext.hpp"
 
-class Scene;
 class Viewport;
 class Tool;
 class Command;
 class MaterialEditor;
 class PropertyBase;
+class SceneLight;
 
 /**
  * @brief Central application controller.
  *
  * Core is the main coordination layer between the UI, scene data,
- * rendering backend, tools, commands, and file I/O.
+ * tools/commands, file I/O, and viewport input dispatch.
  *
- * Responsibilities:
- * - Owns the active Scene and CoreDocument
- * - Manages Viewports and dispatches input events
- * - Manages active tools, commands, and actions
- * - Owns and drives the Renderer
- * - Handles file operations (new, open, save, import/export)
- *
- * Core itself is UI-agnostic; UI layers call into Core in response
- * to user interaction.
+ * Core is UI-agnostic; UI layers call into Core in response to user interaction.
  */
 class Core
 {
@@ -45,6 +39,10 @@ public:
 
     /** @brief Destroys Core and all owned subsystems. */
     ~Core();
+
+    // ------------------------------------------------------------
+    // Device / swapchain lifetime
+    // ------------------------------------------------------------
 
     /**
      * @brief Initialize device-level Vulkan resources.
@@ -64,6 +62,10 @@ public:
     /** @brief Fully destroy all GPU and CPU resources. */
     void destroy();
 
+    // ------------------------------------------------------------
+    // Viewports
+    // ------------------------------------------------------------
+
     /**
      * @brief Create a new viewport instance.
      * @return Pointer to the newly created viewport
@@ -74,7 +76,7 @@ public:
      * @brief Initialize a viewport after creation.
      * @param vp Viewport to initialize
      */
-    void initializeViewport(Viewport*) noexcept;
+    void initializeViewport(Viewport* vp) noexcept;
 
     /**
      * @brief Resize a viewport.
@@ -82,16 +84,16 @@ public:
      * @param width New width in pixels
      * @param height New height in pixels
      */
-    void resizeViewport(Viewport*, int, int) noexcept;
+    void resizeViewport(Viewport* vp, int width, int height) noexcept;
 
     /** @brief Rotate the viewport camera. */
     void viewportRotate(Viewport* vp, float deltaX, float deltaY) noexcept;
 
     /** @brief Pan the viewport camera. */
-    void viewportPan(Viewport*, float, float) noexcept;
+    void viewportPan(Viewport* vp, float deltaX, float deltaY) noexcept;
 
     /** @brief Zoom the viewport camera. */
-    void viewportZoom(Viewport*, float, float) noexcept;
+    void viewportZoom(Viewport* vp, float deltaX, float deltaY) noexcept;
 
     /** @brief Set the view mode of a viewport. */
     void viewMode(Viewport* vp, ViewMode mode) noexcept;
@@ -105,17 +107,21 @@ public:
     /** @brief Get the current draw mode of a viewport. */
     DrawMode drawMode(Viewport* vp) const noexcept;
 
+    // ------------------------------------------------------------
+    // Input dispatch
+    // ------------------------------------------------------------
+
     /** @brief Handle mouse press event. */
     void mousePressEvent(Viewport* vp, CoreEvent event) noexcept;
 
     /** @brief Handle mouse move event. */
-    void mouseMoveEvent(Viewport*, CoreEvent event) noexcept;
+    void mouseMoveEvent(Viewport* vp, CoreEvent event) noexcept;
 
     /** @brief Handle mouse drag event. */
-    void mouseDragEvent(Viewport*, CoreEvent event) noexcept;
+    void mouseDragEvent(Viewport* vp, CoreEvent event) noexcept;
 
     /** @brief Handle mouse release event. */
-    void mouseReleaseEvent(Viewport*, CoreEvent event) noexcept;
+    void mouseReleaseEvent(Viewport* vp, CoreEvent event) noexcept;
 
     /** @brief Handle mouse wheel event. */
     void mouseWheelEvent(Viewport* vp, CoreEvent event) noexcept;
@@ -131,6 +137,11 @@ public:
 
     /** @brief Get the active viewport (last clicked). */
     Viewport* activeViewport() const noexcept;
+
+    // ------------------------------------------------------------
+    // Tools & commands
+    // ------------------------------------------------------------
+
     /**
      * @brief Activate a tool by name.
      * @throws std::runtime_error if tool is not registered
@@ -157,13 +168,17 @@ public:
     /** @brief Get the active selection mode. */
     SelectionMode selectionMode() const;
 
+    // ------------------------------------------------------------
+    // Scene state & rendering
+    // ------------------------------------------------------------
+
     /**
      * @brief Retrieve scene statistics.
      * @return SceneStats structure
      */
     SceneStats sceneStats() const noexcept;
 
-    /** @brief Perform idle-time updates (tools, UI sync, etc). */
+    /** @brief Perform idle-time updates (tools, scene). */
     void idle();
 
     /**
@@ -176,22 +191,12 @@ public:
      * @brief Perform pre-render pass work (e.g. ray tracing, compute).
      *
      * Called before beginning the render pass.
-     *
-     * @param vp Viewport being rendered
-     * @param cmd Command buffer for the current frame
-     * @param frameIndex Frame-in-flight index
      */
-    // void renderPrePass(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex);
     void renderPrePass(Viewport* vp, const RenderFrameContext& fc);
 
     /**
      * @brief Render the scene for a viewport.
-     *
-     * @param vp Viewport to render
-     * @param cmd Command buffer (optional)
-     * @param frameIndex Frame-in-flight index
      */
-    // void render(Viewport* vp, VkCommandBuffer cmd = nullptr, uint32_t frameIndex = 0);
     void render(Viewport* vp, const RenderFrameContext& fc);
 
     // ------------------------------------------------------------
@@ -227,6 +232,10 @@ public:
      */
     std::string filePath() const noexcept;
 
+    // ------------------------------------------------------------
+    // Materials
+    // ------------------------------------------------------------
+
     /** @brief Access the material editor facade. */
     [[nodiscard]] MaterialEditor* materialEditor() noexcept;
 
@@ -239,6 +248,10 @@ public:
      */
     void assignMaterial(int32_t materialId) noexcept;
 
+    // ------------------------------------------------------------
+    // Tool properties (UI polling)
+    // ------------------------------------------------------------
+
     /** @brief Check if tool property structure has changed. */
     bool toolPropertyGroupChanged() noexcept;
 
@@ -249,74 +262,37 @@ public:
     const std::vector<std::unique_ptr<PropertyBase>>& toolProperties() const noexcept;
 
     // ------------------------------------------------------------
-    // Lighting settings
+    // Lighting settings (UI façade)
     // ------------------------------------------------------------
 
-    /**
-     * @brief Retrieve current lighting settings for the active scene.
-     *
-     * Intended for editor UI (lighting panel) to populate controls.
-     * Returns a copy so the UI can edit and re-submit safely.
-     */
+    /** @brief Retrieve current lighting settings from the active scene. */
     [[nodiscard]] LightingSettings lightingSettings() const noexcept;
 
-    /**
-     * @brief Apply lighting settings to the active scene.
-     *
-     * Updates the scene's lighting policy (headlight/scene lights/exposure/etc)
-     * and marks rendering as needed.
-     *
-     * @param settings New lighting settings
-     */
+    /** @brief Apply lighting settings to the active scene. */
     void setLightingSettings(const LightingSettings& settings) noexcept;
 
     // ------------------------------------------------------------
-    // Scene lights
+    // Scene lights (UI façade)
     // ------------------------------------------------------------
 
     /**
      * @brief Create a new light in the active scene.
-     *
-     * This is the primary entry point for UI and tools to add lights.
-     * The light is created via the Scene and LightHandler, and wrapped
-     * in a SceneLight object owned by the Scene.
-     *
      * @param name Display name for the light
-     * @param type Light type (e.g. Directional, Point, Spot)
+     * @param type Light type (Directional / Point / Spot)
      * @return Pointer to the created SceneLight, or nullptr on failure
      */
     [[nodiscard]] SceneLight* createLight(std::string_view name, LightType type);
 
     /**
      * @brief Retrieve all lights in the active scene.
-     *
-     * Intended for editor UI, inspectors, and renderer iteration.
-     * The returned pointers remain owned by the Scene.
-     *
-     * @return Vector of SceneLight pointers
+     * @return Vector of SceneLight pointers (Scene-owned)
      */
     [[nodiscard]] std::vector<SceneLight*> sceneLights() const;
 
-    /**
-     * @brief Enable or disable a light.
-     *
-     * This updates the underlying Light data and triggers the appropriate
-     * scene and renderer change counters.
-     *
-     * @param id Light identifier
-     * @param enabled New enabled state
-     */
+    /** @brief Enable or disable a light by id. */
     void setLightEnabled(LightId id, bool enabled) noexcept;
 
-    /**
-     * @brief Set the object-to-world transform of a light.
-     *
-     * This affects the light’s position and/or direction depending
-     * on its type, and marks the scene as modified.
-     *
-     * @param id Light identifier
-     * @param m Object-to-world transform matrix
-     */
+    /** @brief Set the object-to-world transform of a light by id. */
     void setLightTransform(LightId id, const glm::mat4& m) noexcept;
 
     // ------------------------------------------------------------
@@ -332,9 +308,7 @@ public:
     /**
      * @brief Retrieve a monotonically increasing scene change stamp.
      *
-     * This value changes whenever the scene topology, lights, materials,
-     * or selection state changes. Intended for UI polling.
-     * Todo: maybe name it to coreChangeStamp and use the contentChangeCounter
+     * Intended for UI polling.
      */
     [[nodiscard]] uint64_t sceneChangeStamp() const noexcept;
 
@@ -372,7 +346,4 @@ private:
 
     /** @brief Command factory. */
     ItemFactory<Command> m_commandFactory;
-
-    // todo: maybe not in here?
-    OverlayHandler m_objectOverlays = {};
 };
