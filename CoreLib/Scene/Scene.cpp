@@ -391,14 +391,28 @@ void Scene::setSelectedObject(SceneObject* obj) noexcept
     m_sceneChangeCounter->change();
 }
 
-OverlayHandler& Scene::objectOverlays() noexcept
+// ------------------------------------------------------------
+// Object overlays
+// ------------------------------------------------------------
+
+ObjectOverlaySystem& Scene::objectOverlays() noexcept
 {
     return m_objectOverlays;
 }
 
-const OverlayHandler& Scene::objectOverlays() const noexcept
+const ObjectOverlaySystem& Scene::objectOverlays() const noexcept
 {
     return m_objectOverlays;
+}
+
+OverlayHandler& Scene::objectOverlayHandler() noexcept
+{
+    return m_objectOverlays.handler();
+}
+
+const OverlayHandler& Scene::objectOverlayHandler() const noexcept
+{
+    return m_objectOverlays.handler();
 }
 
 void Scene::subdivisionLevel(int levelDelta) noexcept

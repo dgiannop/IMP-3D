@@ -325,17 +325,6 @@ void Core::render(Viewport* vp, const RenderFrameContext& fc)
         return;
 
     // --------------------------------------------------------
-    // Scene-owned OBJECTS overlays
-    // --------------------------------------------------------
-    // if (m_scene->selectionMode() == SelectionMode::OBJECTS)
-    // {
-    //     // Core does not build these overlays anymore; Scene owns them.
-    //     // Adapt the next line if your LightOverlaySystem API differs.
-    //     OverlayHandler& oh = m_scene->objectOverlays().overlayHandler();
-    //     renderer->drawOverlays(fc.cmd, vp, oh);
-    // }
-
-    // --------------------------------------------------------
     // Tool overlays
     // --------------------------------------------------------
     if (m_activeTool)

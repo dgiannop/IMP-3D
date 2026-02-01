@@ -5,10 +5,6 @@
 
 #include <SysMesh.hpp>
 #include <SysMeshScene.hpp>
-#include <cstdint>
-#include <memory>
-#include <string_view>
-#include <vector>
 #include <vulkan/vulkan_core.h>
 
 #include "CoreTypes.hpp"
@@ -16,7 +12,7 @@
 #include "LightHandler.hpp"
 #include "LightingSettings.hpp"
 #include "MaterialHandler.hpp"
-#include "OverlayHandler.hpp"
+#include "ObjectOverlaySystem.hpp"
 #include "SceneMesh.hpp"
 #include "SceneQueryCpu.hpp"
 #include "SceneQueryEmbree.hpp"
@@ -299,15 +295,21 @@ public:
     // ------------------------------------------------------------
 
     /**
-     * @brief Access scene-level overlays for OBJECTS mode.
+     * @brief Access the object overlay system.
      *
-     * Used to visualize selectable non-mesh objects (lights, cameras, etc).
-     * Note: These are render-ready overlays consumed by Renderer::drawOverlays().
+     * This system builds and owns the OverlayHandler used to visualize
+     * selectable non-mesh objects (lights/cameras/etc).
      */
-    [[nodiscard]] OverlayHandler& objectOverlays() noexcept;
+    [[nodiscard]] ObjectOverlaySystem& objectOverlays() noexcept;
 
-    /** @brief Access scene-level overlays for OBJECTS mode (const). */
-    [[nodiscard]] const OverlayHandler& objectOverlays() const noexcept;
+    /** @brief Access the object overlay system (const). */
+    [[nodiscard]] const ObjectOverlaySystem& objectOverlays() const noexcept;
+
+    /** @brief Convenience: access the overlay handler used for rendering. */
+    [[nodiscard]] OverlayHandler& objectOverlayHandler() noexcept;
+
+    /** @brief Convenience: access the overlay handler used for rendering (const). */
+    [[nodiscard]] const OverlayHandler& objectOverlayHandler() const noexcept;
 
     // ------------------------------------------------------------
     // Misc
@@ -417,5 +419,5 @@ private:
     SysCounterPtr m_contentChangeCounter;
 
     /** @brief Scene-level overlays for OBJECTS selection mode. */
-    OverlayHandler m_objectOverlays = {};
+    ObjectOverlaySystem m_objectOverlays = {};
 };
