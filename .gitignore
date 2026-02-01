@@ -61,6 +61,25 @@ CMakeLists.txt.user*
 *.vcxproj
 *vcxproj.*
 
+# Visual Studio generated files
+*.ib_pdb_index
+*.idb
+*.ilk
+*.pdb
+*.sln
+*.suo
+*.vcproj
+*vcproj.*.*.user
+*.ncb
+*.sdf
+*.opensdf
+*.vcxproj
+*vcxproj.*
+
+# Visual Studio (CMake / Open Folder)
+.vs/
+CMakeSettings.json
+
 # MinGW generated files
 *.Debug
 *.Release
@@ -80,3 +99,4 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+/out/

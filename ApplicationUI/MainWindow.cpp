@@ -174,10 +174,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         ui->actionSelectPoints->setShortcut(Qt::Key_1);
         ui->actionSelectEdges->setShortcut(Qt::Key_2);
         ui->actionSelectPolys->setShortcut(Qt::Key_3);
-        ui->btnSelMaterial->setShortcut(Qt::Key_4);
+        ui->btnSelObjects->setShortcut(Qt::Key_4);
 
+#ifdef NDEBUG
         // Hide for now the Material selection
-        ui->btnSelMaterial->setVisible(false);
+        ui->btnSelObjects->setVisible(false);
+        ui->btnCulling->setVisible(false);
+#endif
     }
 
     m_uiTimer = new QTimer(this);

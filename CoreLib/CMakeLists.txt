@@ -207,37 +207,43 @@ add_library(CoreLib STATIC
 target_compile_features(CoreLib PUBLIC cxx_std_23)
 
 # Include directories
+# Include directories
 target_include_directories(CoreLib PUBLIC
     ${glm_SOURCE_DIR}
     ${glad_SOURCE_DIR}/include
     ${stb_SOURCE_DIR}
     ${ktx_SOURCE_DIR}/include
-    ${ktx_BINARY_DIR}/include  # sometimes needed for generated headers
+    ${ktx_BINARY_DIR}/include
     ${tinygltf_SOURCE_DIR}
     ${opensubdiv_SOURCE_DIR}
     ${EMBREE_INCLUDE_DIR}
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR} # todo, keep only this one. Remove those subdirs bellow and add them into the include paths ex: #include "Scene/Query/...hpp"
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Core/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene/Query>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene/Materials>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene/SceneOps>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Scene/Objects>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/Helpers>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/GpuResources>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/Subdivision>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Render/Settings>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Utilities>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/CoreModules/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Modifiers>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Modifiers/Tools>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Modifiers/Commands>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Modifiers/Ops>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Overlays>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Overlays/ToolSizers>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/SceneIO>
+
+    # CoreLib root (prefer this; then gradually remove subfolders by fixing includes)
+    ${CMAKE_CURRENT_SOURCE_DIR}
+
+    # Legacy subfolders (optional; remove over time)
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/Scene
+    ${CMAKE_CURRENT_SOURCE_DIR}/Scene/Query
+    ${CMAKE_CURRENT_SOURCE_DIR}/Scene/Materials
+    ${CMAKE_CURRENT_SOURCE_DIR}/Scene/SceneOps
+    ${CMAKE_CURRENT_SOURCE_DIR}/Scene/Objects
+    ${CMAKE_CURRENT_SOURCE_DIR}/Render
+    ${CMAKE_CURRENT_SOURCE_DIR}/Render/Helpers
+    ${CMAKE_CURRENT_SOURCE_DIR}/Render/GpuResources
+    ${CMAKE_CURRENT_SOURCE_DIR}/Render/Subdivision
+    ${CMAKE_CURRENT_SOURCE_DIR}/Render/Settings
+    ${CMAKE_CURRENT_SOURCE_DIR}/Utilities
+    ${CMAKE_CURRENT_SOURCE_DIR}/CoreModules/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/Modifiers
+    ${CMAKE_CURRENT_SOURCE_DIR}/Modifiers/Tools
+    ${CMAKE_CURRENT_SOURCE_DIR}/Modifiers/Commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/Modifiers/Ops
+    ${CMAKE_CURRENT_SOURCE_DIR}/Overlays
+    ${CMAKE_CURRENT_SOURCE_DIR}/Overlays/ToolSizers
+    ${CMAKE_CURRENT_SOURCE_DIR}/SceneIO
 )
+
 
 # Define shader path macro for runtime loading
 target_compile_definitions(CoreLib PUBLIC

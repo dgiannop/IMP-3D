@@ -266,7 +266,7 @@ margin: 0px;</string>
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="btnSelMaterial">
+         <widget class="QPushButton" name="btnSelObjects">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -290,7 +290,7 @@ margin: 0px;</string>
 </string>
           </property>
           <property name="text">
-           <string>Material</string>
+           <string>Objects</string>
           </property>
           <property name="checkable">
            <bool>true</bool>
@@ -1484,7 +1484,7 @@ QPushButton:checked {
  </resources>
  <connections/>
  <buttongroups>
-  <buttongroup name="selectionButtonGroup"/>
   <buttongroup name="topMenuButtonGroup"/>
+  <buttongroup name="selectionButtonGroup"/>
  </buttongroups>
 </ui>
