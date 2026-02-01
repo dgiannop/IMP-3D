@@ -53,6 +53,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         static_cast<MenuStackedWidget*>(ui->stackedWidget)->externalToolClicked();
         m_core->setActiveTool("SelectTool");
     });
+#ifndef NDEBUG
+    connect(ui->btnSelObjects, &QPushButton::clicked, this, [=, this](bool checked) {
+        m_core->selectionMode(SelectionMode::OBJECTS);
+        static_cast<MenuStackedWidget*>(ui->stackedWidget)->externalToolClicked();
+        m_core->setActiveTool("SelectTool");
+    });
+#endif
 
     // ------------------------------------------------------------
     // Handler for window actions (MainMenu etc)
@@ -663,6 +670,7 @@ void MainWindow::handleAction()
             m_core->setActiveTool("SelectTool");
             ui->btnSelPolys->setChecked(true);
         }
+
         else if (name == "actionSelectLoop")
         {
             m_core->runCommand("EdgeLoop");

@@ -15,6 +15,7 @@ enum class SelectionMode
     VERTS,
     EDGES,
     POLYS,
+    OBJECTS
 };
 
 enum class ViewMode
