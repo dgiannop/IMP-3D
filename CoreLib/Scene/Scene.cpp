@@ -405,16 +405,6 @@ const ObjectOverlaySystem& Scene::objectOverlays() const noexcept
     return m_objectOverlays;
 }
 
-OverlayHandler& Scene::objectOverlayHandler() noexcept
-{
-    return m_objectOverlays.handler();
-}
-
-const OverlayHandler& Scene::objectOverlayHandler() const noexcept
-{
-    return m_objectOverlays.handler();
-}
-
 void Scene::subdivisionLevel(int levelDelta) noexcept
 {
     for (SceneMesh* mesh : sceneMeshes())
@@ -512,8 +502,12 @@ void Scene::render(Viewport* vp, const RenderFrameContext& fc)
             return;
 
         m_objectOverlays.clear();
+
+        // overlay builders write into ObjectOverlaySystem:
         scene_overlays::appendLights(vp, this, m_objectOverlays);
-        m_renderer->drawOverlays(fc.cmd, vp, m_objectOverlays);
+
+        // renderer draws OverlayHandler only:
+        m_renderer->drawOverlays(fc.cmd, vp, m_objectOverlays.overlays());
     }
 }
 

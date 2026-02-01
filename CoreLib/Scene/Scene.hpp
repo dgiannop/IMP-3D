@@ -305,12 +305,6 @@ public:
     /** @brief Access the object overlay system (const). */
     [[nodiscard]] const ObjectOverlaySystem& objectOverlays() const noexcept;
 
-    /** @brief Convenience: access the overlay handler used for rendering. */
-    [[nodiscard]] OverlayHandler& objectOverlayHandler() noexcept;
-
-    /** @brief Convenience: access the overlay handler used for rendering (const). */
-    [[nodiscard]] const OverlayHandler& objectOverlayHandler() const noexcept;
-
     // ------------------------------------------------------------
     // Misc
     // ------------------------------------------------------------

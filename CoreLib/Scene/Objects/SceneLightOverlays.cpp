@@ -9,22 +9,16 @@
 #include <glm/glm.hpp>
 #include <vector>
 
-#include "Light.hpp"
 #include "LightHandler.hpp"
+#include "ObjectOverlaySystem.hpp"
 #include "OverlayHandler.hpp"
 #include "Scene.hpp"
 #include "Viewport.hpp"
 
 namespace
 {
-    constexpr float kPi = 3.14159265358979323846f;
-
+    constexpr float   kPi               = 3.14159265358979323846f;
     constexpr int32_t kOverlayLightBase = 100000;
-
-    [[nodiscard]] inline int32_t overlayIdFromLightId(LightId id) noexcept
-    {
-        return kOverlayLightBase + static_cast<int32_t>(id);
-    }
 
     [[nodiscard]] inline glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
     {
@@ -137,14 +131,33 @@ namespace
 
 namespace scene_overlays
 {
-    void appendLights(Viewport* vp, Scene* scene, OverlayHandler& outOverlays)
+    int32_t overlayIdFromLightId(LightId id) noexcept
+    {
+        return kOverlayLightBase + static_cast<int32_t>(id);
+    }
+
+    bool overlayIdIsLight(int32_t overlayId) noexcept
+    {
+        return overlayId >= kOverlayLightBase;
+    }
+
+    LightId lightIdFromOverlayId(int32_t overlayId) noexcept
+    {
+        return static_cast<LightId>(overlayId - kOverlayLightBase);
+    }
+
+    void appendLights(Viewport* vp, Scene* scene, ObjectOverlaySystem& out)
     {
         if (!vp || !scene)
             return;
 
-        const LightHandler* lh  = scene->lightHandler();
-        const auto          ids = lh->allLights();
+        LightHandler* lh = scene->lightHandler();
+        if (!lh)
+            return;
 
+        OverlayHandler& outOverlays = out.overlays();
+
+        const auto ids = lh->allLights();
         for (LightId id : ids)
         {
             const Light* L = lh->light(id);

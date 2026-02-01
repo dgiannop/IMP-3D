@@ -6,14 +6,14 @@
 #include "OverlayHandler.hpp"
 
 /**
- * @brief Scene-owned overlay container for non-mesh scene objects.
+ * @class ObjectOverlaySystem
+ * @brief Scene-owned overlay container for OBJECTS selection mode.
  *
- * This is the generic scene overlay system used for OBJECTS mode selection
- * visualization (lights today, cameras/empties later).
+ * Owns an OverlayHandler where systems append overlay primitives for
+ * non-mesh scene objects (lights, cameras, etc).
  *
- * It intentionally wraps OverlayHandler rather than inheriting from it:
- *  - keeps responsibilities clear (this is "scene object overlays")
- *  - allows future per-object metadata/caching without touching OverlayHandler
+ * Mapping from overlay-id -> object-id is handled by the overlay builders
+ * (e.g. SceneLightOverlays) by choosing stable overlay ids.
  */
 class ObjectOverlaySystem final
 {
@@ -21,54 +21,26 @@ public:
     ObjectOverlaySystem()  = default;
     ~ObjectOverlaySystem() = default;
 
-    ObjectOverlaySystem(const ObjectOverlaySystem&)            = default;
-    ObjectOverlaySystem& operator=(const ObjectOverlaySystem&) = default;
+    ObjectOverlaySystem(const ObjectOverlaySystem&)            = delete;
+    ObjectOverlaySystem& operator=(const ObjectOverlaySystem&) = delete;
 
     ObjectOverlaySystem(ObjectOverlaySystem&&) noexcept            = default;
     ObjectOverlaySystem& operator=(ObjectOverlaySystem&&) noexcept = default;
 
-    /** @brief Clears all accumulated overlays. */
+    /** @brief Clear all overlay primitives. */
     void clear() noexcept
     {
         m_overlays.clear();
     }
 
-    [[nodiscard]] OverlayHandler& handler() noexcept
-    {
-        return m_overlays;
-    }
-
-    [[nodiscard]] const OverlayHandler& handler() const noexcept
-    {
-        return m_overlays;
-    }
-
-    /** @brief Direct access to the underlying overlay handler (mutable). */
+    /** @brief Access underlying overlay storage. */
     [[nodiscard]] OverlayHandler& overlays() noexcept
     {
         return m_overlays;
     }
 
-    /** @brief Direct access to the underlying overlay handler (const). */
+    /** @brief Access underlying overlay storage (const). */
     [[nodiscard]] const OverlayHandler& overlays() const noexcept
-    {
-        return m_overlays;
-    }
-
-    // ------------------------------------------------------------
-    // Convenience conversions
-    // ------------------------------------------------------------
-    //
-    // These make it painless to pass ObjectOverlaySystem anywhere a
-    // const OverlayHandler& is expected (e.g., Renderer::drawOverlays).
-    //
-
-    [[nodiscard]] operator OverlayHandler&() noexcept
-    {
-        return m_overlays;
-    }
-
-    [[nodiscard]] operator const OverlayHandler&() const noexcept
     {
         return m_overlays;
     }
