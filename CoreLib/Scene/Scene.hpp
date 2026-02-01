@@ -1,3 +1,6 @@
+//=============================================================================
+// Scene.hpp
+//=============================================================================
 #pragma once
 
 #include <SysMesh.hpp>
@@ -7,6 +10,7 @@
 #include "CoreTypes.hpp"
 #include "GpuResources/TextureHandler.hpp"
 #include "LightHandler.hpp"
+#include "LightOverlaySystem.hpp"
 #include "LightingSettings.hpp"
 #include "MaterialHandler.hpp"
 #include "SceneMesh.hpp"
@@ -19,6 +23,7 @@ class Viewport;
 class Renderer;
 class SceneObject;
 class SceneLight;
+
 /**
  * @brief Scene-level container and coordinator.
  *
@@ -99,7 +104,7 @@ public:
      * @brief Retrieve all SceneLights (const).
      * @return Vector of SceneLight pointers
      */
-    std::vector<SceneLight*> sceneLights() const;
+    [[nodiscard]] std::vector<SceneLight*> sceneLights() const;
 
     /**
      * @brief Access scene objects.
@@ -112,6 +117,10 @@ public:
      * @return Vector of SceneObject ownership pointers
      */
     [[nodiscard]] const std::vector<std::unique_ptr<SceneObject>>& sceneObjects() const;
+
+    // ------------------------------------------------------------
+    // SysMeshScene interface
+    // ------------------------------------------------------------
 
     /**
      * @brief All meshes in the scene.
@@ -137,14 +146,37 @@ public:
      */
     [[nodiscard]] std::vector<SysMesh*> activeMeshes() const override;
 
+    // ------------------------------------------------------------
+    // Selection
+    // ------------------------------------------------------------
+
     /** @brief Set current selection mode. */
     void selectionMode(SelectionMode mode) noexcept;
 
     /** @brief Get current selection mode. */
     [[nodiscard]] SelectionMode selectionMode() const noexcept;
 
-    /** @brief Clear all selection. */
+    /**
+     * @brief Clear all selection across the scene.
+     *
+     * Clears mesh element selection (verts/edges/polys) as well as object
+     * selection (OBJECTS mode). This is intended to represent a full-scene
+     * "clear selection" action.
+     */
     void clearSelection() noexcept;
+
+    /**
+     * @brief Clear mesh element selection only (verts/edges/polys).
+     *
+     * This does not affect SceneObject selection. It is useful for cases
+     * where the caller wants to preserve OBJECTS selection while resetting
+     * mesh element selection.
+     */
+    void clearMeshSelection() noexcept;
+
+    // ------------------------------------------------------------
+    // Queries / handlers
+    // ------------------------------------------------------------
 
     /**
      * @brief Access active scene query system.
@@ -179,6 +211,10 @@ public:
     /** @brief Access renderer (const). */
     [[nodiscard]] const Renderer* renderer() const noexcept;
 
+    // ------------------------------------------------------------
+    // Viewport / snapping
+    // ------------------------------------------------------------
+
     /** @brief Set the active viewport. */
     void setActiveViewport(Viewport* vp) noexcept;
 
@@ -190,6 +226,10 @@ public:
 
     /** @brief Access snapping system (const). */
     [[nodiscard]] const SceneSnap& snap() const;
+
+    // ------------------------------------------------------------
+    // Render flags / settings
+    // ------------------------------------------------------------
 
     /** @brief Enable or disable the scene grid. */
     void showSceneGrid(bool show) noexcept;
@@ -214,6 +254,59 @@ public:
      * @param settings New lighting settings
      */
     void setLightingSettings(const LightingSettings& settings) noexcept;
+
+    // ------------------------------------------------------------
+    // Object selection (OBJECTS mode)
+    // ------------------------------------------------------------
+
+    /**
+     * @brief Retrieve the first selected SceneObject, if any.
+     *
+     * In OBJECTS selection mode, selection is stored on SceneObject instances
+     * via SceneObject::selected(). This helper is intended for tools and gizmos
+     * that operate on a single active object.
+     *
+     * @return Pointer to a selected object, or nullptr if none selected.
+     */
+    [[nodiscard]] SceneObject* selectedObject() noexcept;
+
+    /** @brief Retrieve the first selected SceneObject (const), if any. */
+    [[nodiscard]] const SceneObject* selectedObject() const noexcept;
+
+    /**
+     * @brief Clear object selection.
+     *
+     * Clears SceneObject::selected() for all objects.
+     */
+    void clearObjectSelection() noexcept;
+
+    /**
+     * @brief Set a single selected object.
+     *
+     * Clears current object selection first, then selects the given object.
+     * Passing nullptr clears selection.
+     *
+     * @param obj Object to select, or nullptr to clear selection.
+     */
+    void setSelectedObject(SceneObject* obj) noexcept;
+
+    // ------------------------------------------------------------
+    // Object overlays
+    // ------------------------------------------------------------
+
+    /**
+     * @brief Access scene-level overlays for OBJECTS mode.
+     *
+     * Used to visualize selectable non-mesh objects (lights, cameras, etc).
+     */
+    [[nodiscard]] LightOverlaySystem& objectOverlays() noexcept;
+
+    /** @brief Access scene-level overlays for OBJECTS mode (const). */
+    [[nodiscard]] const LightOverlaySystem& objectOverlays() const noexcept;
+
+    // ------------------------------------------------------------
+    // Misc
+    // ------------------------------------------------------------
 
     /**
      * @brief Adjust subdivision level.
@@ -245,8 +338,7 @@ public:
      * Called before beginning the render pass.
      *
      * @param vp Active viewport
-     * @param cmd Command buffer
-     * @param frameIndex Frame-in-flight index
+     * @param fc Frame context
      */
     void renderPrePass(Viewport* vp, const RenderFrameContext& fc);
 
@@ -254,8 +346,7 @@ public:
      * @brief Render the scene.
      *
      * @param vp Viewport to render
-     * @param fc Command buffer
-     * @param frameIndex Frame-in-flight index
+     * @param fc Frame context
      */
     void render(Viewport* vp, const RenderFrameContext& fc);
 
@@ -306,7 +397,7 @@ private:
     SceneSnap m_snap;
 
     /** @brief Scene grid visibility flag. */
-    bool m_showGrid;
+    bool m_showGrid = true;
 
     /** @brief Scene-owned lighting settings (render policy). */
     LightingSettings m_lightingSettings = {};
@@ -319,4 +410,7 @@ private:
 
     /** @brief Content-only change counter. */
     SysCounterPtr m_contentChangeCounter;
+
+    /** @brief Scene-level overlays for OBJECTS selection mode. */
+    LightOverlaySystem m_objectOverlays = {};
 };

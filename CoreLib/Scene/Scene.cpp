@@ -1,28 +1,38 @@
+//=============================================================================
+// Scene.cpp
+//=============================================================================
 #include "Scene.hpp"
+
+#include <utility>
 
 #include "LightHandler.hpp"
 #include "Renderer.hpp"
 #include "SceneLight.hpp"
+#include "SceneObject.hpp"
 #include "Viewport.hpp"
 
-Scene::Scene() : m_renderer{std::make_unique<Renderer>()},
-                 m_sceneChangeCounter{std::make_shared<SysCounter>()},
-                 m_sceneChangeMonitor{m_sceneChangeCounter},
-                 m_materialHandler{std::make_unique<MaterialHandler>()},
-                 m_imageHandler{std::make_unique<ImageHandler>()},
-                 m_materialChangeMonitor{m_materialHandler->changeCounter()},
-                 m_sceneQuery{std::make_unique<SceneQueryEmbree>()},
-                 m_showGrid{true},
-                 m_sceneQueryCounter{std::make_shared<SysCounter>()},
-                 m_sceneQueryMonitor{m_sceneQueryCounter},
-                 m_contentChangeCounter{std::make_shared<SysCounter>()},
-                 m_lightHandler{std::make_unique<LightHandler>()}
+Scene::Scene() :
+    m_renderer{std::make_unique<Renderer>()},
+    m_sceneChangeCounter{std::make_shared<SysCounter>()},
+    m_sceneChangeMonitor{m_sceneChangeCounter},
+    m_materialHandler{std::make_unique<MaterialHandler>()},
+    m_imageHandler{std::make_unique<ImageHandler>()},
+    m_materialChangeMonitor{m_materialHandler->changeCounter()},
+    m_sceneQuery{std::make_unique<SceneQueryEmbree>()},
+    m_showGrid{true},
+    m_sceneQueryCounter{std::make_shared<SysCounter>()},
+    m_sceneQueryMonitor{m_sceneQueryCounter},
+    m_contentChangeCounter{std::make_shared<SysCounter>()},
+    m_lightHandler{std::make_unique<LightHandler>()}
 {
     m_materialHandler->changeCounter()->addParent(m_sceneChangeCounter);
     m_imageHandler->changeCounter()->addParent(m_sceneChangeCounter);
     m_contentChangeCounter->addParent(m_sceneChangeCounter);
-    m_lightHandler->changeCounter()->addParent(m_sceneChangeCounter);
-    // Ensure default material at index 0
+
+    if (m_lightHandler)
+        m_lightHandler->changeCounter()->addParent(m_sceneChangeCounter);
+
+    // Ensure default material at index 0.
     m_materialHandler->createMaterial("Default");
 }
 
@@ -34,7 +44,7 @@ Scene::~Scene()
 bool Scene::initDevice(const VulkanContext& ctx)
 {
     m_textureHandler = std::make_unique<TextureHandler>(ctx, m_imageHandler.get());
-    return m_renderer->initDevice(ctx);
+    return m_renderer && m_renderer->initDevice(ctx);
 }
 
 bool Scene::initSwapchain(VkRenderPass rp)
@@ -75,7 +85,7 @@ void Scene::clear()
     if (m_lightHandler)
         m_lightHandler->clear();
 
-    // Ensure default material at index 0
+    // Ensure default material at index 0.
     m_materialHandler->createMaterial("Default");
 
     m_sceneChangeCounter->change();
@@ -84,8 +94,8 @@ void Scene::clear()
 SceneMesh* Scene::createSceneMesh(std::string_view name)
 {
     auto sm = std::make_unique<SceneMesh>(name);
-    sm->sysMesh()->change_counter()->addParent(m_sceneChangeCounter);
 
+    sm->sysMesh()->change_counter()->addParent(m_sceneChangeCounter);
     sm->sysMesh()->topology_counter()->addParent(m_sceneQueryCounter);
     sm->sysMesh()->deform_counter()->addParent(m_sceneQueryCounter);
 
@@ -93,7 +103,6 @@ SceneMesh* Scene::createSceneMesh(std::string_view name)
 
     SceneMesh* ptr = sm.get();
     m_sceneObjects.push_back(std::move(sm));
-
     return ptr;
 }
 
@@ -115,10 +124,7 @@ std::vector<SceneMesh*> Scene::sceneMeshes()
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (!obj)
-            continue;
-
-        if (obj->type() != SceneObjectType::Mesh)
+        if (!obj || obj->type() != SceneObjectType::Mesh)
             continue;
 
         result.push_back(static_cast<SceneMesh*>(obj.get()));
@@ -134,14 +140,10 @@ std::vector<SceneMesh*> Scene::sceneMeshes() const
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (!obj)
+        if (!obj || obj->type() != SceneObjectType::Mesh)
             continue;
 
-        if (obj->type() != SceneObjectType::Mesh)
-            continue;
-
-        // SceneObject ownership remains with Scene; returning non-const pointers
-        // mirrors the existing API and supports callers that mutate the meshes.
+        // Scene owns objects; returning non-const pointers mirrors the existing API.
         result.push_back(static_cast<SceneMesh*>(obj.get()));
     }
 
@@ -155,10 +157,7 @@ std::vector<SceneLight*> Scene::sceneLights() const
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (!obj)
-            continue;
-
-        if (obj->type() != SceneObjectType::Light)
+        if (!obj || obj->type() != SceneObjectType::Light)
             continue;
 
         result.push_back(static_cast<SceneLight*>(obj.get()));
@@ -184,10 +183,7 @@ std::vector<SysMesh*> Scene::meshes() const
 
     for (const auto& obj : m_sceneObjects)
     {
-        if (!obj)
-            continue;
-
-        if (obj->type() != SceneObjectType::Mesh)
+        if (!obj || obj->type() != SceneObjectType::Mesh)
             continue;
 
         auto* meshObj = static_cast<SceneMesh*>(obj.get());
@@ -223,14 +219,25 @@ SelectionMode Scene::selectionMode() const noexcept
     return m_selectionMode;
 }
 
-void Scene::clearSelection() noexcept
+void Scene::clearMeshSelection() noexcept
 {
     for (SysMesh* mesh : meshes())
     {
+        if (!mesh)
+            continue;
+
         mesh->clear_selected_verts();
         mesh->clear_selected_edges();
         mesh->clear_selected_polys();
     }
+
+    m_sceneChangeCounter->change();
+}
+
+void Scene::clearSelection() noexcept
+{
+    clearMeshSelection();
+    clearObjectSelection();
 }
 
 SceneQuery* Scene::sceneQuery() noexcept
@@ -332,14 +339,70 @@ void Scene::setLightingSettings(const LightingSettings& settings) noexcept
     markModified();
 }
 
-void Scene::subdivisionLevel(int level) noexcept
+SceneObject* Scene::selectedObject() noexcept
+{
+    for (const auto& obj : m_sceneObjects)
+    {
+        if (obj && obj->selected())
+            return obj.get();
+    }
+
+    return nullptr;
+}
+
+const SceneObject* Scene::selectedObject() const noexcept
+{
+    for (const auto& obj : m_sceneObjects)
+    {
+        if (obj && obj->selected())
+            return obj.get();
+    }
+
+    return nullptr;
+}
+
+void Scene::clearObjectSelection() noexcept
+{
+    for (const auto& obj : m_sceneObjects)
+    {
+        if (obj)
+            obj->selected(false);
+    }
+
+    m_sceneChangeCounter->change();
+}
+
+void Scene::setSelectedObject(SceneObject* obj) noexcept
+{
+    // Clear current object selection first.
+    for (const auto& it : m_sceneObjects)
+    {
+        if (it)
+            it->selected(false);
+    }
+
+    if (obj)
+        obj->selected(true);
+
+    m_sceneChangeCounter->change();
+}
+
+LightOverlaySystem& Scene::objectOverlays() noexcept
+{
+    return m_objectOverlays;
+}
+
+const LightOverlaySystem& Scene::objectOverlays() const noexcept
+{
+    return m_objectOverlays;
+}
+
+void Scene::subdivisionLevel(int levelDelta) noexcept
 {
     for (SceneMesh* mesh : sceneMeshes())
     {
-        if (mesh->selected() && mesh->visible())
-        {
-            mesh->subdivisionLevel(level);
-        }
+        if (mesh && mesh->selected() && mesh->visible())
+            mesh->subdivisionLevel(levelDelta);
     }
 
     m_sceneChangeCounter->change();
@@ -358,14 +421,10 @@ SceneStats Scene::stats() const noexcept
         s.polys += mesh->num_polys();
 
         if (int normMap = mesh->map_find(0); normMap > -1)
-        {
             s.norms += mesh->map_buffer_size(normMap);
-        }
 
         if (int textMap = mesh->map_find(1); textMap > -1)
-        {
             s.uvPos += mesh->map_buffer_size(textMap);
-        }
     }
 
     return s;
@@ -396,15 +455,11 @@ void Scene::idle()
     for (const auto& obj : m_sceneObjects)
     {
         if (obj)
-        {
             obj->idle(this);
-        }
     }
 
     if (m_renderer)
-    {
         m_renderer->idle(this);
-    }
 }
 
 void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
@@ -413,19 +468,19 @@ void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
         return;
 
     // IMPORTANT:
-    // renderPrePass is where we do any work that must happen OUTSIDE a render pass.
-    // This includes MeshGpuResources uploads/updates (raster) and RT dispatch (ray tracing).
-    // So it must run for ALL draw modes.
+    // renderPrePass is where work that must happen OUTSIDE a render pass occurs.
+    // This includes mesh GPU uploads/updates (raster) and RT dispatch (ray tracing).
+    // It must run for all draw modes.
     if (m_renderer)
         m_renderer->renderPrePass(vp, this, fc);
 }
 
 void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
-    // static uint64_t renderCount = 0;
-    // std::cerr << "-------------- RENDER # " << renderCount++ << std::endl;
     vp->apply();
-    m_renderer->render(vp, this, fc);
+
+    if (m_renderer)
+        m_renderer->render(vp, this, fc);
 }
 
 SysCounterPtr Scene::changeCounter() const noexcept

@@ -372,4 +372,7 @@ private:
 
     /** @brief Command factory. */
     ItemFactory<Command> m_commandFactory;
+
+    // todo: maybe not in here?
+    OverlayHandler m_objectOverlays = {};
 };

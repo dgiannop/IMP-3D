@@ -5,6 +5,7 @@
 #include "LightingSettings.hpp"
 #include "MaterialEditor.hpp"
 #include "SceneLight.hpp"
+#include "SceneLightOverlays.hpp" //todo
 #include "SelectionUtils.hpp"
 #include "Tool.hpp"
 #include "Viewport.hpp"
@@ -302,16 +303,13 @@ void Core::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
         return;
 
     m_scene->renderPrePass(vp, fc);
-    //(void)m_scene->renderPrePass(vp, cmd, frameIndex);
 }
 
-// void Core::render(Viewport* vp, VkCommandBuffer cmd, uint32_t frameIndex)
 void Core::render(Viewport* vp, const RenderFrameContext& fc)
 {
     if (!m_scene)
         return;
 
-    // m_scene->render(vp, cmd, frameIndex);
     m_scene->render(vp, fc);
 
     if (m_activeTool)
@@ -320,7 +318,17 @@ void Core::render(Viewport* vp, const RenderFrameContext& fc)
     }
 
     auto renderer = m_scene->renderer();
-    if (renderer && m_activeTool)
+    if (!renderer)
+        return;
+
+    if (m_scene->selectionMode() == SelectionMode::OBJECTS)
+    {
+        m_objectOverlays.clear();
+        scene_overlays::appendLights(vp, m_scene.get(), m_objectOverlays);
+        renderer->drawOverlays(fc.cmd, vp, m_objectOverlays);
+    }
+
+    if (m_activeTool)
     {
         if (OverlayHandler* oh = m_activeTool->overlayHandler())
         {
@@ -328,12 +336,6 @@ void Core::render(Viewport* vp, const RenderFrameContext& fc)
         }
     }
 }
-
-// Viewport* Core::activeViewport() const
-// {
-//     return nullptr;
-//     // m_viewports.back().get();
-// }
 
 bool Core::requestNew() noexcept
 {
