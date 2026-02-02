@@ -109,16 +109,39 @@ SceneMesh* Scene::createSceneMesh(std::string_view name)
 
 SceneLight* Scene::createSceneLight(std::string_view name, LightType type)
 {
-    if (!m_lightHandler)
+    Light l   = {};
+    l.name    = std::string(name);
+    l.type    = type;
+    l.enabled = true;
+
+    return createSceneLight(l);
+}
+
+SceneLight* Scene::createSceneLight(const Light& light)
+{
+    LightHandler* lh = lightHandler();
+    if (!lh)
         return nullptr;
 
-    const LightId id = m_lightHandler->createLight(name, type);
+    // Create the Light in the LightHandler (owning storage)
+    const LightId id = lh->createLight(light);
+    if (id == kInvalidLightId)
+        return nullptr;
 
-    auto sl = std::make_unique<SceneLight>(m_lightHandler.get(), id, name);
+    // Create SceneLight that references the Light by stable ID
+    auto sceneLight = std::make_unique<SceneLight>(
+        lh,
+        id,
+        light.name);
 
-    SceneLight* ptr = sl.get();
-    m_sceneObjects.push_back(std::move(sl));
-    return ptr;
+    SceneLight* result = sceneLight.get();
+
+    // Scene takes ownership
+    m_sceneObjects.push_back(std::move(sceneLight));
+
+    // todo, add change counter here
+
+    return result;
 }
 
 std::vector<SceneMesh*> Scene::sceneMeshes()

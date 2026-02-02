@@ -4,6 +4,8 @@
 
 #include "GltfSceneFormat.hpp"
 
+#include "SceneLight.hpp"
+
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_STB_IMAGE_WRITE
 #include <tiny_gltf.h>
@@ -582,10 +584,6 @@ namespace
         if (!scene)
             return;
 
-        LightHandler* lh = scene->lightHandler();
-        if (!lh)
-            return;
-
         int created = 0;
 
         for (size_t nodeIdx = 0; nodeIdx < model.nodes.size(); ++nodeIdx)
@@ -627,11 +625,23 @@ namespace
             l.spotOuterConeRad = d.outerConeRad;
             l.enabled          = true;
 
-            const LightId id = lh->createLight(l);
-            if (id != kInvalidLightId)
+            SceneLight* sl = scene->createSceneLight(l);
+            if (sl)
             {
                 ++created;
-                report.info("glTF: Node[" + std::to_string(nodeIdx) + "] '" + nodeName + "' references Light[" + std::to_string(li) + "]; created Scene LightId=" + std::to_string(id) + ".");
+
+                // If you want to log the stable LightId, SceneLight exposes it:
+                report.info(
+                    "glTF: Node[" + std::to_string(nodeIdx) + "] '" + nodeName +
+                    "' references Light[" + std::to_string(li) +
+                    "]; created SceneLight (LightId=" + std::to_string(sl->lightId()) + ").");
+            }
+            else
+            {
+                report.warning(
+                    "glTF: Node[" + std::to_string(nodeIdx) + "] '" + nodeName +
+                    "' references Light[" + std::to_string(li) +
+                    "]; Scene::createSceneLight failed.");
             }
         }
 

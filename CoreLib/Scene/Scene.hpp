@@ -89,6 +89,21 @@ public:
     SceneLight* createSceneLight(std::string_view name, LightType type);
 
     /**
+     * @brief Create and add a new SceneLight from a fully specified Light definition.
+     * @param light Initial light parameters (name, type, color, intensity, transform, etc.).
+     * @return Pointer to the created SceneLight, or nullptr on failure.
+     *
+     * This overload is intended for importers (e.g. glTF/OBJ) and tools that already
+     * have the complete Light definition available. It inserts the Light into the
+     * LightHandler (owning storage) and then creates a SceneLight scene object that
+     * references it via a stable LightId.
+     *
+     * All scene lights should be created through this function (or the name/type
+     * overload) so the Scene can centrally track content changes, maintain invariants.
+     */
+    SceneLight* createSceneLight(const Light& light);
+
+    /**
      * @brief Retrieve all SceneMeshes.
      * @return Vector of SceneMesh pointers
      */
