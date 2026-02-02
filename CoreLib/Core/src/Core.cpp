@@ -615,3 +615,14 @@ uint64_t Core::sceneChangeStamp() const noexcept
     const SysCounterPtr counter = m_scene->changeCounter();
     return counter ? counter->value() : 0ull;
 }
+
+uint64_t Core::sceneContentChangeStamp() const noexcept
+{
+    if (!m_scene)
+        return 0;
+
+    if (SysCounterPtr c = m_scene->contentChangeCounter())
+        return c->value();
+
+    return 0;
+}

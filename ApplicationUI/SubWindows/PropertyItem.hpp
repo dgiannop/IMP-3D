@@ -15,7 +15,6 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <cmath>
 #include <glm/ext/vector_int3.hpp>
 #include <limits>
 

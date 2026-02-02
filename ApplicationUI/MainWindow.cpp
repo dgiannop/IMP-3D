@@ -15,6 +15,7 @@
 #include "SubWindows/MaterialAssignDialog.hpp"
 #include "SubWindows/MaterialEditorDialog.hpp"
 #include "SubWindows/PropertyWindow.hpp"
+#include "SubWindows/SceneStatsDialog.hpp"
 #include "SubWindows/SubWindowManager.hpp"
 #include "ViewportManager.hpp"
 #include "ui_MainWindow.h"
@@ -117,6 +118,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         m_subWindowManager->addSubWindow("LIGHT_EDITOR_DIALOG", new LightsEditorDialog(this));
         m_subWindowManager->addSubWindow("CREATE_LIGHT_DIALOG", new CreateLightDialog(this));
         m_subWindowManager->addSubWindow("LIGHTING_SETTINGS_DIALOG", new LightingSettingsDialog(this));
+        m_subWindowManager->addSubWindow("SCENE_INFO_STATS", new SceneStatsDialog(this));
 
         connect(ui->btnNumPanel, &QPushButton::toggled, this, [=, this](bool checked) {
             if (checked)
@@ -151,6 +153,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
                 m_subWindowManager->showSubWindow("CREATE_LIGHT_DIALOG");
             else
                 m_subWindowManager->hideSubWindow("CREATE_LIGHT_DIALOG");
+        });
+
+        connect(ui->btnInfoPanel, &QPushButton::toggled, this, [=, this](bool checked) {
+            if (checked)
+                m_subWindowManager->showSubWindow("SCENE_INFO_STATS");
+            else
+                m_subWindowManager->hideSubWindow("SCENE_INFO_STATS");
         });
 
         connect(m_subWindowManager.get(), &SubWindowManager::onSubWindowClosed, this, &MainWindow::onSubWindowClosed);
@@ -296,7 +305,7 @@ void MainWindow::onSubWindowClosed(QString name, int result)
     {
         ui->btnMatEditor->setChecked(false);
     }
-    else if (name == "INFO_PANEL")
+    else if (name == "SCENE_INFO_STATS")
     {
         ui->btnInfoPanel->setChecked(false);
     }

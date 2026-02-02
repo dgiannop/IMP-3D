@@ -178,6 +178,9 @@ public:
      */
     SceneStats sceneStats() const noexcept;
 
+    /** @brief Scene-stats change stamp for UI polling (monotonic). */
+    [[nodiscard]] uint64_t sceneStatsStamp() const noexcept;
+
     /** @brief Perform idle-time updates (tools, scene). */
     void idle();
 
@@ -311,6 +314,14 @@ public:
      * Intended for UI polling.
      */
     [[nodiscard]] uint64_t sceneChangeStamp() const noexcept;
+
+    /**
+     * @brief Content-only scene change stamp.
+     *
+     * Increments only when scene data changes (topology, deform, materials, lights).
+     * Intended for UI panels that depend on persistent scene data.
+     */
+    [[nodiscard]] uint64_t sceneContentChangeStamp() const noexcept;
 
 private:
     /** @brief All active viewports. */

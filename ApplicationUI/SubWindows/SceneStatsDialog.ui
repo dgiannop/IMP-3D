@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SceneStatsDialog</class>
+ <widget class="QWidget" name="SceneStatsDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>200</width>
+    <height>140</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>160</width>
+    <height>120</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>Scene Stats</string>
+  </property>
+
+  <!-- SAME STYLESHEET AS PropertyWindow -->
+  <property name="styleSheet">
+   <string notr="true">
+QLabel {
+    background-color: #303645;
+    color: rgb(92, 102, 113);
+    font-weight: 550;
+    padding: 5px 6px;
+    border-radius: 0px;
+}
+
+QLabel#valueLabel {
+    background-color: #282B32;
+    color: #798593;
+    font-weight: 600;
+}
+   </string>
+  </property>
+
+  <layout class="QGridLayout" name="gridLayout">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <property name="horizontalSpacing">
+    <number>1</number>
+   </property>
+   <property name="verticalSpacing">
+    <number>1</number>
+   </property>
+
+   <!-- Verts -->
+   <item row="0" column="0">
+    <widget class="QLabel" name="labelVerts">
+     <property name="text">
+      <string>Verts</string>
+     </property>
+    </widget>
+   </item>
+   <item row="0" column="1">
+    <widget class="QLabel" name="labelVertsValue">
+     <property name="objectName">
+      <string>valueLabel</string>
+     </property>
+     <property name="text">
+      <string>0</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignRight|Qt::AlignVCenter</set>
+     </property>
+    </widget>
+   </item>
+
+   <!-- Polys -->
+   <item row="1" column="0">
+    <widget class="QLabel" name="labelPolys">
+     <property name="text">
+      <string>Polys</string>
+     </property>
+    </widget>
+   </item>
+   <item row="1" column="1">
+    <widget class="QLabel" name="labelPolysValue">
+     <property name="objectName">
+      <string>valueLabel</string>
+     </property>
+     <property name="text">
+      <string>0</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignRight|Qt::AlignVCenter</set>
+     </property>
+    </widget>
+   </item>
+
+   <!-- Normals -->
+   <item row="2" column="0">
+    <widget class="QLabel" name="labelNorms">
+     <property name="text">
+      <string>Normals</string>
+     </property>
+    </widget>
+   </item>
+   <item row="2" column="1">
+    <widget class="QLabel" name="labelNormsValue">
+     <property name="objectName">
+      <string>valueLabel</string>
+     </property>
+     <property name="text">
+      <string>0</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignRight|Qt::AlignVCenter</set>
+     </property>
+    </widget>
+   </item>
+
+   <!-- UVs -->
+   <item row="3" column="0">
+    <widget class="QLabel" name="labelUvs">
+     <property name="text">
+      <string>UVs</string>
+     </property>
+    </widget>
+   </item>
+   <item row="3" column="1">
+    <widget class="QLabel" name="labelUvsValue">
+     <property name="objectName">
+      <string>valueLabel</string>
+     </property>
+     <property name="text">
+      <string>0</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignRight|Qt::AlignVCenter</set>
+     </property>
+    </widget>
+   </item>
+
+<item row="4" column="0" colspan="2">
+ <spacer name="verticalSpacer">
+  <property name="orientation">
+   <enum>Qt::Vertical</enum>
+  </property>
+  <property name="sizeType">
+   <enum>QSizePolicy::Expanding</enum>
+  </property>
+  <property name="sizeHint" stdset="0">
+   <size>
+    <width>20</width>
+    <height>40</height>
+   </size>
+  </property>
+ </spacer>
+</item>
+
+
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
