@@ -389,7 +389,6 @@ void ExtrudeTool::extrudeVerts(SysMesh* mesh, std::span<const int32_t> verts, fl
     if (!mesh || verts.empty() || un::is_zero(amount))
         return;
 
-    // Dedupe + validate
     std::unordered_set<int32_t> uniqueVerts = {};
     uniqueVerts.reserve(verts.size() * 2);
 
@@ -399,16 +398,9 @@ void ExtrudeTool::extrudeVerts(SysMesh* mesh, std::span<const int32_t> verts, fl
             uniqueVerts.insert(vi);
     }
 
-    if (uniqueVerts.empty())
-        return;
-
-    std::vector<int32_t> newVerts = {};
-    newVerts.reserve(uniqueVerts.size());
-
     for (int32_t vi : uniqueVerts)
     {
-        // Direction = average of adjacent polygon normals (deterministic, topology-based).
-        glm::vec3 nsum = {};
+        glm::vec3 nsum = glm::vec3(0.0f);
 
         const auto& vpolys = mesh->vert_polys(vi);
         for (int32_t pi : vpolys)
@@ -419,20 +411,13 @@ void ExtrudeTool::extrudeVerts(SysMesh* mesh, std::span<const int32_t> verts, fl
             nsum += un::safe_normalize(mesh->poly_normal(pi));
         }
 
-        glm::vec3 n = un::safe_normalize(nsum);
-        if (un::is_zero(n))
-            n = glm::vec3(0.0f, 0.0f, 1.0f); // isolated vertex fallback
+        glm::vec3 dir = un::safe_normalize(nsum);
+        if (un::is_zero(dir))
+            dir = glm::vec3(0.0f, 0.0f, 1.0f);
 
-        const glm::vec3 p  = mesh->vert_position(vi);
-        const int32_t   v2 = mesh->create_vert(p + n * amount);
-
-        newVerts.push_back(v2);
+        const glm::vec3 p = mesh->vert_position(vi);
+        mesh->move_vert(vi, p + dir * amount);
     }
-
-    // Select duplicates (typical "extrude" UX: you keep manipulating the new elements)
-    mesh->clear_selected_verts();
-    for (int32_t v2 : newVerts)
-        mesh->select_vert(v2, true);
 }
 
 void ExtrudeTool::extrudeEdges(SysMesh* /*mesh*/, std::span<const IndexPair> /*edges*/, float /*amount*/)
