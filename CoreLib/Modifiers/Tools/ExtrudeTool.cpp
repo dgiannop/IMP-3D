@@ -41,18 +41,53 @@ void ExtrudeTool::propertiesChanged(Scene* scene)
     if (un::is_zero(m_amount))
         return;
 
-    // For now, drive polys. Expand this later:
-    //  - VERTS mode -> extrudeVerts
-    //  - EDGES mode -> extrudeEdges
-    auto polyMap = sel::to_polys(scene);
-
-    for (auto& [mesh, polys] : polyMap)
+    // Priority: polys -> edges -> verts (so we don't need to query "selection mode")
     {
-        if (!mesh)
-            continue;
+        auto polyMap = sel::to_polys(scene);
+        if (!polyMap.empty())
+        {
+            for (auto& [mesh, polys] : polyMap)
+            {
+                if (!mesh)
+                    continue;
 
-        ExtrudeTool::extrudePolys(mesh, polys, m_amount, m_group);
+                ExtrudeTool::extrudePolys(mesh, polys, m_amount, m_group);
+            }
+            return;
+        }
     }
+
+    {
+        auto edgeMap = sel::to_edges(scene); // expects std::span<const IndexPair>-compatible data
+        if (!edgeMap.empty())
+        {
+            for (auto& [mesh, edges] : edgeMap)
+            {
+                if (!mesh)
+                    continue;
+
+                ExtrudeTool::extrudeEdges(mesh, edges, m_amount);
+            }
+            return;
+        }
+    }
+
+    {
+        auto vertMap = sel::to_verts(scene);
+        if (!vertMap.empty())
+        {
+            for (auto& [mesh, verts] : vertMap)
+            {
+                if (!mesh)
+                    continue;
+
+                ExtrudeTool::extrudeVerts(mesh, verts, m_amount, m_group);
+            }
+            return;
+        }
+    }
+
+    // Nothing selected in any category => no-op.
 }
 
 void ExtrudeTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
@@ -349,9 +384,55 @@ void ExtrudeTool::extrudePolys(SysMesh* mesh, std::span<const int32_t> polys, fl
         mesh->select_poly(pi, true);
 }
 
-void ExtrudeTool::extrudeVerts(SysMesh* /*mesh*/, std::span<const int32_t> /*verts*/, float /*amount*/, bool /*group*/)
+void ExtrudeTool::extrudeVerts(SysMesh* mesh, std::span<const int32_t> verts, float amount, bool /*group*/)
 {
-    // Stub
+    if (!mesh || verts.empty() || un::is_zero(amount))
+        return;
+
+    // Dedupe + validate
+    std::unordered_set<int32_t> uniqueVerts = {};
+    uniqueVerts.reserve(verts.size() * 2);
+
+    for (int32_t vi : verts)
+    {
+        if (mesh->vert_valid(vi))
+            uniqueVerts.insert(vi);
+    }
+
+    if (uniqueVerts.empty())
+        return;
+
+    std::vector<int32_t> newVerts = {};
+    newVerts.reserve(uniqueVerts.size());
+
+    for (int32_t vi : uniqueVerts)
+    {
+        // Direction = average of adjacent polygon normals (deterministic, topology-based).
+        glm::vec3 nsum = {};
+
+        const auto& vpolys = mesh->vert_polys(vi);
+        for (int32_t pi : vpolys)
+        {
+            if (!mesh->poly_valid(pi))
+                continue;
+
+            nsum += un::safe_normalize(mesh->poly_normal(pi));
+        }
+
+        glm::vec3 n = un::safe_normalize(nsum);
+        if (un::is_zero(n))
+            n = glm::vec3(0.0f, 0.0f, 1.0f); // isolated vertex fallback
+
+        const glm::vec3 p  = mesh->vert_position(vi);
+        const int32_t   v2 = mesh->create_vert(p + n * amount);
+
+        newVerts.push_back(v2);
+    }
+
+    // Select duplicates (typical "extrude" UX: you keep manipulating the new elements)
+    mesh->clear_selected_verts();
+    for (int32_t v2 : newVerts)
+        mesh->select_vert(v2, true);
 }
 
 void ExtrudeTool::extrudeEdges(SysMesh* /*mesh*/, std::span<const IndexPair> /*edges*/, float /*amount*/)
