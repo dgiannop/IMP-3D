@@ -622,3 +622,154 @@ namespace sel
     }
 
 } // namespace sel
+
+namespace sel
+{
+    MeshVertMap selected_verts(Scene* scene)
+    {
+        MeshVertMap result = {};
+        if (!scene)
+            return result;
+
+        for (SysMesh* mesh : scene->activeMeshes())
+        {
+            if (!mesh)
+                continue;
+
+            const auto& sel = mesh->selected_verts();
+            if (!sel.empty())
+                result[mesh] = sel;
+        }
+
+        return result;
+    }
+
+    MeshEdgeMap selected_edges(Scene* scene)
+    {
+        MeshEdgeMap result = {};
+        if (!scene)
+            return result;
+
+        for (SysMesh* mesh : scene->activeMeshes())
+        {
+            if (!mesh)
+                continue;
+
+            const auto& sel = mesh->selected_edges();
+            if (!sel.empty())
+                result[mesh] = sel;
+        }
+
+        return result;
+    }
+
+    MeshPolyMap selected_polys(Scene* scene)
+    {
+        MeshPolyMap result = {};
+        if (!scene)
+            return result;
+
+        for (SysMesh* mesh : scene->activeMeshes())
+        {
+            if (!mesh)
+                continue;
+
+            const auto& sel = mesh->selected_polys();
+            if (!sel.empty())
+                result[mesh] = sel;
+        }
+
+        return result;
+    }
+
+    struct EdgeKeyHash
+    {
+        size_t operator()(const IndexPair& e) const noexcept
+        {
+            const uint64_t a = static_cast<uint32_t>(e.first);
+            const uint64_t b = static_cast<uint32_t>(e.second);
+            return static_cast<size_t>((a << 32) ^ b);
+        }
+    };
+
+    MeshEdgeMap connect_edges(Scene* scene, EdgeDerivePolicy policy)
+    {
+        MeshEdgeMap result = {};
+        if (!scene)
+            return result;
+
+        const SelectionMode mode = scene->selectionMode();
+
+        // ------------------------------------------------------------
+        // EDGES mode: use selected edges only (strict)
+        // ------------------------------------------------------------
+        if (mode == SelectionMode::EDGES)
+            return selected_edges(scene);
+
+        // ------------------------------------------------------------
+        // POLYS mode: derive edges from selected polys (strict)
+        // ------------------------------------------------------------
+        if (mode == SelectionMode::POLYS)
+        {
+            const MeshPolyMap mp = selected_polys(scene);
+
+            for (const auto& [mesh, polys] : mp)
+            {
+                if (!mesh || polys.empty())
+                    continue;
+
+                std::unordered_map<IndexPair, int32_t, EdgeKeyHash> counts = {};
+                counts.reserve(polys.size() * 8);
+
+                for (int32_t pi : polys)
+                {
+                    if (!mesh->poly_valid(pi))
+                        continue;
+
+                    const SysPolyEdges edges = mesh->poly_edges(pi);
+                    for (const IndexPair& eIn : edges)
+                    {
+                        const IndexPair e = SysMesh::sort_edge(eIn);
+                        if (!mesh->vert_valid(e.first) || !mesh->vert_valid(e.second))
+                            continue;
+
+                        counts[e] += 1;
+                    }
+                }
+
+                std::vector<IndexPair> out = {};
+                out.reserve(counts.size());
+
+                if (policy == EdgeDerivePolicy::OutlineOnly)
+                {
+                    // Outline edges appear only once among selected polys.
+                    // (Edges shared by two selected polys have count==2)
+                    for (const auto& [e, c] : counts)
+                    {
+                        if (c == 1)
+                            out.push_back(e);
+                    }
+                }
+                else
+                {
+                    for (const auto& [e, c] : counts)
+                    {
+                        (void)c;
+                        out.push_back(e);
+                    }
+                }
+
+                if (!out.empty())
+                    result[mesh] = std::move(out);
+            }
+
+            return result;
+        }
+
+        // ------------------------------------------------------------
+        // VERTS mode: optional (strict). Usually Connect should no-op.
+        // ------------------------------------------------------------
+        return result;
+    }
+
+} // namespace sel

@@ -246,25 +246,34 @@ SelectionMode Scene::selectionMode() const noexcept
     return m_selectionMode;
 }
 
-void Scene::clearMeshSelection() noexcept
+// void Scene::clearMeshSelection() noexcept
+// {
+//     for (SysMesh* mesh : meshes())
+//     {
+//         if (!mesh)
+//             continue;
+
+//         mesh->clear_selected_verts();
+//         mesh->clear_selected_edges();
+//         mesh->clear_selected_polys();
+//     }
+
+//     m_sceneChangeCounter->change();
+// }
+
+// void Scene::clearSelection() noexcept
+// {
+//     // clearMeshSelection();
+//     // clearObjectSelection();
+// }
+void Scene::clearSelection() noexcept
 {
     for (SysMesh* mesh : meshes())
     {
-        if (!mesh)
-            continue;
-
         mesh->clear_selected_verts();
         mesh->clear_selected_edges();
         mesh->clear_selected_polys();
     }
-
-    m_sceneChangeCounter->change();
-}
-
-void Scene::clearSelection() noexcept
-{
-    clearMeshSelection();
-    clearObjectSelection();
 }
 
 SceneQuery* Scene::sceneQuery() noexcept
@@ -366,53 +375,53 @@ void Scene::setLightingSettings(const LightingSettings& settings) noexcept
     markModified();
 }
 
-SceneObject* Scene::selectedObject() noexcept
-{
-    for (const auto& obj : m_sceneObjects)
-    {
-        if (obj && obj->selected())
-            return obj.get();
-    }
+// SceneObject* Scene::selectedObject() noexcept
+// {
+//     for (const auto& obj : m_sceneObjects)
+//     {
+//         if (obj && obj->selected())
+//             return obj.get();
+//     }
 
-    return nullptr;
-}
+//     return nullptr;
+// }
 
-const SceneObject* Scene::selectedObject() const noexcept
-{
-    for (const auto& obj : m_sceneObjects)
-    {
-        if (obj && obj->selected())
-            return obj.get();
-    }
+// const SceneObject* Scene::selectedObject() const noexcept
+// {
+//     for (const auto& obj : m_sceneObjects)
+//     {
+//         if (obj && obj->selected())
+//             return obj.get();
+//     }
 
-    return nullptr;
-}
+//     return nullptr;
+// }
 
-void Scene::clearObjectSelection() noexcept
-{
-    for (const auto& obj : m_sceneObjects)
-    {
-        if (obj)
-            obj->selected(false);
-    }
+// void Scene::clearObjectSelection() noexcept
+// {
+//     for (const auto& obj : m_sceneObjects)
+//     {
+//         if (obj && obj->type() != SceneObjectType::Mesh)
+//             obj->selected(false);
+//     }
 
-    m_sceneChangeCounter->change();
-}
+//     m_sceneChangeCounter->change();
+// }
 
-void Scene::setSelectedObject(SceneObject* obj) noexcept
-{
-    // Clear current object selection first.
-    for (const auto& it : m_sceneObjects)
-    {
-        if (it)
-            it->selected(false);
-    }
+// void Scene::setSelectedObject(SceneObject* obj) noexcept
+// {
+//     // Clear current object selection first.
+//     for (const auto& it : m_sceneObjects)
+//     {
+//         if (it)
+//             it->selected(false);
+//     }
 
-    if (obj)
-        obj->selected(true);
+//     if (obj)
+//         obj->selected(true);
 
-    m_sceneChangeCounter->change();
-}
+//     m_sceneChangeCounter->change();
+// }
 
 // ------------------------------------------------------------
 // Object overlays

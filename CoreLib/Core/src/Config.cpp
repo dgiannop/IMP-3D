@@ -4,6 +4,7 @@
 #include "BevelTool.hpp"
 #include "BoxTool.hpp"
 #include "CmdCenter.hpp"
+#include "CmdConnect.hpp"
 #include "CmdCreatePoly.hpp"
 #include "CmdDelete.hpp"
 #include "CmdDissolveEdge.hpp"
@@ -83,6 +84,7 @@ namespace config
         factory.registerItem("CreatePoly", factory.createItemType<CmdCreatePoly>);
         factory.registerItem("SelectConnected", factory.createItemType<CmdSelectConnected>);
         factory.registerItem("DuplicatePolysToObject", factory.createItemType<CmdDuplicatePolysToObject>);
+        factory.registerItem("Connect", factory.createItemType<CmdConnect>);
     }
 
     void registerSceneFormats(ItemFactory<SceneFormat>& factory)

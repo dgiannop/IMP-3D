@@ -150,3 +150,18 @@ namespace sel
     [[nodiscard]] float selection_radius(Scene* scene) noexcept;
 
 } // namespace sel
+
+namespace sel
+{
+    [[nodiscard]] MeshVertMap selected_verts(Scene* scene);
+    [[nodiscard]] MeshEdgeMap selected_edges(Scene* scene);
+    [[nodiscard]] MeshPolyMap selected_polys(Scene* scene);
+
+    enum class EdgeDerivePolicy : uint8_t
+    {
+        PolyEdges   = 0, // all edges of selected polys
+        OutlineOnly = 1  // only edges at selection boundary
+    };
+
+    [[nodiscard]] MeshEdgeMap connect_edges(Scene* scene, EdgeDerivePolicy policy = EdgeDerivePolicy::OutlineOnly);
+} // namespace sel

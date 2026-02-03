@@ -187,7 +187,7 @@ public:
      * where the caller wants to preserve OBJECTS selection while resetting
      * mesh element selection.
      */
-    void clearMeshSelection() noexcept;
+    // void clearMeshSelection() noexcept;
 
     // ------------------------------------------------------------
     // Queries / handlers
@@ -283,17 +283,17 @@ public:
      *
      * @return Pointer to a selected object, or nullptr if none selected.
      */
-    [[nodiscard]] SceneObject* selectedObject() noexcept;
+    // [[nodiscard]] SceneObject* selectedObject() noexcept;
 
     /** @brief Retrieve the first selected SceneObject (const), if any. */
-    [[nodiscard]] const SceneObject* selectedObject() const noexcept;
+    // [[nodiscard]] const SceneObject* selectedObject() const noexcept;
 
     /**
      * @brief Clear object selection.
      *
      * Clears SceneObject::selected() for all objects.
      */
-    void clearObjectSelection() noexcept;
+    // void clearObjectSelection() noexcept;
 
     /**
      * @brief Set a single selected object.
@@ -303,7 +303,7 @@ public:
      *
      * @param obj Object to select, or nullptr to clear selection.
      */
-    void setSelectedObject(SceneObject* obj) noexcept;
+    // void setSelectedObject(SceneObject* obj) noexcept;
 
     // ------------------------------------------------------------
     // Object overlays
