@@ -1,13 +1,25 @@
+//=============================================================================
+// ExtrudeTool.cpp
+//=============================================================================
 #include "ExtrudeTool.hpp"
 
 #include <SysMesh.hpp>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "CoreUtilities.hpp"
 #include "Scene.hpp"
 #include "SceneMesh.hpp"
 #include "SelectionUtils.hpp"
 #include "Viewport.hpp"
+
+// -----------------------------------------------------------------------------
+// Toggle
+// -----------------------------------------------------------------------------
+// If true, use NormalPullGizmo.
+// If false, drag anywhere extrudes by accumulating mouse delta in pixels.
+static constexpr bool kUseExtrudeGizmo = false;
 
 ExtrudeTool::ExtrudeTool()
 {
@@ -29,7 +41,7 @@ void ExtrudeTool::propertiesChanged(Scene* scene)
     if (un::is_zero(m_amount))
         return;
 
-    // For now, drive polys. You can expand this later:
+    // For now, drive polys. Expand this later:
     //  - VERTS mode -> extrudeVerts
     //  - EDGES mode -> extrudeEdges
     auto polyMap = sel::to_polys(scene);
@@ -51,7 +63,11 @@ void ExtrudeTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
     // Reset preview delta at interaction start.
     m_amount = 0.0f;
 
-    m_gizmo.mouseDown(vp, scene, event);
+    if constexpr (kUseExtrudeGizmo)
+    {
+        m_gizmo.mouseDown(vp, scene, event);
+    }
+
     propertiesChanged(scene);
 }
 
@@ -60,7 +76,18 @@ void ExtrudeTool::mouseDrag(Viewport* vp, Scene* scene, const CoreEvent& event)
     if (!vp || !scene)
         return;
 
-    m_gizmo.mouseDrag(vp, scene, event);
+    if constexpr (kUseExtrudeGizmo)
+    {
+        m_gizmo.mouseDrag(vp, scene, event);
+    }
+    else
+    {
+        // Drag anywhere (no gizmo). Simple accumulation in "world units".
+        const float s = vp->pixelScale();
+        m_amount += static_cast<float>(event.deltaX) * s;
+        m_amount += static_cast<float>(event.deltaY) * s;
+    }
+
     propertiesChanged(scene);
 }
 
@@ -69,7 +96,10 @@ void ExtrudeTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
     if (!vp || !scene)
         return;
 
-    m_gizmo.mouseUp(vp, scene, event);
+    if constexpr (kUseExtrudeGizmo)
+    {
+        m_gizmo.mouseUp(vp, scene, event);
+    }
 
     scene->commitMeshChanges();
 
@@ -82,12 +112,22 @@ void ExtrudeTool::render(Viewport* vp, Scene* scene)
     if (!vp || !scene)
         return;
 
-    m_gizmo.render(vp, scene);
+    if constexpr (kUseExtrudeGizmo)
+    {
+        m_gizmo.render(vp, scene);
+    }
 }
 
 OverlayHandler* ExtrudeTool::overlayHandler()
 {
-    return &m_gizmo.overlayHandler();
+    if constexpr (kUseExtrudeGizmo)
+    {
+        return &m_gizmo.overlayHandler();
+    }
+    else
+    {
+        return nullptr;
+    }
 }
 
 // ------------------------------------------------------------

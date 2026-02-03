@@ -1,6 +1,11 @@
+//=============================================================================
+// ExtrudeTool.hpp
+//=============================================================================
 #pragma once
 
+#include <cstdint>
 #include <span>
+#include <utility>
 
 #include "NormalPullGizmo.hpp"
 #include "Tool.hpp"
