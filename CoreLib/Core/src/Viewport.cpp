@@ -294,15 +294,15 @@ bool Viewport::rayViewPlaneHit(float            x,
 
 glm::vec3 Viewport::cameraPosition() const
 {
-    // Extracts camera translation from inverse(view). Callers should cache if used frequently.
-    return glm::vec3(glm::inverse(m_matView)[3]);
+    // Extracts camera translation from cached inverse(view).
+    return glm::vec3(m_matInvView[3]);
 }
 
 glm::vec3 Viewport::viewDirection() const
 {
     // Forward is -Z in view space.
     const glm::vec4 forwardView(0.f, 0.f, -1.f, 0.f);
-    const glm::vec4 forwardWorld = glm::inverse(m_matView) * forwardView;
+    const glm::vec4 forwardWorld = m_matInvView * forwardView;
     return glm::normalize(glm::vec3(forwardWorld));
 }
 
@@ -310,7 +310,7 @@ glm::vec3 Viewport::rightDirection() const
 {
     // Right is +X in view space.
     const glm::vec4 rightView(1.f, 0.f, 0.f, 0.f);
-    const glm::vec4 rightWorld = glm::inverse(m_matView) * rightView;
+    const glm::vec4 rightWorld = m_matInvView * rightView;
     return glm::normalize(glm::vec3(rightWorld));
 }
 
@@ -318,7 +318,7 @@ glm::vec3 Viewport::upDirection() const
 {
     // Up is +Y in view space.
     const glm::vec4 upView(0.f, 1.f, 0.f, 0.f);
-    const glm::vec4 upWorld = glm::inverse(m_matView) * upView;
+    const glm::vec4 upWorld = m_matInvView * upView;
     return glm::normalize(glm::vec3(upWorld));
 }
 
@@ -435,8 +435,11 @@ void Viewport::apply() noexcept
     const glm::mat4 posMat = glm::translate(glm::mat4(1.0f), -m_pan);
     m_matView              = m_matView * posMat;
 
-    // Caches derived matrices for project/unproject.
+    // Cache derived matrices for project/unproject.
     m_matViewProj = m_matProj * m_matView;
+
+    // Cache inverse(view) for camera basis queries and billboarding helpers.
+    m_matInvView = glm::inverse(m_matView);
 
     // Inversion is expected to succeed for typical camera matrices.
     // If issues arise, guard with a determinant check and fallback to identity.

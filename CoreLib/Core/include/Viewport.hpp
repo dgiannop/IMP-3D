@@ -300,6 +300,14 @@ private:
     glm::mat4 m_matViewProj    = glm::mat4(1.0f);
     glm::mat4 m_matInvViewProj = glm::mat4(1.0f);
 
+    /**
+     * @brief Cached inverse of the view matrix.
+     *
+     * This is derived in apply() and reused by camera basis queries to avoid
+     * repeated matrix inversion in hot paths (overlays, picking, gizmos).
+     */
+    glm::mat4 m_matInvView = glm::mat4(1.0f);
+
     SysCounterPtr m_changeCounter = {};
 
     glm::vec4 m_clearColor{0.032f, 0.049f, 0.074f, 1.0f};

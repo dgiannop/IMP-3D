@@ -9,6 +9,7 @@ FetchContent_Declare(
   URL https://github.com/g-truc/glm/archive/refs/tags/1.0.1.zip
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
+add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)
 FetchContent_MakeAvailable(glm)
 
 if (MSVC)

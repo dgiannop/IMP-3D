@@ -9,7 +9,7 @@ include(FetchContent)
 
 FetchContent_Declare(
   glm
-  URL https://github.com/g-truc/glm/archive/refs/tags/0.9.9.8.zip
+  URL https://github.com/g-truc/glm/archive/refs/tags/1.0.1.zip
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)

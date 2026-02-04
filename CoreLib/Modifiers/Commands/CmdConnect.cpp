@@ -662,8 +662,5 @@ bool CmdConnect::execute(Scene* scene)
         }
     }
 
-    // if (scene)
-    // scene->report("Connect command", true);
-
     return any;
 }
