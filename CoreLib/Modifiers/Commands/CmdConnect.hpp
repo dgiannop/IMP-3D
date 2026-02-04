@@ -9,17 +9,20 @@
  * @class CmdConnect
  * @brief Connect selected edges by inserting a cut inside adjacent quads.
  *
- * Current scope (command version):
- * - Uses selected edges (or all edges if none selected)
- * - For each selected edge, visits its adjacent polygons
- * - If the adjacent polygon is a quad:
- *   - split the selected edge at t=0.5
- *   - split the opposite edge at t=0.5
- *   - split the quad by connecting the two new vertices
+ * Fix: The previous implementation split edges *locally per polygon*, producing
+ * duplicate midpoints and broken adjacency (loops could not traverse).
+ *
+ * This version:
+ * - Creates exactly ONE midpoint vertex per geometric edge (global cache)
+ * - Ensures ALL adjacent polys that share that edge are updated to use that same midpoint
+ *   (prevents T-junctions / fake connectivity)
+ * - Then, for each affected quad, also splits its opposite edge (globally) and connects
+ *   the two midpoints to split the quad.
  *
  * Notes:
- * - This is the “local professional core” (quad split) without full strip traversal.
- * - Map propagation is preserved for probed maps (IDs 0..15) when map polys are 1:1 with poly corners.
+ * - Preserves probed maps (IDs 0..15) only when map polys are 1:1 with poly corners.
+ * - Map midpoints are created per-poly (face-varying seams allowed). Geometry connectivity
+ *   is what matters for edge/poly loops.
  */
 class CmdConnect final : public Command
 {

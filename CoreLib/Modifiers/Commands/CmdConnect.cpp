@@ -3,8 +3,8 @@
 //=============================================================================
 #include "CmdConnect.hpp"
 
-#include <algorithm>
 #include <cstdint>
+#include <glm/glm.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -16,7 +16,7 @@
 namespace
 {
     // ------------------------------------------------------------
-    // Helpers
+    // Hash for IndexPair edges
     // ------------------------------------------------------------
     struct EdgeHash
     {
@@ -28,6 +28,9 @@ namespace
         }
     };
 
+    // ------------------------------------------------------------
+    // Map probing (like your old code: id 0..15)
+    // ------------------------------------------------------------
     static std::vector<int32_t> collect_maps_to_preserve(const SysMesh* mesh)
     {
         std::vector<int32_t> maps = {};
@@ -46,88 +49,118 @@ namespace
         return maps;
     }
 
-    static bool poly_contains_edge(const SysPolyVerts& pv, const IndexPair& eSorted) noexcept
+    // ------------------------------------------------------------
+    // Old-school "connect_poly_verts" but index-based, returns two index lists.
+    // This is your 2016 helper verbatim in spirit.
+    // ------------------------------------------------------------
+    using CntPoly  = std::vector<int>;
+    using CntPolys = std::vector<CntPoly>;
+
+    static CntPolys connect_poly_indices(int valence, int v1, int v2)
     {
-        const int n = static_cast<int>(pv.size());
-        if (n < 2)
-            return false;
+        CntPolys res = {};
+        if (valence < 3 || v1 < 0 || v2 < 0 || v1 == v2)
+            return res;
 
-        for (int i = 0; i < n; ++i)
+        int     index     = 0;
+        CntPoly new_pv[2] = {};
+
+        for (int prev = valence - 1, next = 0; next < valence; prev = next++)
         {
-            const int32_t a = pv[i];
-            const int32_t b = pv[(i + 1) % n];
-
-            if (SysMesh::sort_edge({a, b}) == eSorted)
-                return true;
+            if ((next == v1 || next == v2) && !(prev == v1 || prev == v2))
+            {
+                new_pv[index].push_back(next);
+                index = index == 0 ? 1 : 0;
+            }
+            new_pv[index].push_back(next);
         }
 
-        return false;
-    }
-
-    static int find_edge_index_in_poly(const SysPolyVerts& pv, const IndexPair& eSorted) noexcept
-    {
-        const int n = static_cast<int>(pv.size());
-        for (int i = 0; i < n; ++i)
+        if (new_pv[0].size() > 2 && new_pv[1].size() > 2)
         {
-            const int32_t a = pv[i];
-            const int32_t b = pv[(i + 1) % n];
-            if (SysMesh::sort_edge({a, b}) == eSorted)
-                return i;
+            res.push_back(new_pv[0]);
+            res.push_back(new_pv[1]);
         }
-        return -1;
-    }
 
-    static IndexPair poly_edge_at(const SysPolyVerts& pv, int i) noexcept
-    {
-        const int     n = static_cast<int>(pv.size());
-        const int32_t a = pv[i];
-        const int32_t b = pv[(i + 1) % n];
-        return SysMesh::sort_edge({a, b});
+        return res;
     }
 
     // ------------------------------------------------------------
-    // Split a specific edge within a specific polygon (local split).
+    // Clone a "corner map poly" by copying coordinates (like your old code did:
+    // it created new map verts per corner).
     //
-    // Returns: {newPolyId, newVertexId}
-    //
-    // This avoids modifying every poly sharing the edge and keeps the operation local.
+    // This keeps maps stable even if the old map verts were shared elsewhere.
     // ------------------------------------------------------------
-    static std::pair<int32_t, int32_t> split_edge_in_poly(SysMesh&                    mesh,
+    static SysPolyVerts clone_map_poly_from_indices(SysMesh&            mesh,
+                                                    int32_t             map,
+                                                    const SysPolyVerts& oldMapPoly,
+                                                    const CntPoly&      idxList)
+    {
+        SysPolyVerts out = {};
+        out.reserve(idxList.size());
+
+        const int dim = mesh.map_dim(map);
+
+        for (int i : idxList)
+        {
+            if (i < 0 || i >= static_cast<int>(oldMapPoly.size()))
+                return {};
+
+            const int32_t mv = oldMapPoly[i];
+            const float*  p  = mesh.map_vert_position(map, mv);
+            if (!p)
+                return {};
+
+            float tmp[4] = {0.f, 0.f, 0.f, 0.f};
+            for (int k = 0; k < dim && k < 4; ++k)
+                tmp[k] = p[k];
+
+            out.push_back(mesh.map_create_vert(map, tmp));
+        }
+
+        return out;
+    }
+
+    // ------------------------------------------------------------
+    // Connect two existing boundary verts (by vertex IDs) in a poly.
+    //
+    // Replaces poly with 2 new polys using clone/remove (like old poly.clone()+poly.remove()).
+    // Also clones probed maps (0..15) when map poly corners are 1:1.
+    //
+    // Returns: {p1,p2} or {-1,-1}
+    // ------------------------------------------------------------
+    static std::pair<int32_t, int32_t> connect_poly_verts(SysMesh&                    mesh,
                                                           int32_t                     poly,
-                                                          const IndexPair&            edgeIn,
-                                                          float                       t,
+                                                          int32_t                     vA,
+                                                          int32_t                     vB,
                                                           const std::vector<int32_t>& maps)
     {
         if (!mesh.poly_valid(poly))
             return {-1, -1};
-
-        const IndexPair edge = SysMesh::sort_edge(edgeIn);
 
         const SysPolyVerts pv = mesh.poly_verts(poly);
         const int          n  = static_cast<int>(pv.size());
         if (n < 3)
             return {-1, -1};
 
-        if (!poly_contains_edge(pv, edge))
-            return {-1, -1};
+        int ia = -1;
+        int ib = -1;
 
-        for (int32_t v : pv)
+        for (int i = 0; i < n; ++i)
         {
-            if (!mesh.vert_valid(v))
-                return {-1, -1};
+            if (pv[i] == vA)
+                ia = i;
+            if (pv[i] == vB)
+                ib = i;
         }
 
-        // Create the new vertex at t on the geometric edge.
-        const int32_t a = edge.first;
-        const int32_t b = edge.second;
+        if (ia < 0 || ib < 0 || ia == ib)
+            return {-1, -1};
 
-        const glm::vec3 pa = mesh.vert_position(a);
-        const glm::vec3 pb = mesh.vert_position(b);
-        const glm::vec3 pm = glm::mix(pa, pb, t);
+        const CntPolys splits = connect_poly_indices(n, ia, ib);
+        if (splits.size() != 2)
+            return {-1, -1};
 
-        const int32_t vm = mesh.create_vert(pm);
-
-        // Gather per-map corner arrays (only if aligned 1:1 with pv)
+        // Gather aligned map polys (only if 1:1 with base corners)
         struct PolyMapInfo
         {
             int32_t      map   = -1;
@@ -152,6 +185,143 @@ namespace
             polyMaps.push_back(info);
         }
 
+        auto build_geom = [&](const CntPoly& idxList) -> SysPolyVerts {
+            SysPolyVerts out = {};
+            out.reserve(idxList.size());
+            for (int idx : idxList)
+            {
+                if (idx < 0 || idx >= n)
+                    return {};
+                out.push_back(pv[idx]);
+            }
+            return out;
+        };
+
+        const SysPolyVerts pv1 = build_geom(splits[0]);
+        const SysPolyVerts pv2 = build_geom(splits[1]);
+        if (pv1.size() < 3 || pv2.size() < 3)
+            return {-1, -1};
+
+        const int32_t p1 = mesh.clone_poly(poly, pv1);
+        const int32_t p2 = mesh.clone_poly(poly, pv2);
+
+        // Clone maps per corner (like your old code)
+        for (const PolyMapInfo& pm : polyMaps)
+        {
+            if (!pm.valid)
+                continue;
+
+            const SysPolyVerts mp1 = clone_map_poly_from_indices(mesh, pm.map, pm.mpv, splits[0]);
+            const SysPolyVerts mp2 = clone_map_poly_from_indices(mesh, pm.map, pm.mpv, splits[1]);
+
+            if (mp1.size() == pv1.size())
+                mesh.map_create_poly(pm.map, p1, mp1);
+            if (mp2.size() == pv2.size())
+                mesh.map_create_poly(pm.map, p2, mp2);
+
+            mesh.map_remove_poly(pm.map, poly);
+        }
+
+        mesh.remove_poly(poly);
+        return {p1, p2};
+    }
+
+    // ------------------------------------------------------------
+    // Edge midpoint cache (the SysMesh equivalent of your old AutoWelder use here).
+    //
+    // Key point: ONE midpoint vertex per geometric edge -> real connectivity.
+    // ------------------------------------------------------------
+    static int32_t get_or_create_midpoint(SysMesh&                                          mesh,
+                                          const IndexPair&                                  eIn,
+                                          float                                             t,
+                                          std::unordered_map<IndexPair, int32_t, EdgeHash>& midCache)
+    {
+        const IndexPair e = SysMesh::sort_edge(eIn);
+
+        if (auto it = midCache.find(e); it != midCache.end())
+            return it->second;
+
+        if (!mesh.vert_valid(e.first) || !mesh.vert_valid(e.second))
+            return -1;
+
+        const glm::vec3 pa = mesh.vert_position(e.first);
+        const glm::vec3 pb = mesh.vert_position(e.second);
+        const glm::vec3 pm = glm::mix(pa, pb, t);
+
+        const int32_t vm = mesh.create_vert(pm);
+        midCache.emplace(e, vm);
+        return vm;
+    }
+
+    // ------------------------------------------------------------
+    // Insert an existing midpoint vertex (vm) into a polygon along edge (a,b).
+    // Rebuilds the poly via clone/remove, and clones maps per corner.
+    //
+    // Returns: newPolyId on success (poly becomes this), or -1 on failure.
+    //
+    // NOTE: This is intentionally "old-style":
+    // - Only rewrites THIS poly.
+    // - Neighbor polys will also insert the SAME vm later because of midCache,
+    //   exactly like your old split_edge + AutoWelder behavior.
+    // ------------------------------------------------------------
+    static int32_t split_edge_in_poly(SysMesh&                    mesh,
+                                      int32_t                     poly,
+                                      const IndexPair&            eIn,
+                                      int32_t                     vm,
+                                      float                       t,
+                                      const std::vector<int32_t>& maps)
+    {
+        if (!mesh.poly_valid(poly))
+            return -1;
+
+        const IndexPair e = SysMesh::sort_edge(eIn);
+
+        const SysPolyVerts pv = mesh.poly_verts(poly);
+        const int          n  = static_cast<int>(pv.size());
+        if (n < 3)
+            return -1;
+
+        // Find edge index
+        int edgeIdx = -1;
+        for (int i = 0; i < n; ++i)
+        {
+            const int32_t a = pv[i];
+            const int32_t b = pv[(i + 1) % n];
+            if (SysMesh::sort_edge({a, b}) == e)
+            {
+                edgeIdx = i;
+                break;
+            }
+        }
+        if (edgeIdx < 0)
+            return -1;
+
+        // Gather aligned map polys
+        struct PolyMapInfo
+        {
+            int32_t      map   = -1;
+            SysPolyVerts mpv   = {};
+            bool         valid = false;
+        };
+
+        std::vector<PolyMapInfo> polyMaps = {};
+        polyMaps.reserve(maps.size());
+
+        for (int32_t map : maps)
+        {
+            PolyMapInfo info = {};
+            info.map         = map;
+
+            if (mesh.map_poly_valid(map, poly))
+            {
+                info.mpv   = mesh.map_poly_verts(map, poly);
+                info.valid = (info.mpv.size() == pv.size());
+            }
+
+            polyMaps.push_back(info);
+        }
+
+        // Build new poly verts with vm inserted after pv[edgeIdx]
         SysPolyVerts nv = {};
         nv.reserve(pv.size() + 1);
 
@@ -166,39 +336,41 @@ namespace
 
         for (int i = 0; i < n; ++i)
         {
-            const int32_t v0 = pv[i];
-            const int32_t v1 = pv[(i + 1) % n];
+            nv.push_back(pv[i]);
 
-            nv.push_back(v0);
             for (size_t mi = 0; mi < polyMaps.size(); ++mi)
             {
                 if (polyMaps[mi].valid)
                     newMapPolys[mi].push_back(polyMaps[mi].mpv[i]);
             }
 
-            if (SysMesh::sort_edge({v0, v1}) == edge)
+            if (i == edgeIdx)
             {
                 nv.push_back(vm);
 
+                // Insert per-poly map midpoint (lerp endpoints)
                 for (size_t mi = 0; mi < polyMaps.size(); ++mi)
                 {
                     if (!polyMaps[mi].valid)
                         continue;
 
+                    const int32_t map = polyMaps[mi].map;
+
                     const int32_t mv0 = polyMaps[mi].mpv[i];
                     const int32_t mv1 = polyMaps[mi].mpv[(i + 1) % n];
 
-                    const float* a0 = mesh.map_vert_position(polyMaps[mi].map, mv0);
-                    const float* a1 = mesh.map_vert_position(polyMaps[mi].map, mv1);
-
-                    const int dim = mesh.map_dim(polyMaps[mi].map);
+                    const float* a0  = mesh.map_vert_position(map, mv0);
+                    const float* a1  = mesh.map_vert_position(map, mv1);
+                    const int    dim = mesh.map_dim(map);
 
                     float tmp[4] = {0.f, 0.f, 0.f, 0.f};
-                    for (int k = 0; k < dim && k < 4; ++k)
-                        tmp[k] = a0[k] + (a1[k] - a0[k]) * t;
+                    if (a0 && a1)
+                    {
+                        for (int k = 0; k < dim && k < 4; ++k)
+                            tmp[k] = a0[k] + (a1[k] - a0[k]) * t;
+                    }
 
-                    const int32_t mvm = mesh.map_create_vert(polyMaps[mi].map, tmp);
-                    newMapPolys[mi].push_back(mvm);
+                    newMapPolys[mi].push_back(mesh.map_create_vert(map, tmp));
                 }
             }
         }
@@ -210,190 +382,250 @@ namespace
             if (!polyMaps[mi].valid)
                 continue;
 
-            mesh.map_create_poly(polyMaps[mi].map, newPoly, newMapPolys[mi]);
-            mesh.map_remove_poly(polyMaps[mi].map, poly);
+            // Clone per-corner map verts (like old code did) for stability
+            // We already inserted a fresh map vert for the midpoint, but we still want
+            // per-poly uniqueness across all corners of the new poly, so recreate them.
+            //
+            // If you prefer reuse (lighter), replace this with direct map_create_poly(...)
+            // using newMapPolys[mi].
+            SysPolyVerts cloned = {};
+            cloned.reserve(newMapPolys[mi].size());
+
+            const int map = polyMaps[mi].map;
+            const int dim = mesh.map_dim(map);
+
+            for (int32_t mv : newMapPolys[mi])
+            {
+                const float* p      = mesh.map_vert_position(map, mv);
+                float        tmp[4] = {0.f, 0.f, 0.f, 0.f};
+
+                if (p)
+                {
+                    for (int k = 0; k < dim && k < 4; ++k)
+                        tmp[k] = p[k];
+                }
+
+                cloned.push_back(mesh.map_create_vert(map, tmp));
+            }
+
+            mesh.map_create_poly(map, newPoly, cloned);
+            mesh.map_remove_poly(map, poly);
         }
 
         mesh.remove_poly(poly);
-        return {newPoly, vm};
+        return newPoly;
     }
 
     // ------------------------------------------------------------
-    // Split polygon by connecting two boundary vertices (vA, vB)
-    // Replaces poly with two new polys. Preserves probed maps when 1:1.
-    // Returns: {p1, p2} or {-1,-1} on failure.
+    // EDGE-mode core (ported from your old code):
+    // For each poly that has >=2 selected edges:
+    //   split those selected edges (midpoints),
+    //   connect the two midpoints inside the poly.
     // ------------------------------------------------------------
-    static std::pair<int32_t, int32_t> split_poly_connect_boundary(SysMesh&                    mesh,
-                                                                   int32_t                     poly,
-                                                                   int32_t                     vA,
-                                                                   int32_t                     vB,
-                                                                   const std::vector<int32_t>& maps)
+    static bool connect_selected_edges_in_mesh(SysMesh& mesh, const std::vector<int32_t>& maps)
     {
-        if (!mesh.poly_valid(poly))
-            return {-1, -1};
+        const auto& selEdges = mesh.selected_edges();
+        if (selEdges.empty())
+            return false;
 
-        const SysPolyVerts pv = mesh.poly_verts(poly);
-        const int          n  = static_cast<int>(pv.size());
-        if (n < 4)
-            return {-1, -1};
+        std::unordered_set<IndexPair, EdgeHash> selSet = {};
+        selSet.reserve(selEdges.size() * 2);
 
-        int ia = -1;
-        int ib = -1;
-        for (int i = 0; i < n; ++i)
+        for (const IndexPair& eIn : selEdges)
+            selSet.insert(SysMesh::sort_edge(eIn));
+
+        // Unique polys touched by selected edges (like old IndexSet logic)
+        std::unordered_set<int32_t> polySet = {};
+        polySet.reserve(selEdges.size() * 2);
+
+        for (const IndexPair& eIn : selEdges)
         {
-            if (pv[i] == vA)
-                ia = i;
-            if (pv[i] == vB)
-                ib = i;
-        }
-        if (ia < 0 || ib < 0 || ia == ib)
-            return {-1, -1};
+            const IndexPair e   = SysMesh::sort_edge(eIn);
+            SysEdgePolys    adj = mesh.edge_polys(e);
 
-        SysPolyVerts path1 = {};
-        for (int i = ia; i != ib; i = (i + 1) % n)
-            path1.push_back(pv[i]);
-        path1.push_back(pv[ib]);
-
-        SysPolyVerts path2 = {};
-        for (int i = ib; i != ia; i = (i + 1) % n)
-            path2.push_back(pv[i]);
-        path2.push_back(pv[ia]);
-
-        if (path1.size() < 3 || path2.size() < 3)
-            return {-1, -1};
-
-        struct PolyMapInfo
-        {
-            int32_t      map   = -1;
-            SysPolyVerts mpv   = {};
-            bool         valid = false;
-        };
-
-        std::vector<PolyMapInfo> polyMaps = {};
-        polyMaps.reserve(maps.size());
-
-        for (int32_t map : maps)
-        {
-            PolyMapInfo info = {};
-            info.map         = map;
-
-            if (mesh.map_poly_valid(map, poly))
-            {
-                info.mpv   = mesh.map_poly_verts(map, poly);
-                info.valid = (info.mpv.size() == pv.size());
-            }
-
-            polyMaps.push_back(info);
+            for (int32_t pi : adj)
+                if (mesh.poly_valid(pi))
+                    polySet.insert(pi);
         }
 
-        auto buildMapped = [&](const SysPolyVerts& path, const SysPolyVerts& mpv) -> SysPolyVerts {
-            SysPolyVerts out = {};
-            out.reserve(path.size());
+        std::vector<int32_t> polys = {};
+        polys.reserve(polySet.size());
 
-            for (int32_t v : path)
-            {
-                int idx = -1;
-                for (int i = 0; i < n; ++i)
-                {
-                    if (pv[i] == v)
-                    {
-                        idx = i;
-                        break;
-                    }
-                }
-                if (idx < 0)
-                    return {};
-                out.push_back(mpv[idx]);
-            }
+        for (int32_t p : polySet)
+            polys.push_back(p);
 
-            return out;
-        };
+        // Midpoint cache = AutoWelder equivalent for this tool
+        std::unordered_map<IndexPair, int32_t, EdgeHash> midCache = {};
+        midCache.reserve(selSet.size() * 2);
 
-        const int32_t p1 = mesh.clone_poly(poly, path1);
-        const int32_t p2 = mesh.clone_poly(poly, path2);
+        bool            any = false;
+        constexpr float t   = 0.5f;
 
-        for (const PolyMapInfo& pm : polyMaps)
+        for (int32_t poly0 : polys)
         {
-            if (!pm.valid)
+            int32_t poly = poly0;
+            if (!mesh.poly_valid(poly))
                 continue;
 
-            SysPolyVerts m1 = buildMapped(path1, pm.mpv);
-            SysPolyVerts m2 = buildMapped(path2, pm.mpv);
+            // Find first 2 selected edges that belong to this poly (same as old code)
+            std::vector<IndexPair> chosen = {};
+            chosen.reserve(2);
 
-            if (!m1.empty())
-                mesh.map_create_poly(pm.map, p1, m1);
-            if (!m2.empty())
-                mesh.map_create_poly(pm.map, p2, m2);
-
-            mesh.map_remove_poly(pm.map, poly);
-        }
-
-        mesh.remove_poly(poly);
-        return {p1, p2};
-    }
-
-    // ------------------------------------------------------------
-    // Build a list of edges to connect, based on current selection mode.
-    // - EDGES: selected edges only
-    // - POLYS: outline edges of selected polys (count==1 among selection)
-    // - VERTS: no-op (for now)
-    // ------------------------------------------------------------
-    static std::vector<IndexPair> build_edges_to_connect(SysMesh* mesh, SelectionMode mode)
-    {
-        if (!mesh)
-            return {};
-
-        // EDGES mode: strict selection only
-        if (mode == SelectionMode::EDGES)
-        {
-            const auto& selEdges = mesh->selected_edges();
-            if (selEdges.empty())
-                return {};
-            return selEdges;
-        }
-
-        // POLYS mode: derive outline edges from selected polys
-        // POLYS mode: derive INTERNAL edges from selected polys (count==2 among selection)
-        if (mode == SelectionMode::POLYS)
-        {
-            const auto& selPolys = mesh->selected_polys();
-            if (selPolys.empty())
-                return {};
-
-            std::unordered_map<IndexPair, int32_t, EdgeHash> counts = {};
-            counts.reserve(selPolys.size() * 8);
-
-            for (int32_t pi : selPolys)
+            const SysPolyEdges pe = mesh.poly_edges(poly);
+            for (const IndexPair& eIn : pe)
             {
-                if (!mesh->poly_valid(pi))
-                    continue;
-
-                const SysPolyEdges pe = mesh->poly_edges(pi);
-                for (const IndexPair& eIn : pe)
+                const IndexPair e = SysMesh::sort_edge(eIn);
+                if (selSet.contains(e))
                 {
-                    const IndexPair e = SysMesh::sort_edge(eIn);
-                    if (!mesh->vert_valid(e.first) || !mesh->vert_valid(e.second))
-                        continue;
-
-                    counts[e] += 1;
+                    chosen.push_back(e);
+                    if (chosen.size() == 2)
+                        break;
                 }
             }
 
-            std::vector<IndexPair> out = {};
-            out.reserve(counts.size());
+            if (chosen.size() < 2)
+                continue;
 
-            // INTERNAL edges only: appear twice among selected polys
-            for (const auto& [e, c] : counts)
-            {
-                if (c == 2)
-                    out.push_back(e);
-            }
+            // Split first selected edge
+            const int32_t v0 = get_or_create_midpoint(mesh, chosen[0], t, midCache);
+            if (v0 < 0)
+                continue;
 
-            return out;
+            poly = split_edge_in_poly(mesh, poly, chosen[0], v0, t, maps);
+            if (poly < 0 || !mesh.poly_valid(poly))
+                continue;
+
+            // Split second selected edge (still by original endpoints)
+            const int32_t v1 = get_or_create_midpoint(mesh, chosen[1], t, midCache);
+            if (v1 < 0)
+                continue;
+
+            poly = split_edge_in_poly(mesh, poly, chosen[1], v1, t, maps);
+            if (poly < 0 || !mesh.poly_valid(poly))
+                continue;
+
+            // Now connect the two midpoints inside this (new) polygon
+            auto [p1, p2] = connect_poly_verts(mesh, poly, v0, v1, maps);
+            if (p1 >= 0 && p2 >= 0)
+                any = true;
         }
 
-        // VERTS mode: not supported in this command version
-        return {};
+        return any;
+    }
+
+    // ------------------------------------------------------------
+    // VERT-mode (ported: connect first/last selected verts within a poly)
+    // ------------------------------------------------------------
+    static bool connect_selected_verts_in_mesh(SysMesh& mesh, const std::vector<int32_t>& maps)
+    {
+        const auto& selVerts = mesh.selected_verts();
+        if (selVerts.size() < 2)
+            return false;
+
+        // Candidate polys: those that have >=2 selected verts
+        std::unordered_set<int32_t> polySet = {};
+        polySet.reserve(selVerts.size() * 2);
+
+        for (int32_t v : selVerts)
+        {
+            if (!mesh.vert_valid(v))
+                continue;
+
+            const SysVertPolys vp = mesh.vert_polys(v);
+            for (int32_t p : vp)
+                if (mesh.poly_valid(p))
+                    polySet.insert(p);
+        }
+
+        bool any = false;
+
+        for (int32_t poly : polySet)
+        {
+            if (!mesh.poly_valid(poly))
+                continue;
+
+            const SysPolyVerts pv = mesh.poly_verts(poly);
+
+            std::vector<int32_t> picked = {};
+            picked.reserve(4);
+
+            for (int32_t v : pv)
+            {
+                if (mesh.vert_selected(v))
+                    picked.push_back(v);
+            }
+
+            if (picked.size() < 2)
+                continue;
+
+            // Old behavior: connect selection.front() and selection.back()
+            auto [p1, p2] = connect_poly_verts(mesh, poly, picked.front(), picked.back(), maps);
+            if (p1 >= 0 && p2 >= 0)
+                any = true;
+        }
+
+        return any;
+    }
+
+    // ------------------------------------------------------------
+    // POLY-mode (simple fallback port):
+    // Treat internal edges (count==2 among selected polys) as "selected edges"
+    // and run EDGE-mode core on them by temporarily selecting those edges.
+    //
+    // This is not the full 2016 strip/loop grouping logic, but it preserves
+    // the "select polys -> connect along shared structure" feel without
+    // complex ordering dependencies.
+    // ------------------------------------------------------------
+    static bool connect_selected_polys_simple(SysMesh& mesh, const std::vector<int32_t>& maps)
+    {
+        const auto& selPolys = mesh.selected_polys();
+        if (selPolys.empty())
+            return false;
+
+        std::unordered_map<IndexPair, int32_t, EdgeHash> edgeCounts = {};
+        edgeCounts.reserve(selPolys.size() * 8);
+
+        for (int32_t p : selPolys)
+        {
+            if (!mesh.poly_valid(p))
+                continue;
+
+            const SysPolyEdges pe = mesh.poly_edges(p);
+            for (const IndexPair& eIn : pe)
+            {
+                const IndexPair e = SysMesh::sort_edge(eIn);
+                edgeCounts[e] += 1;
+            }
+        }
+
+        // Build internal edges list (count==2)
+        std::vector<IndexPair> internalEdges = {};
+        internalEdges.reserve(edgeCounts.size());
+
+        for (const auto& [e, c] : edgeCounts)
+        {
+            if (c == 2)
+                internalEdges.push_back(e);
+        }
+
+        if (internalEdges.empty())
+            return false;
+
+        // Temporarily set edge selection to these edges
+        const auto oldSel = mesh.selected_edges();
+
+        mesh.clear_selected_edges();
+        for (const IndexPair& e : internalEdges)
+            mesh.select_edge(e, true);
+
+        const bool any = connect_selected_edges_in_mesh(mesh, maps);
+
+        // Restore original selection
+        mesh.clear_selected_edges();
+        for (const IndexPair& e : oldSel)
+            mesh.select_edge(e, true);
+
+        return any;
     }
 
 } // namespace
@@ -407,107 +639,31 @@ bool CmdConnect::execute(Scene* scene)
 
     const SelectionMode mode = scene->selectionMode();
 
-    for (SysMesh* mesh : scene->activeMeshes())
+    for (SysMesh* meshPtr : scene->activeMeshes())
     {
-        if (!mesh)
+        if (!meshPtr)
             continue;
 
-        const std::vector<int32_t> maps = collect_maps_to_preserve(mesh);
+        SysMesh& mesh = *meshPtr;
 
-        std::vector<IndexPair> edgesToConnect = build_edges_to_connect(mesh, mode);
-        if (edgesToConnect.empty())
-            continue;
+        const std::vector<int32_t> maps = collect_maps_to_preserve(&mesh);
 
-        std::unordered_set<int32_t> selectedPolySet = {};
-
-        if (mode == SelectionMode::POLYS)
+        if (mode == SelectionMode::VERTS)
         {
-            const auto& selp = mesh->selected_polys();
-            selectedPolySet.reserve(selp.size() * 2);
-            for (int32_t p : selp)
-                if (mesh->poly_valid(p))
-                    selectedPolySet.insert(p);
+            any |= connect_selected_verts_in_mesh(mesh, maps);
         }
-
-        // Dedupe edges (sorted key)
-        std::unordered_set<IndexPair, EdgeHash> uniqueEdges = {};
-        uniqueEdges.reserve(edgesToConnect.size() * 2);
-
-        for (const IndexPair& eIn : edgesToConnect)
+        else if (mode == SelectionMode::EDGES)
         {
-            const IndexPair e = SysMesh::sort_edge(eIn);
-            if (!mesh->vert_valid(e.first) || !mesh->vert_valid(e.second))
-                continue;
-
-            uniqueEdges.insert(e);
+            any |= connect_selected_edges_in_mesh(mesh, maps);
         }
-
-        if (uniqueEdges.empty())
-            continue;
-
-        std::unordered_set<int32_t> visitedPolys = {};
-        visitedPolys.reserve(256);
-
-        std::vector<IndexPair> newEdgesToSelect = {};
-        newEdgesToSelect.reserve(uniqueEdges.size());
-
-        constexpr float t = 0.5f;
-
-        for (const IndexPair& e : uniqueEdges)
+        else if (mode == SelectionMode::POLYS)
         {
-            SysEdgePolys adj = mesh->edge_polys(e);
-
-            for (int32_t pi0 : adj)
-            {
-                if (!mesh->poly_valid(pi0))
-                    continue;
-
-                if (visitedPolys.contains(pi0))
-                    continue;
-
-                const SysPolyVerts pv0 = mesh->poly_verts(pi0);
-                if (pv0.size() != 4)
-                    continue;
-
-                const IndexPair eSorted = SysMesh::sort_edge(e);
-                const int       edgeIdx = find_edge_index_in_poly(pv0, eSorted);
-                if (edgeIdx < 0)
-                    continue;
-
-                const IndexPair opp0 = poly_edge_at(pv0, (edgeIdx + 2) & 3);
-
-                auto [p1, vA] = split_edge_in_poly(*mesh, pi0, eSorted, t, maps);
-                if (p1 < 0 || vA < 0)
-                    continue;
-
-                const SysPolyVerts pv1 = mesh->poly_verts(p1);
-                if (pv1.size() != 5)
-                    continue;
-
-                auto [p2, vB] = split_edge_in_poly(*mesh, p1, opp0, t, maps);
-                if (p2 < 0 || vB < 0)
-                    continue;
-
-                auto [c1, c2] = split_poly_connect_boundary(*mesh, p2, vA, vB, maps);
-                if (c1 < 0 || c2 < 0)
-                    continue;
-
-                visitedPolys.insert(pi0);
-                newEdgesToSelect.push_back(SysMesh::sort_edge({vA, vB}));
-                any = true;
-            }
-        }
-
-        if (any)
-        {
-            // Selection feedback:
-            // - If we were in POLYS mode, switch edge selection so user sees the new cuts.
-            // - If we were in EDGES mode, same behavior.
-            mesh->clear_selected_edges();
-            for (const IndexPair& ne : newEdgesToSelect)
-                mesh->select_edge(ne, true);
+            any |= connect_selected_polys_simple(mesh, maps);
         }
     }
+
+    // if (scene)
+    // scene->report("Connect command", true);
 
     return any;
 }
