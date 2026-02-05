@@ -11,7 +11,7 @@ struct LightingSettings
     // Sources (global switches)
     // --------------------------------------------------------
     bool useHeadlight   = true;
-    bool useSceneLights = true;
+    bool useSceneLights = false;
 
     float headlightIntensity = 1.0f;
     float ambientFill        = 0.10f;
