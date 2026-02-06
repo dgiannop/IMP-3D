@@ -38,8 +38,6 @@ class TextureHandler;
 class Viewport;
 class MeshGpuResources;
 
-constexpr uint32_t kMaxTextureCount = 512;
-
 /**
  * @brief Minimal Vulkan renderer for the app.
  *

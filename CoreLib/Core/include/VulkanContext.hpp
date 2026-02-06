@@ -24,6 +24,23 @@ namespace vkcfg
      * before being used for indexing.
      */
     static constexpr std::uint32_t kMaxFramesInFlight = 2;
+
+    /**
+     * @brief Maximum number of textures addressable by the material system.
+     *
+     * This defines the size of the global texture table bound to shaders
+     * (e.g. a combined image sampler array in set=1).
+     *
+     * The value must remain a compile-time constant so descriptor set layouts,
+     * pipelines, and shader bindings can be created deterministically.
+     *
+     * Note:
+     *  - Not all slots need to be populated; unused entries are bound to a
+     *    fallback texture to keep descriptors valid.
+     *  - Increasing this value has descriptor pool and binding cost implications.
+     */
+    static constexpr std::uint32_t kMaxTextureCount = 512;
+
 } // namespace vkcfg
 
 /**

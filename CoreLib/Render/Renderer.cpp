@@ -1154,7 +1154,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         matBindings[1].binding = 1;
         matBindings[1].type    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         matBindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-        matBindings[1].count   = kMaxTextureCount;
+        matBindings[1].count   = vkcfg::kMaxTextureCount;
 
         if (!m_materialSetLayout.create(device, std::span{matBindings, 2}))
         {
@@ -1175,7 +1175,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     std::array<VkDescriptorPoolSize, 3> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, rasterSetCount * 3u},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, materialSetCount},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSetCount * kMaxTextureCount},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSetCount * vkcfg::kMaxTextureCount},
     };
 
     const uint32_t maxSets = rasterSetCount + materialSetCount;
@@ -1315,10 +1315,10 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
         return;
 
     std::vector<VkDescriptorImageInfo> infos = {};
-    infos.resize(kMaxTextureCount);
+    infos.resize(vkcfg::kMaxTextureCount);
 
     // Fill all entries with fallback first (guarantees non-null for unused slots).
-    for (uint32_t i = 0; i < kMaxTextureCount; ++i)
+    for (uint32_t i = 0; i < vkcfg::kMaxTextureCount; ++i)
     {
         VkDescriptorImageInfo info = {};
         info.imageLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1328,7 +1328,7 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
     }
 
     const int texCount = static_cast<int>(textureHandler.size());
-    const int count    = std::min(texCount, static_cast<int>(kMaxTextureCount));
+    const int count    = std::min(texCount, static_cast<int>(vkcfg::kMaxTextureCount));
 
     // Overwrite with real textures where available.
     for (int i = 0; i < count; ++i)
