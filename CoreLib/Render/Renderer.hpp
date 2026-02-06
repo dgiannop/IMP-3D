@@ -261,7 +261,8 @@ private:
     // Materials (raster + RT path)
     void uploadMaterialsToGpu(const std::vector<Material>& materials,
                               TextureHandler&              texHandler,
-                              uint32_t                     frameIndex);
+                              uint32_t                     frameIndex,
+                              const RenderFrameContext&    fc);
 
     // Grid / overlays / selection (raster path)
     void drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene);
@@ -470,13 +471,19 @@ private:
     // ============================================================
 
     /// GPU buffer backing the materials SSBO (set=1, binding=0).
-    GpuBuffer m_materialBuffer = {};
+    // GpuBuffer m_materialBuffer = {};
+    std::array<GpuBuffer, vkcfg::kMaxFramesInFlight> m_materialBuffers = {};
 
     /// Current number of Material entries stored in m_materialBuffer.
     std::uint32_t m_materialCount = 0;
 
-    /// Change-counter snapshot for Scene materials (to avoid redundant uploads).
-    std::uint64_t m_curMaterialCounter = 0;
+    /**
+     * @brief Per-frame snapshot of the Scene materials change counter.
+     *
+     * Each frame-in-flight slot must observe (and then upload) the change at least once,
+     * otherwise frames will alternate between old/new material data and appear to flicker.
+     */
+    std::array<std::uint64_t, vkcfg::kMaxFramesInFlight> m_materialCounterPerFrame = {};
 
 private:
     // ============================================================

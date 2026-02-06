@@ -90,6 +90,9 @@ bool Renderer::initDevice(const VulkanContext& ctx)
     m_ctx            = ctx;
     m_framesInFlight = std::clamp(m_ctx.framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
 
+    m_materialCounterPerFrame = {};
+    m_materialCount           = 0;
+
     m_viewportUbos.clear();
 
     // Fixed-size storage: reset by assignment.
@@ -181,7 +184,15 @@ void Renderer::shutdown() noexcept
         st.destroyDeviceResources(m_ctx, m_framesInFlight);
     m_rtViewports.clear();
 
-    m_materialBuffer.destroy();
+    // Destroy per-frame material buffers explicitly.
+    for (uint32_t i = 0; i < m_framesInFlight; ++i)
+    {
+        if (m_materialBuffers[i].valid())
+        {
+            m_materialBuffers[i].destroy();
+            m_materialBuffers[i] = {};
+        }
+    }
 
     for (uint32_t i = 0; i < std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight); ++i)
         m_materialSets[i] = {};
@@ -230,7 +241,6 @@ void Renderer::shutdown() noexcept
     m_overlayFillVertexCapacity = 0;
 
     m_materialCount      = 0;
-    m_curMaterialCounter = 0;
     m_framesInFlight     = 0;
 
     m_ctx = {};
@@ -490,16 +500,19 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
                                  ? m_shadedPipeline.handle()
                                  : m_solidPipeline.handle();
 
-        if (scene->materialHandler() &&
-            m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
+        if (scene->materialHandler() && scene->textureHandler())
         {
-            const auto& mats = scene->materialHandler()->materials();
-            for (uint32_t i = 0; i < m_ctx.framesInFlight; ++i)
+            const uint64_t matCounter =
+                scene->materialHandler()->changeCounter() ? scene->materialHandler()->changeCounter()->value() : 0ull;
+
+            if (m_materialCounterPerFrame[frameIdx] != matCounter)
             {
-                uploadMaterialsToGpu(mats, *scene->textureHandler(), i);
-                updateMaterialTextureTable(*scene->textureHandler(), i);
+                const auto& mats = scene->materialHandler()->materials();
+                uploadMaterialsToGpu(mats, *scene->textureHandler(), frameIdx, fc);
+                updateMaterialTextureTable(*scene->textureHandler(), frameIdx);
+
+                m_materialCounterPerFrame[frameIdx] = matCounter;
             }
-            m_curMaterialCounter = scene->materialHandler()->changeCounter()->value();
         }
 
         {
@@ -1220,36 +1233,66 @@ bool Renderer::createPipelineLayout() noexcept
 
 void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
                                     TextureHandler&              texHandler,
-                                    uint32_t                     frameIndex)
+                                    uint32_t                     frameIndex,
+                                    const RenderFrameContext&    fc)
 {
     if (frameIndex >= m_framesInFlight)
         return;
 
-    m_materialCount = static_cast<std::uint32_t>(materials.size());
+    m_materialCount = static_cast<uint32_t>(materials.size());
     if (m_materialCount == 0)
+    {
+        // Optional: still bind an empty range so descriptor is valid.
+        if (m_materialBuffers[frameIndex].valid())
+        {
+            m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device,
+                                                          0,
+                                                          m_materialBuffers[frameIndex].buffer(),
+                                                          0,
+                                                          0);
+        }
         return;
+    }
 
-    std::vector<GpuMaterial> gpuMats;
+    std::vector<GpuMaterial> gpuMats = {};
     buildGpuMaterialArray(materials, texHandler, gpuMats);
 
     const VkDeviceSize sizeBytes = static_cast<VkDeviceSize>(gpuMats.size() * sizeof(GpuMaterial));
 
-    if (!m_materialBuffer.valid() || m_materialBuffer.size() < sizeBytes)
+    GpuBuffer& buf = m_materialBuffers[frameIndex];
+
+    if (!buf.valid() || buf.size() < sizeBytes)
     {
-        m_materialBuffer.destroy();
-        m_materialBuffer.create(m_ctx.device,
-                                m_ctx.physicalDevice,
-                                sizeBytes,
-                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                false);
+        if (buf.valid())
+        {
+            if (fc.deferred)
+            {
+                GpuBuffer old = std::move(buf);
+                fc.deferred->enqueue(frameIndex, [b = std::move(old)]() mutable {
+                    b.destroy();
+                });
+            }
+            else
+            {
+                buf.destroy();
+            }
+        }
+
+        buf = {};
+        buf.create(m_ctx.device,
+                   m_ctx.physicalDevice,
+                   sizeBytes,
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   /*persistentMap*/ false);
     }
 
-    m_materialBuffer.upload(gpuMats.data(), sizeBytes);
+    buf.upload(gpuMats.data(), sizeBytes);
 
+    // IMPORTANT: set=1 binding=0 for THIS frame points to THIS frame’s SSBO.
     m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device,
                                                   0,
-                                                  m_materialBuffer.buffer(),
+                                                  buf.buffer(),
                                                   sizeBytes,
                                                   0);
 }
@@ -1268,11 +1311,10 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
     VkSampler         fbSamp   = (fallback ? fallback->sampler : VK_NULL_HANDLE);
 
     // If fallback isn't wired yet, fail safe by not updating (prevents invalid writes).
-    // This avoids crashing/validation spam until fallback is implemented.
     if (fbView == VK_NULL_HANDLE || fbSamp == VK_NULL_HANDLE)
         return;
 
-    std::vector<VkDescriptorImageInfo> infos;
+    std::vector<VkDescriptorImageInfo> infos = {};
     infos.resize(kMaxTextureCount);
 
     // Fill all entries with fallback first (guarantees non-null for unused slots).
@@ -1295,7 +1337,6 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
         if (!tex)
             continue;
 
-        // Use fallback for any missing pieces on a per-texture basis.
         VkImageView view = (tex->view != VK_NULL_HANDLE) ? tex->view : fbView;
         VkSampler   samp = (tex->sampler != VK_NULL_HANDLE) ? tex->sampler : fbSamp;
 
@@ -1307,7 +1348,7 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
         infos[static_cast<size_t>(i)] = info;
     }
 
-    // Update entire array (binding=1) with guaranteed-valid entries.
+    // set=1, binding=1
     m_materialSets[frameIndex].writeCombinedImageSamplerArray(device, 1, infos);
 }
 
@@ -2692,16 +2733,19 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
     // ------------------------------------------------------------
     // Ensure material table is up to date for RT
     // ------------------------------------------------------------
-    if (scene->materialHandler() &&
-        m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
+    if (scene->materialHandler() && scene->textureHandler())
     {
-        const auto& mats = scene->materialHandler()->materials();
-        for (uint32_t i = 0; i < m_ctx.framesInFlight; ++i)
+        const uint64_t matCounter =
+            scene->materialHandler()->changeCounter() ? scene->materialHandler()->changeCounter()->value() : 0ull;
+
+        if (m_materialCounterPerFrame[fc.frameIndex] != matCounter)
         {
-            uploadMaterialsToGpu(mats, *scene->textureHandler(), i);
-            updateMaterialTextureTable(*scene->textureHandler(), i);
+            const auto& mats = scene->materialHandler()->materials();
+            uploadMaterialsToGpu(mats, *scene->textureHandler(), fc.frameIndex, fc);
+            updateMaterialTextureTable(*scene->textureHandler(), fc.frameIndex);
+
+            m_materialCounterPerFrame[fc.frameIndex] = matCounter;
         }
-        m_curMaterialCounter = scene->materialHandler()->changeCounter()->value();
     }
 
     // ------------------------------------------------------------
