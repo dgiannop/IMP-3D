@@ -284,6 +284,751 @@ const LightingSettings& Renderer::lightingSettings() const noexcept
 }
 
 //==================================================================
+// renderPrePass (NOW does ALL MeshGpuResources::update(cmd) work here)
+//==================================================================
+
+void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
+{
+    if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
+        return;
+
+    if (fc.frameIndex >= m_framesInFlight)
+        return;
+
+    // ------------------------------------------------------------
+    // 1) Update ALL MeshGpuResources here (outside render pass)
+    // ------------------------------------------------------------
+    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
+        // IMPORTANT: update() records transfer/barrier commands.
+        // Must be done BEFORE the render pass begins.
+        gpu->update(fc);
+    });
+
+    // ------------------------------------------------------------
+    // 2) RT dispatch (still here, also outside render pass)
+    // ------------------------------------------------------------
+    if (vp->drawMode() == DrawMode::RAY_TRACE)
+    {
+        if (!rtReady(m_ctx))
+            return;
+
+        renderRayTrace(vp, scene, fc);
+    }
+}
+
+//==================================================================
+// Render (RT present + raster overlays/selection)
+//==================================================================
+
+void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
+{
+    if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
+        return;
+
+    if (fc.frameIndex >= m_framesInFlight)
+        return;
+
+    if (m_pipelineLayout == VK_NULL_HANDLE)
+        return;
+
+    const VkCommandBuffer cmd      = fc.cmd;
+    const uint32_t        frameIdx = fc.frameIndex;
+
+    const uint32_t w = static_cast<uint32_t>(vp->width());
+    const uint32_t h = static_cast<uint32_t>(vp->height());
+
+    const glm::vec4 solidEdgeColor{0.10f, 0.10f, 0.10f, 0.5f};
+    const glm::vec4 wireVisibleColor{0.85f, 0.85f, 0.85f, 1.0f};
+    const glm::vec4 wireHiddenColor{0.85f, 0.85f, 0.85f, 0.25f};
+
+    auto uploadViewportUboSet0 = [&]() -> bool {
+        ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIdx);
+
+        if (frameIdx >= vpUbo.mvpBuffers.size() ||
+            frameIdx >= vpUbo.lightBuffers.size() ||
+            frameIdx >= vpUbo.uboSets.size())
+        {
+            return false;
+        }
+
+        if (!vpUbo.mvpBuffers[frameIdx].valid() ||
+            !vpUbo.lightBuffers[frameIdx].valid())
+        {
+            return false;
+        }
+
+        // ------------------------------------------------------------
+        // MVP
+        // ------------------------------------------------------------
+        {
+            MvpUBO ubo{};
+            ubo.proj = vp->projection();
+            ubo.view = vp->view();
+            vpUbo.mvpBuffers[frameIdx].upload(&ubo, sizeof(ubo));
+        }
+
+        // ------------------------------------------------------------
+        // Lights
+        // ------------------------------------------------------------
+        {
+            GpuLightsUBO lights{};
+            buildGpuLightsUBO(
+                m_lightingSettings,
+                m_headlight, // Renderer-owned modeling light
+                *vp,
+                scene,
+                lights);
+
+            static uint32_t count = 0;
+            if (count != lights.info.x)
+            {
+                count = lights.info.x;
+
+                std::cerr << "lightCount=" << lights.info.x
+                          << " ambient=(" << lights.ambient.x << "," << lights.ambient.y << "," << lights.ambient.z << "," << lights.ambient.w << ")\n";
+                if (lights.info.x > 0)
+                {
+                    const auto& L = lights.lights[0];
+                    std::cout << "L0 pos_type=(" << L.pos_type.x << "," << L.pos_type.y << "," << L.pos_type.z << "," << L.pos_type.w << ") "
+                              << "dir_range=(" << L.dir_range.x << "," << L.dir_range.y << "," << L.dir_range.z << "," << L.dir_range.w << ") "
+                              << "color_intensity=(" << L.color_intensity.x << "," << L.color_intensity.y << "," << L.color_intensity.z << "," << L.color_intensity.w << ")\n";
+                }
+            }
+            vpUbo.lightBuffers[frameIdx].upload(&lights, sizeof(lights));
+        }
+
+        // ------------------------------------------------------------
+        // Bind set=0 (MVP + Lights)
+        // ------------------------------------------------------------
+        {
+            VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
+            vkCmdBindDescriptorSets(cmd,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout,
+                                    0,
+                                    1,
+                                    &gfxSet0,
+                                    0,
+                                    nullptr);
+        }
+
+        return true;
+    };
+
+    // ------------------------------------------------------------
+    // RAY TRACE PRESENT PATH (present RT image, then draw overlays)
+    // ------------------------------------------------------------
+    if (vp->drawMode() == DrawMode::RAY_TRACE)
+    {
+        if (!rtReady(m_ctx))
+            return;
+
+        RtViewportState& rtv = ensureRtViewportState(vp, frameIdx);
+
+        if (!ensureRtOutputImages(rtv, fc, w, h))
+            return;
+
+        if (!m_rtPresent.valid())
+            return;
+
+        if (frameIdx >= rtv.sets.size())
+            return;
+
+        // Present RT output
+        vkutil::setViewportAndScissor(cmd, w, h);
+
+        vkCmdBindPipeline(cmd,
+                          VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          m_rtPresent.pipeline());
+
+        VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
+        vkCmdBindDescriptorSets(cmd,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_rtPresent.layout(),
+                                0,
+                                1,
+                                &rtSet0,
+                                0,
+                                nullptr);
+
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        // Restore normal set=0 (MVP + Lights) so overlays/selection/grid can render on top.
+        if (!uploadViewportUboSet0())
+            return;
+
+        vkutil::setViewportAndScissor(cmd, w, h);
+
+        drawSelection(cmd, vp, scene);
+
+        return;
+    }
+
+    // ------------------------------------------------------------
+    // NORMAL GRAPHICS PATH (bind MVP+Lights set=0)
+    // ------------------------------------------------------------
+    if (!uploadViewportUboSet0())
+        return;
+
+    vkutil::setViewportAndScissor(cmd, w, h);
+
+    // ------------------------------------------------------------
+    // Solid / Shaded
+    // ------------------------------------------------------------
+    if (vp->drawMode() != DrawMode::WIREFRAME)
+    {
+        const bool isShaded = (vp->drawMode() == DrawMode::SHADED);
+
+        // Choose solid or shaded pipeline
+        VkPipeline triPipe = isShaded
+                                 ? m_shadedPipeline.handle()
+                                 : m_solidPipeline.handle();
+
+        if (scene->materialHandler() &&
+            m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
+        {
+            const auto& mats = scene->materialHandler()->materials();
+            for (uint32_t i = 0; i < m_ctx.framesInFlight; ++i)
+            {
+                uploadMaterialsToGpu(mats, *scene->textureHandler(), i);
+                updateMaterialTextureTable(*scene->textureHandler(), i);
+            }
+            m_curMaterialCounter = scene->materialHandler()->changeCounter()->value();
+        }
+
+        {
+            VkDescriptorSet set1 = m_materialSets[frameIdx].set();
+            vkCmdBindDescriptorSets(cmd,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout,
+                                    1,
+                                    1,
+                                    &set1,
+                                    0,
+                                    nullptr);
+        }
+
+        if (triPipe != VK_NULL_HANDLE)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, triPipe);
+
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
+                PushConstants pc{};
+                pc.model = sm->model();
+                pc.color = glm::vec4(0, 0, 0, 1);
+
+                vkCmdPushConstants(cmd,
+                                   m_pipelineLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(PushConstants),
+                                   &pc);
+
+                const render::geom::GfxMeshGeometry geo = render::geom::selectGfxGeometry(sm, gpu);
+                if (!geo.valid())
+                    return;
+
+                VkBuffer     bufs[4] = {geo.posBuffer, geo.nrmBuffer, geo.uvBuffer, geo.matBuffer};
+                VkDeviceSize offs[4] = {0, 0, 0, 0};
+
+                vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
+                vkCmdDraw(cmd, geo.vertexCount, 1, 0, 0);
+            });
+        }
+
+        constexpr bool drawEdgesInSolid = true;
+        if (!isShaded && drawEdgesInSolid && m_wireOverlayPipeline.valid())
+        {
+            vkCmdBindPipeline(cmd,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              m_wireOverlayPipeline.handle());
+
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
+                const bool useSubdiv = (sm->subdivisionLevel() > 0);
+
+                PushConstants pc{};
+                pc.model = sm->model();
+                pc.color = solidEdgeColor;
+
+                vkCmdPushConstants(cmd,
+                                   m_pipelineLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(PushConstants),
+                                   &pc);
+
+                const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
+                if (!wgeo.valid())
+                    return;
+
+                VkDeviceSize voff = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &wgeo.posVb, &voff);
+                vkCmdBindIndexBuffer(cmd, wgeo.idxIb, 0, wgeo.idxType);
+                vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
+            });
+        }
+    }
+    // ------------------------------------------------------------
+    // Wireframe mode (hidden-line)
+    // ------------------------------------------------------------
+    else
+    {
+        // 1) depth-only triangles
+        if (m_depthOnlyPipeline.valid())
+        {
+            vkCmdBindPipeline(cmd,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              m_depthOnlyPipeline.handle());
+
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
+                PushConstants pc{};
+                pc.model = sm->model();
+                pc.color = glm::vec4(0, 0, 0, 0);
+
+                vkCmdPushConstants(cmd,
+                                   m_pipelineLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT |
+                                       VK_SHADER_STAGE_GEOMETRY_BIT |
+                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(PushConstants),
+                                   &pc);
+
+                const render::geom::GfxMeshGeometry geo = render::geom::selectGfxGeometry(sm, gpu);
+                if (!geo.valid())
+                    return;
+
+                VkBuffer     bufs[4] = {geo.posBuffer, geo.nrmBuffer, geo.uvBuffer, geo.matBuffer};
+                VkDeviceSize offs[4] = {0, 0, 0, 0};
+
+                vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
+                vkCmdDraw(cmd, geo.vertexCount, 1, 0, 0);
+            });
+        }
+
+        auto drawEdges = [&](const GraphicsPipeline& pipeline, const glm::vec4& color) {
+            if (!pipeline.valid())
+                return;
+
+            vkCmdBindPipeline(cmd,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline.handle());
+
+            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
+                const bool useSubdiv = (sm->subdivisionLevel() > 0);
+
+                PushConstants pc{};
+                pc.model = sm->model();
+                pc.color = color;
+
+                vkCmdPushConstants(cmd,
+                                   m_pipelineLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(PushConstants),
+                                   &pc);
+
+                const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
+                if (!wgeo.valid())
+                    return;
+
+                VkDeviceSize voff = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &wgeo.posVb, &voff);
+                vkCmdBindIndexBuffer(cmd, wgeo.idxIb, 0, wgeo.idxType);
+                vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
+            });
+        };
+
+        drawEdges(m_wireHiddenPipeline, wireHiddenColor);
+        drawEdges(m_wirePipeline, wireVisibleColor);
+    }
+
+    drawSelection(cmd, vp, scene);
+
+    if (scene->showSceneGrid())
+    {
+        drawSceneGrid(cmd, vp, scene);
+    }
+}
+
+//==================================================================
+// drawOverlays / drawSelection / drawSceneGrid / ensureOverlayVertexCapacity
+//==================================================================
+
+void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays)
+{
+    if (!vp)
+        return;
+
+    const std::vector<OverlayHandler::Overlay>& ovs = overlays.overlays();
+    if (ovs.empty())
+        return;
+
+    // -------------------------------------------------------------------------
+    // Build two batches:
+    //  - lineVertices: wide-line pipeline (existing)
+    //  - fillVertices: triangle list pipeline (new)
+    // -------------------------------------------------------------------------
+
+    std::vector<OverlayVertex>     lineVertices = {};
+    std::vector<OverlayFillVertex> fillVertices = {};
+
+    lineVertices.reserve(512);
+    fillVertices.reserve(512);
+
+    auto pushLine = [&](const glm::vec3& a, const glm::vec3& b, float thickness, const glm::vec4& color) {
+        OverlayVertex v0 = {};
+        v0.pos           = a;
+        v0.thickness     = thickness;
+        v0.color         = color;
+        lineVertices.push_back(v0);
+
+        OverlayVertex v1 = {};
+        v1.pos           = b;
+        v1.thickness     = thickness;
+        v1.color         = color;
+        lineVertices.push_back(v1);
+    };
+
+    auto pushTri = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec4& color) {
+        OverlayFillVertex v0 = {};
+        v0.pos               = a;
+        v0.color             = color;
+        fillVertices.push_back(v0);
+
+        OverlayFillVertex v1 = {};
+        v1.pos               = b;
+        v1.color             = color;
+        fillVertices.push_back(v1);
+
+        OverlayFillVertex v2 = {};
+        v2.pos               = c;
+        v2.color             = color;
+        fillVertices.push_back(v2);
+    };
+
+    auto triangulateFan = [&](const std::vector<glm::vec3>& pts, const glm::vec4& color) {
+        if (pts.size() < 3)
+            return;
+
+        const glm::vec3& v0 = pts[0];
+        for (size_t i = 1; i + 1 < pts.size(); ++i)
+            pushTri(v0, pts[i], pts[i + 1], color);
+    };
+
+    for (const OverlayHandler::Overlay& ov : ovs)
+    {
+        // ------------------------------------------------------------
+        // Lines
+        // ------------------------------------------------------------
+        for (const OverlayHandler::Line& L : ov.lines)
+            pushLine(L.a, L.b, L.thickness, L.color);
+
+        // ------------------------------------------------------------
+        // Polygons
+        // ------------------------------------------------------------
+        for (const OverlayHandler::Polygon& P : ov.polygons)
+        {
+            const std::vector<glm::vec3>& pts = P.verts;
+            if (pts.size() < 3)
+                continue;
+
+            if (P.filled)
+            {
+                triangulateFan(pts, P.color);
+            }
+            else
+            {
+                const float thicknessPx = (P.thicknessPx > 0.0f) ? P.thicknessPx : 2.5f;
+
+                for (size_t i = 0; i < pts.size(); ++i)
+                {
+                    const glm::vec3& a = pts[i];
+                    const glm::vec3& b = pts[(i + 1) % pts.size()];
+                    pushLine(a, b, thicknessPx, P.color);
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
+        // Points -> small cross (optional)
+        // ------------------------------------------------------------
+        for (const OverlayHandler::Point& pt : ov.points)
+        {
+            const float pxW = vp->pixelScale(pt.p);
+            const float sW  = std::max(0.00001f, pxW * (pt.size * 0.5f));
+
+            const glm::vec3 r = vp->rightDirection();
+            const glm::vec3 u = vp->upDirection();
+
+            constexpr float kPointThicknessPx = 2.0f;
+
+            pushLine(pt.p - r * sW, pt.p + r * sW, kPointThicknessPx, pt.color);
+            pushLine(pt.p - u * sW, pt.p + u * sW, kPointThicknessPx, pt.color);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Draw filled polys FIRST (so outlines sit on top)
+    // -------------------------------------------------------------------------
+    if (!fillVertices.empty())
+    {
+        const std::size_t fillCount = fillVertices.size();
+
+        ensureOverlayFillVertexCapacity(fillCount);
+        if (m_overlayFillVertexBuffer.valid() && m_overlayFillPipeline.valid())
+        {
+            const VkDeviceSize byteSize = static_cast<VkDeviceSize>(fillCount * sizeof(OverlayFillVertex));
+            m_overlayFillVertexBuffer.upload(fillVertices.data(), byteSize);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayFillPipeline.handle());
+
+            PushConstants pc = {};
+            pc.model         = glm::mat4(1.0f);
+            pc.color         = glm::vec4(1.0f);
+            pc.overlayParams = glm::vec4(static_cast<float>(vp->width()),
+                                         static_cast<float>(vp->height()),
+                                         1.0f,
+                                         0.0f);
+
+            vkCmdPushConstants(cmd,
+                               m_pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0,
+                               sizeof(PushConstants),
+                               &pc);
+
+            VkBuffer     vb      = m_overlayFillVertexBuffer.buffer();
+            VkDeviceSize offset0 = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset0);
+
+            vkCmdDraw(cmd, static_cast<uint32_t>(fillCount), 1, 0, 0);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Draw lines AFTER
+    // -------------------------------------------------------------------------
+    if (lineVertices.empty())
+        return;
+
+    const std::size_t lineCount = lineVertices.size();
+
+    ensureOverlayVertexCapacity(lineCount);
+    if (!m_overlayVertexBuffer.valid())
+        return;
+
+    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(lineCount * sizeof(OverlayVertex));
+    m_overlayVertexBuffer.upload(lineVertices.data(), byteSize);
+
+    if (!m_overlayPipeline.valid())
+        return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayPipeline.handle());
+
+    PushConstants pc = {};
+    pc.model         = glm::mat4(1.0f);
+    pc.color         = glm::vec4(1.0f);
+    pc.overlayParams = glm::vec4(static_cast<float>(vp->width()),
+                                 static_cast<float>(vp->height()),
+                                 1.0f,
+                                 0.0f);
+
+    vkCmdPushConstants(cmd,
+                       m_pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0,
+                       sizeof(PushConstants),
+                       &pc);
+
+    VkBuffer     vb      = m_overlayVertexBuffer.buffer();
+    VkDeviceSize offset0 = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset0);
+
+    vkCmdDraw(cmd, static_cast<uint32_t>(lineCount), 1, 0, 0);
+}
+
+void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
+{
+    if (requiredVertexCount == 0)
+        return;
+
+    if (requiredVertexCount <= m_overlayVertexCapacity && m_overlayVertexBuffer.valid())
+        return;
+
+    if (m_overlayVertexBuffer.valid())
+        m_overlayVertexBuffer.destroy();
+
+    const VkDeviceSize bufferSize = static_cast<VkDeviceSize>(requiredVertexCount * sizeof(OverlayVertex));
+
+    m_overlayVertexBuffer.create(m_ctx.device,
+                                 m_ctx.physicalDevice,
+                                 bufferSize,
+                                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                 /*persistentMap*/ true);
+
+    if (!m_overlayVertexBuffer.valid())
+    {
+        m_overlayVertexCapacity = 0;
+        return;
+    }
+
+    m_overlayVertexCapacity = requiredVertexCount;
+}
+
+void Renderer::ensureOverlayFillVertexCapacity(std::size_t requiredVertexCount)
+{
+    if (requiredVertexCount == 0)
+        return;
+
+    if (requiredVertexCount <= m_overlayFillVertexCapacity && m_overlayFillVertexBuffer.valid())
+        return;
+
+    if (m_overlayFillVertexBuffer.valid())
+        m_overlayFillVertexBuffer.destroy();
+
+    const VkDeviceSize bufferSize = static_cast<VkDeviceSize>(requiredVertexCount * sizeof(OverlayFillVertex));
+
+    m_overlayFillVertexBuffer.create(m_ctx.device,
+                                     m_ctx.physicalDevice,
+                                     bufferSize,
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                     /*persistentMap*/ true);
+
+    if (!m_overlayFillVertexBuffer.valid())
+    {
+        m_overlayFillVertexCapacity = 0;
+        return;
+    }
+
+    m_overlayFillVertexCapacity = requiredVertexCount;
+}
+
+//==================================================================
+// drawSelection (NO MeshGpuResources::update(cmd) calls here)
+//==================================================================
+
+void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
+{
+    if (!scene || !vp)
+        return;
+
+    if (!m_selVertPipeline.valid() &&
+        !m_selEdgePipeline.valid() &&
+        !m_selPolyPipeline.valid())
+    {
+        return;
+    }
+
+    VkDeviceSize zeroOffset = 0;
+
+    const glm::vec4 selColorVisible = glm::vec4(1.0f, 0.55f, 0.10f, 0.6f);
+    const glm::vec4 selColorHidden  = glm::vec4(1.0f, 0.55f, 0.10f, 0.3f);
+
+    const bool showOccluded = (vp->drawMode() == DrawMode::WIREFRAME);
+
+    auto pushPC = [&](SceneMesh& sm, const glm::vec4& color) {
+        PushConstants pc{};
+        pc.model = sm.model();
+        pc.color = color;
+
+        vkCmdPushConstants(cmd,
+                           m_pipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0,
+                           sizeof(PushConstants),
+                           &pc);
+    };
+
+    auto drawHidden = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
+        if (!showOccluded)
+            return;
+        if (pipeline == VK_NULL_HANDLE || indexCount == 0)
+            return;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
+        pushPC(sm, selColorHidden);
+        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+    };
+
+    auto drawVisible = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
+        if (pipeline == VK_NULL_HANDLE || indexCount == 0)
+            return;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdSetDepthBias(cmd, -1.0f, 0.0f, -1.0f);
+        pushPC(sm, selColorVisible);
+        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+    };
+
+    const render::geom::SelPipelines pipes{
+        .vertVis = m_selVertPipeline.handle(),
+        .vertHid = m_selVertHiddenPipeline.handle(),
+        .edgeVis = m_selEdgePipeline.handle(),
+        .edgeHid = m_selEdgeHiddenPipeline.handle(),
+        .polyVis = m_selPolyPipeline.handle(),
+        .polyHid = m_selPolyHiddenPipeline.handle(),
+    };
+
+    const SelectionMode mode = scene->selectionMode();
+
+    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
+        const bool useSubdiv = (sm->subdivisionLevel() > 0);
+
+        const render::geom::SelDrawGeo geo =
+            render::geom::selectSelGeometry(gpu, useSubdiv, mode, pipes);
+
+        if (!geo.valid())
+            return;
+
+        vkCmdBindVertexBuffers(cmd, 0, 1, &geo.posVb, &zeroOffset);
+        vkCmdBindIndexBuffer(cmd, geo.selIb, 0, VK_INDEX_TYPE_UINT32);
+
+        drawHidden(*sm, geo.pipeHid, geo.selCount);
+        drawVisible(*sm, geo.pipeVis, geo.selCount);
+    });
+
+    vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
+}
+
+void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
+{
+    if (!vp || !scene)
+        return;
+
+    if (!scene->showSceneGrid())
+        return;
+
+    if (!m_grid)
+        return;
+
+    if (m_pipelineLayout == VK_NULL_HANDLE)
+        return;
+
+    glm::mat4 gridModel = render::geom::gridModelFor(vp->viewMode());
+
+    PushConstants pc{};
+    pc.model         = gridModel;
+    pc.color         = glm::vec4(0, 0, 0, 0);
+    pc.overlayParams = glm::vec4(0.0f); // unused for grid
+
+    vkCmdPushConstants(cmd,
+                       m_pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT |
+                           VK_SHADER_STAGE_GEOMETRY_BIT |
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0,
+                       sizeof(PushConstants),
+                       &pc);
+
+    const bool xrayGrid = (vp->drawMode() == DrawMode::WIREFRAME);
+    m_grid->render(cmd, xrayGrid);
+}
+
+//==================================================================
 // Pipeline destruction (swapchain-level)
 //==================================================================
 
@@ -467,401 +1212,6 @@ bool Renderer::createPipelineLayout() noexcept
 
     m_pipelineLayout = vkutil::createPipelineLayout(m_ctx.device, setLayouts, 2, &pcRange, 1);
     return (m_pipelineLayout != VK_NULL_HANDLE);
-}
-
-//==================================================================
-// Per-viewport MVP UBO (device-level)
-//==================================================================
-
-Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint32_t frameIdx)
-{
-    ViewportUboState& s = m_viewportUbos[vp];
-
-    if (s.mvpBuffers.size() != m_framesInFlight)
-        s.mvpBuffers.resize(m_framesInFlight);
-    if (s.lightBuffers.size() != m_framesInFlight)
-        s.lightBuffers.resize(m_framesInFlight);
-    if (s.uboSets.size() != m_framesInFlight)
-        s.uboSets.resize(m_framesInFlight);
-
-    if (frameIdx >= m_framesInFlight)
-        return s;
-
-    bool needWrite = false;
-
-    if (s.uboSets[frameIdx].set() == VK_NULL_HANDLE)
-    {
-        if (!s.uboSets[frameIdx].allocate(m_ctx.device, m_descriptorPool.pool(), m_descriptorSetLayout.layout()))
-        {
-            std::cerr << "RendererVK: Failed to allocate raster UBO set for viewport frame " << frameIdx << ".\n";
-            return s;
-        }
-        needWrite = true;
-    }
-
-    if (!s.mvpBuffers[frameIdx].valid())
-    {
-        s.mvpBuffers[frameIdx].create(m_ctx.device,
-                                      m_ctx.physicalDevice,
-                                      sizeof(MvpUBO),
-                                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                      true);
-        if (!s.mvpBuffers[frameIdx].valid())
-        {
-            std::cerr << "RendererVK: Failed to create MVP UBO for viewport frame " << frameIdx << ".\n";
-            return s;
-        }
-        needWrite = true;
-    }
-
-    if (!s.lightBuffers[frameIdx].valid())
-    {
-        s.lightBuffers[frameIdx].create(m_ctx.device,
-                                        m_ctx.physicalDevice,
-                                        sizeof(GpuLightsUBO),
-                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                        true);
-        if (!s.lightBuffers[frameIdx].valid())
-        {
-            std::cerr << "RendererVK: Failed to create Lights UBO for viewport frame " << frameIdx << ".\n";
-            return s;
-        }
-
-        GpuLightsUBO zero = {};
-        s.lightBuffers[frameIdx].upload(&zero, sizeof(zero));
-        needWrite = true;
-    }
-
-    // Only write descriptors for *this* frame slot.
-    if (needWrite)
-    {
-        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 0, s.mvpBuffers[frameIdx].buffer(), sizeof(MvpUBO));
-        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 1, s.lightBuffers[frameIdx].buffer(), sizeof(GpuLightsUBO));
-        // binding 2 (RtCameraUBO) is written by ensureRtViewportState when needed
-    }
-
-    return s;
-}
-
-//==================================================================
-// RT per-viewport state (lazy allocation)
-//==================================================================
-
-Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_t frameIdx)
-{
-    // If already exists, just ensure current slot is ready.
-    RtViewportState& st = m_rtViewports[vp];
-
-    // Size once (idempotent)
-    if (st.sets.size() != m_framesInFlight)
-        st.sets.resize(m_framesInFlight);
-    if (st.cameraBuffers.size() != m_framesInFlight)
-        st.cameraBuffers.resize(m_framesInFlight);
-    if (st.instanceDataBuffers.size() != m_framesInFlight)
-        st.instanceDataBuffers.resize(m_framesInFlight);
-    if (st.images.size() != m_framesInFlight)
-        st.images.resize(m_framesInFlight);
-
-    if (st.scratchBuffers.size() != m_framesInFlight)
-        st.scratchBuffers.resize(m_framesInFlight);
-    if (st.scratchSizes.size() != m_framesInFlight)
-        st.scratchSizes.assign(m_framesInFlight, 0);
-
-    if (frameIdx >= m_framesInFlight)
-        return st;
-
-    // Ensure the per-viewport Set0 UBO set for THIS slot exists.
-    ViewportUboState& ubo = ensureViewportUboState(vp, frameIdx);
-
-    bool needRtSetWrite       = false;
-    bool needSet0BindRtCamera = false;
-
-    // Allocate RT-only set (Set 2)
-    if (st.sets[frameIdx].set() == VK_NULL_HANDLE)
-    {
-        if (!st.sets[frameIdx].allocate(m_ctx.device, m_rtPool.pool(), m_rtSetLayout.layout()))
-        {
-            std::cerr << "RendererVK: Failed to allocate RT set for viewport frame " << frameIdx << ".\n";
-            return st;
-        }
-        needRtSetWrite = true; // at least instance buffer binding
-    }
-
-    // Create RT camera UBO for this slot (bound via Set0/binding2)
-    if (!st.cameraBuffers[frameIdx].valid())
-    {
-        st.cameraBuffers[frameIdx].create(m_ctx.device,
-                                          m_ctx.physicalDevice,
-                                          sizeof(RtCameraUBO),
-                                          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                          true);
-
-        if (!st.cameraBuffers[frameIdx].valid())
-        {
-            std::cerr << "RendererVK: Failed to create RT camera UBO for viewport frame " << frameIdx << ".\n";
-            return st;
-        }
-
-        needSet0BindRtCamera = true;
-    }
-
-    // Bind RtCameraUBO into Set0/binding2 only when needed (new buffer or new set0)
-    if (ubo.uboSets.size() > frameIdx && ubo.uboSets[frameIdx].set() != VK_NULL_HANDLE && st.cameraBuffers[frameIdx].valid())
-    {
-        // If set0 was created this frame, ensureViewportUboState wrote b0/b1 only;
-        // we still need b2. We also need b2 if the camera buffer was created.
-        if (needSet0BindRtCamera /* || (set0 was just allocated) */)
-        {
-            ubo.uboSets[frameIdx].writeUniformBuffer(m_ctx.device,
-                                                     2,
-                                                     st.cameraBuffers[frameIdx].buffer(),
-                                                     sizeof(RtCameraUBO));
-        }
-    }
-
-    // Instance data SSBO (Set 2, binding 3)
-    if (!st.instanceDataBuffers[frameIdx].valid())
-    {
-        st.instanceDataBuffers[frameIdx].create(m_ctx.device,
-                                                m_ctx.physicalDevice,
-                                                sizeof(RtInstanceData),
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                                false,
-                                                false);
-        needRtSetWrite = true;
-    }
-
-    if (needRtSetWrite && st.instanceDataBuffers[frameIdx].valid())
-    {
-        st.sets[frameIdx].writeStorageBuffer(m_ctx.device,
-                                             3,
-                                             st.instanceDataBuffers[frameIdx].buffer(),
-                                             st.instanceDataBuffers[frameIdx].size(),
-                                             0);
-    }
-
-    return st;
-}
-
-void Renderer::updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t frameIndex)
-{
-    if (!vp || !scene)
-        return;
-
-    if (frameIndex >= m_framesInFlight)
-        return;
-
-    ViewportUboState& ubo = ensureViewportUboState(vp, frameIndex);
-
-    if (frameIndex >= ubo.lightBuffers.size())
-        return;
-
-    if (!ubo.lightBuffers[frameIndex].valid())
-        return;
-
-    GpuLightsUBO lights{};
-    buildGpuLightsUBO(m_lightingSettings, m_headlight, *vp, scene, lights);
-    ubo.lightBuffers[frameIndex].upload(&lights, sizeof(lights));
-}
-
-void Renderer::destroyRtOutputImages(RtViewportState& s) noexcept
-{
-    if (!m_ctx.device)
-        return;
-
-    VkDevice device = m_ctx.device;
-
-    for (RtImagePerFrame& img : s.images)
-    {
-        if (img.view)
-        {
-            vkDestroyImageView(device, img.view, nullptr);
-            img.view = VK_NULL_HANDLE;
-        }
-        if (img.image)
-        {
-            vkDestroyImage(device, img.image, nullptr);
-            img.image = VK_NULL_HANDLE;
-        }
-        if (img.memory)
-        {
-            vkFreeMemory(device, img.memory, nullptr);
-            img.memory = VK_NULL_HANDLE;
-        }
-
-        img.width     = 0;
-        img.height    = 0;
-        img.needsInit = true;
-    }
-
-    s.cachedW = 0;
-    s.cachedH = 0;
-}
-
-bool Renderer::ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h)
-{
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.physicalDevice)
-        return false;
-
-    if (w == 0 || h == 0)
-        return false;
-
-    const uint32_t frameIndex = fc.frameIndex;
-    if (frameIndex >= m_framesInFlight)
-        return false;
-
-    if (s.sets.size() != m_framesInFlight || s.images.size() != m_framesInFlight)
-        return false;
-
-    // If THIS slot already matches, we're done.
-    {
-        const RtImagePerFrame& img = s.images[frameIndex];
-        if (img.image && img.view && img.width == w && img.height == h)
-        {
-            s.cachedW = w;
-            s.cachedH = h;
-            return true;
-        }
-    }
-
-    VkDevice device = m_ctx.device;
-
-    // -------------------------------------------------------------------------
-    // Destroy only this slot's resources (DEFERRED if available).
-    // -------------------------------------------------------------------------
-    {
-        RtImagePerFrame& img = s.images[frameIndex];
-
-        const VkImageView    oldView = img.view;
-        const VkImage        oldImg  = img.image;
-        const VkDeviceMemory oldMem  = img.memory;
-
-        if (oldView || oldImg || oldMem)
-        {
-            auto destroyOld = [device, oldView, oldImg, oldMem]() noexcept {
-                if (oldView)
-                    vkDestroyImageView(device, oldView, nullptr);
-                if (oldImg)
-                    vkDestroyImage(device, oldImg, nullptr);
-                if (oldMem)
-                    vkFreeMemory(device, oldMem, nullptr);
-            };
-
-            if (fc.deferred)
-                fc.deferred->enqueue(frameIndex, std::move(destroyOld));
-            else
-                destroyOld();
-        }
-
-        img.view   = VK_NULL_HANDLE;
-        img.image  = VK_NULL_HANDLE;
-        img.memory = VK_NULL_HANDLE;
-
-        img.width     = 0;
-        img.height    = 0;
-        img.needsInit = true;
-    }
-
-    VkPhysicalDeviceMemoryProperties memProps{};
-    vkGetPhysicalDeviceMemoryProperties(m_ctx.physicalDevice, &memProps);
-
-    auto findDeviceLocalType = [&](uint32_t typeBits) noexcept -> uint32_t {
-        for (uint32_t m = 0; m < memProps.memoryTypeCount; ++m)
-        {
-            if ((typeBits & (1u << m)) &&
-                (memProps.memoryTypes[m].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
-            {
-                return m;
-            }
-        }
-        return UINT32_MAX;
-    };
-
-    RtImagePerFrame newImg = {};
-
-    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    ici.imageType   = VK_IMAGE_TYPE_2D;
-    ici.format      = m_rtFormat;
-    ici.extent      = VkExtent3D{w, h, 1};
-    ici.mipLevels   = 1;
-    ici.arrayLayers = 1;
-    ici.samples     = VK_SAMPLE_COUNT_1_BIT;
-    ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage       = VK_IMAGE_USAGE_STORAGE_BIT |
-                VK_IMAGE_USAGE_SAMPLED_BIT |
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vkCreateImage(device, &ici, nullptr, &newImg.image) != VK_SUCCESS)
-        return false;
-
-    VkMemoryRequirements req{};
-    vkGetImageMemoryRequirements(device, newImg.image, &req);
-
-    const uint32_t typeIndex = findDeviceLocalType(req.memoryTypeBits);
-    if (typeIndex == UINT32_MAX)
-    {
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize  = req.size;
-    mai.memoryTypeIndex = typeIndex;
-
-    if (vkAllocateMemory(device, &mai, nullptr, &newImg.memory) != VK_SUCCESS)
-    {
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    if (vkBindImageMemory(device, newImg.image, newImg.memory, 0) != VK_SUCCESS)
-    {
-        vkFreeMemory(device, newImg.memory, nullptr);
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vci.image                           = newImg.image;
-    vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format                          = m_rtFormat;
-    vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    vci.subresourceRange.baseMipLevel   = 0;
-    vci.subresourceRange.levelCount     = 1;
-    vci.subresourceRange.baseArrayLayer = 0;
-    vci.subresourceRange.layerCount     = 1;
-
-    if (vkCreateImageView(device, &vci, nullptr, &newImg.view) != VK_SUCCESS)
-    {
-        vkFreeMemory(device, newImg.memory, nullptr);
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    newImg.width     = w;
-    newImg.height    = h;
-    newImg.needsInit = true;
-
-    // Commit into this slot.
-    s.images[frameIndex] = newImg;
-
-    // Update only THIS frame slot’s descriptors (set 2 / RT-only)
-    s.sets[frameIndex].writeStorageImage(device, 0, newImg.view, VK_IMAGE_LAYOUT_GENERAL);
-    s.sets[frameIndex].writeCombinedImageSampler(device,
-                                                 1,
-                                                 m_rtSampler,
-                                                 newImg.view,
-                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    s.cachedW = w;
-    s.cachedH = h;
-    return true;
 }
 
 //==================================================================
@@ -1320,6 +1670,205 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
 }
 
 //==================================================================
+// Per-viewport MVP UBO (device-level)
+//==================================================================
+
+Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint32_t frameIdx)
+{
+    ViewportUboState& s = m_viewportUbos[vp];
+
+    if (s.mvpBuffers.size() != m_framesInFlight)
+        s.mvpBuffers.resize(m_framesInFlight);
+    if (s.lightBuffers.size() != m_framesInFlight)
+        s.lightBuffers.resize(m_framesInFlight);
+    if (s.uboSets.size() != m_framesInFlight)
+        s.uboSets.resize(m_framesInFlight);
+
+    if (frameIdx >= m_framesInFlight)
+        return s;
+
+    bool needWrite = false;
+
+    if (s.uboSets[frameIdx].set() == VK_NULL_HANDLE)
+    {
+        if (!s.uboSets[frameIdx].allocate(m_ctx.device, m_descriptorPool.pool(), m_descriptorSetLayout.layout()))
+        {
+            std::cerr << "RendererVK: Failed to allocate raster UBO set for viewport frame " << frameIdx << ".\n";
+            return s;
+        }
+        needWrite = true;
+    }
+
+    if (!s.mvpBuffers[frameIdx].valid())
+    {
+        s.mvpBuffers[frameIdx].create(m_ctx.device,
+                                      m_ctx.physicalDevice,
+                                      sizeof(MvpUBO),
+                                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                      true);
+        if (!s.mvpBuffers[frameIdx].valid())
+        {
+            std::cerr << "RendererVK: Failed to create MVP UBO for viewport frame " << frameIdx << ".\n";
+            return s;
+        }
+        needWrite = true;
+    }
+
+    if (!s.lightBuffers[frameIdx].valid())
+    {
+        s.lightBuffers[frameIdx].create(m_ctx.device,
+                                        m_ctx.physicalDevice,
+                                        sizeof(GpuLightsUBO),
+                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                        true);
+        if (!s.lightBuffers[frameIdx].valid())
+        {
+            std::cerr << "RendererVK: Failed to create Lights UBO for viewport frame " << frameIdx << ".\n";
+            return s;
+        }
+
+        GpuLightsUBO zero = {};
+        s.lightBuffers[frameIdx].upload(&zero, sizeof(zero));
+        needWrite = true;
+    }
+
+    // Only write descriptors for *this* frame slot.
+    if (needWrite)
+    {
+        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 0, s.mvpBuffers[frameIdx].buffer(), sizeof(MvpUBO));
+        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 1, s.lightBuffers[frameIdx].buffer(), sizeof(GpuLightsUBO));
+        // binding 2 (RtCameraUBO) is written by ensureRtViewportState when needed
+    }
+
+    return s;
+}
+
+//==================================================================
+// RT per-viewport state (lazy allocation)
+//==================================================================
+
+Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_t frameIdx)
+{
+    // If already exists, just ensure current slot is ready.
+    RtViewportState& st = m_rtViewports[vp];
+
+    // Size once (idempotent)
+    if (st.sets.size() != m_framesInFlight)
+        st.sets.resize(m_framesInFlight);
+    if (st.cameraBuffers.size() != m_framesInFlight)
+        st.cameraBuffers.resize(m_framesInFlight);
+    if (st.instanceDataBuffers.size() != m_framesInFlight)
+        st.instanceDataBuffers.resize(m_framesInFlight);
+    if (st.images.size() != m_framesInFlight)
+        st.images.resize(m_framesInFlight);
+
+    if (st.scratchBuffers.size() != m_framesInFlight)
+        st.scratchBuffers.resize(m_framesInFlight);
+    if (st.scratchSizes.size() != m_framesInFlight)
+        st.scratchSizes.assign(m_framesInFlight, 0);
+
+    if (frameIdx >= m_framesInFlight)
+        return st;
+
+    // Ensure the per-viewport Set0 UBO set for THIS slot exists.
+    ViewportUboState& ubo = ensureViewportUboState(vp, frameIdx);
+
+    bool needRtSetWrite       = false;
+    bool needSet0BindRtCamera = false;
+
+    // Allocate RT-only set (Set 2)
+    if (st.sets[frameIdx].set() == VK_NULL_HANDLE)
+    {
+        if (!st.sets[frameIdx].allocate(m_ctx.device, m_rtPool.pool(), m_rtSetLayout.layout()))
+        {
+            std::cerr << "RendererVK: Failed to allocate RT set for viewport frame " << frameIdx << ".\n";
+            return st;
+        }
+        needRtSetWrite = true; // at least instance buffer binding
+    }
+
+    // Create RT camera UBO for this slot (bound via Set0/binding2)
+    if (!st.cameraBuffers[frameIdx].valid())
+    {
+        st.cameraBuffers[frameIdx].create(m_ctx.device,
+                                          m_ctx.physicalDevice,
+                                          sizeof(RtCameraUBO),
+                                          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                          true);
+
+        if (!st.cameraBuffers[frameIdx].valid())
+        {
+            std::cerr << "RendererVK: Failed to create RT camera UBO for viewport frame " << frameIdx << ".\n";
+            return st;
+        }
+
+        needSet0BindRtCamera = true;
+    }
+
+    // Bind RtCameraUBO into Set0/binding2 only when needed (new buffer or new set0)
+    if (ubo.uboSets.size() > frameIdx && ubo.uboSets[frameIdx].set() != VK_NULL_HANDLE && st.cameraBuffers[frameIdx].valid())
+    {
+        // If set0 was created this frame, ensureViewportUboState wrote b0/b1 only;
+        // we still need b2. We also need b2 if the camera buffer was created.
+        if (needSet0BindRtCamera /* || (set0 was just allocated) */)
+        {
+            ubo.uboSets[frameIdx].writeUniformBuffer(m_ctx.device,
+                                                     2,
+                                                     st.cameraBuffers[frameIdx].buffer(),
+                                                     sizeof(RtCameraUBO));
+        }
+    }
+
+    // Instance data SSBO (Set 2, binding 3)
+    if (!st.instanceDataBuffers[frameIdx].valid())
+    {
+        st.instanceDataBuffers[frameIdx].create(m_ctx.device,
+                                                m_ctx.physicalDevice,
+                                                sizeof(RtInstanceData),
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                                false,
+                                                false);
+        needRtSetWrite = true;
+    }
+
+    if (needRtSetWrite && st.instanceDataBuffers[frameIdx].valid())
+    {
+        st.sets[frameIdx].writeStorageBuffer(m_ctx.device,
+                                             3,
+                                             st.instanceDataBuffers[frameIdx].buffer(),
+                                             st.instanceDataBuffers[frameIdx].size(),
+                                             0);
+    }
+
+    return st;
+}
+
+void Renderer::updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t frameIndex)
+{
+    if (!vp || !scene)
+        return;
+
+    if (frameIndex >= m_framesInFlight)
+        return;
+
+    ViewportUboState& ubo = ensureViewportUboState(vp, frameIndex);
+
+    if (frameIndex >= ubo.lightBuffers.size())
+        return;
+
+    if (!ubo.lightBuffers[frameIndex].valid())
+        return;
+
+    GpuLightsUBO lights{};
+    buildGpuLightsUBO(m_lightingSettings, m_headlight, *vp, scene, lights);
+    ubo.lightBuffers[frameIndex].upload(&lights, sizeof(lights));
+}
+
+//==================================================================
 // RT present pipeline (swapchain-level)
 //==================================================================
 
@@ -1481,6 +2030,206 @@ bool Renderer::initRayTracingResources()
         return false;
     }
 
+    return true;
+}
+
+//==================================================================
+// RT output images
+//==================================================================
+
+void Renderer::destroyRtOutputImages(RtViewportState& s) noexcept
+{
+    if (!m_ctx.device)
+        return;
+
+    VkDevice device = m_ctx.device;
+
+    for (RtImagePerFrame& img : s.images)
+    {
+        if (img.view)
+        {
+            vkDestroyImageView(device, img.view, nullptr);
+            img.view = VK_NULL_HANDLE;
+        }
+        if (img.image)
+        {
+            vkDestroyImage(device, img.image, nullptr);
+            img.image = VK_NULL_HANDLE;
+        }
+        if (img.memory)
+        {
+            vkFreeMemory(device, img.memory, nullptr);
+            img.memory = VK_NULL_HANDLE;
+        }
+
+        img.width     = 0;
+        img.height    = 0;
+        img.needsInit = true;
+    }
+
+    s.cachedW = 0;
+    s.cachedH = 0;
+}
+
+bool Renderer::ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h)
+{
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.physicalDevice)
+        return false;
+
+    if (w == 0 || h == 0)
+        return false;
+
+    const uint32_t frameIndex = fc.frameIndex;
+    if (frameIndex >= m_framesInFlight)
+        return false;
+
+    if (s.sets.size() != m_framesInFlight || s.images.size() != m_framesInFlight)
+        return false;
+
+    // If THIS slot already matches, we're done.
+    {
+        const RtImagePerFrame& img = s.images[frameIndex];
+        if (img.image && img.view && img.width == w && img.height == h)
+        {
+            s.cachedW = w;
+            s.cachedH = h;
+            return true;
+        }
+    }
+
+    VkDevice device = m_ctx.device;
+
+    // -------------------------------------------------------------------------
+    // Destroy only this slot's resources (DEFERRED if available).
+    // -------------------------------------------------------------------------
+    {
+        RtImagePerFrame& img = s.images[frameIndex];
+
+        const VkImageView    oldView = img.view;
+        const VkImage        oldImg  = img.image;
+        const VkDeviceMemory oldMem  = img.memory;
+
+        if (oldView || oldImg || oldMem)
+        {
+            auto destroyOld = [device, oldView, oldImg, oldMem]() noexcept {
+                if (oldView)
+                    vkDestroyImageView(device, oldView, nullptr);
+                if (oldImg)
+                    vkDestroyImage(device, oldImg, nullptr);
+                if (oldMem)
+                    vkFreeMemory(device, oldMem, nullptr);
+            };
+
+            if (fc.deferred)
+                fc.deferred->enqueue(frameIndex, std::move(destroyOld));
+            else
+                destroyOld();
+        }
+
+        img.view   = VK_NULL_HANDLE;
+        img.image  = VK_NULL_HANDLE;
+        img.memory = VK_NULL_HANDLE;
+
+        img.width     = 0;
+        img.height    = 0;
+        img.needsInit = true;
+    }
+
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(m_ctx.physicalDevice, &memProps);
+
+    auto findDeviceLocalType = [&](uint32_t typeBits) noexcept -> uint32_t {
+        for (uint32_t m = 0; m < memProps.memoryTypeCount; ++m)
+        {
+            if ((typeBits & (1u << m)) &&
+                (memProps.memoryTypes[m].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+            {
+                return m;
+            }
+        }
+        return UINT32_MAX;
+    };
+
+    RtImagePerFrame newImg = {};
+
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType   = VK_IMAGE_TYPE_2D;
+    ici.format      = m_rtFormat;
+    ici.extent      = VkExtent3D{w, h, 1};
+    ici.mipLevels   = 1;
+    ici.arrayLayers = 1;
+    ici.samples     = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage       = VK_IMAGE_USAGE_STORAGE_BIT |
+                VK_IMAGE_USAGE_SAMPLED_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(device, &ici, nullptr, &newImg.image) != VK_SUCCESS)
+        return false;
+
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(device, newImg.image, &req);
+
+    const uint32_t typeIndex = findDeviceLocalType(req.memoryTypeBits);
+    if (typeIndex == UINT32_MAX)
+    {
+        vkDestroyImage(device, newImg.image, nullptr);
+        return false;
+    }
+
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = typeIndex;
+
+    if (vkAllocateMemory(device, &mai, nullptr, &newImg.memory) != VK_SUCCESS)
+    {
+        vkDestroyImage(device, newImg.image, nullptr);
+        return false;
+    }
+
+    if (vkBindImageMemory(device, newImg.image, newImg.memory, 0) != VK_SUCCESS)
+    {
+        vkFreeMemory(device, newImg.memory, nullptr);
+        vkDestroyImage(device, newImg.image, nullptr);
+        return false;
+    }
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image                           = newImg.image;
+    vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format                          = m_rtFormat;
+    vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    vci.subresourceRange.baseMipLevel   = 0;
+    vci.subresourceRange.levelCount     = 1;
+    vci.subresourceRange.baseArrayLayer = 0;
+    vci.subresourceRange.layerCount     = 1;
+
+    if (vkCreateImageView(device, &vci, nullptr, &newImg.view) != VK_SUCCESS)
+    {
+        vkFreeMemory(device, newImg.memory, nullptr);
+        vkDestroyImage(device, newImg.image, nullptr);
+        return false;
+    }
+
+    newImg.width     = w;
+    newImg.height    = h;
+    newImg.needsInit = true;
+
+    // Commit into this slot.
+    s.images[frameIndex] = newImg;
+
+    // Update only THIS frame slot’s descriptors (set 2 / RT-only)
+    s.sets[frameIndex].writeStorageImage(device, 0, newImg.view, VK_IMAGE_LAYOUT_GENERAL);
+    s.sets[frameIndex].writeCombinedImageSampler(device,
+                                                 1,
+                                                 m_rtSampler,
+                                                 newImg.view,
+                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    s.cachedW = w;
+    s.cachedH = h;
     return true;
 }
 
@@ -1652,8 +2401,6 @@ void Renderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffe
 
     RtTlasFrame& t = m_rtTlasFrames[frameIndex];
 
-    // vkDeviceWaitIdle(m_ctx.device);
-
     if (rtReady(m_ctx) && m_ctx.rtDispatch && m_ctx.device && t.as)
         m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
 
@@ -1669,31 +2416,6 @@ void Renderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffe
         t.instanceStaging.destroy();
     }
 }
-
-// void Renderer::clearRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
-// {
-//     if (!vp)
-//         return;
-
-//     RtViewportState& rtv = ensureRtViewportState(vp);
-//     if (frameIndex >= rtv.sets.size())
-//         return;
-
-//     VkAccelerationStructureKHR nullAs = VK_NULL_HANDLE;
-
-//     VkWriteDescriptorSetAccelerationStructureKHR asInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-//     asInfo.accelerationStructureCount = 1;
-//     asInfo.pAccelerationStructures    = &nullAs;
-
-//     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-//     w.pNext           = &asInfo;
-//     w.dstSet          = rtv.sets[frameIndex].set();
-//     w.dstBinding      = 3;
-//     w.descriptorCount = 1;
-//     w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-
-//     vkUpdateDescriptorSets(m_ctx.device, 1, &w, 0, nullptr);
-// }
 
 void Renderer::clearRtTlasDescriptor(Viewport* /*vp*/, uint32_t /*frameIndex*/) noexcept
 {
@@ -1713,378 +2435,6 @@ void Renderer::destroyAllRtTlasFrames() noexcept
         destroyRtTlasFrame(i, true);
 
     m_rtTlasFrames.clear();
-}
-
-//==================================================================
-// renderPrePass (NOW does ALL MeshGpuResources::update(cmd) work here)
-//==================================================================
-
-void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
-{
-    if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
-        return;
-
-    if (fc.frameIndex >= m_framesInFlight)
-        return;
-
-    // ------------------------------------------------------------
-    // 1) Update ALL MeshGpuResources here (outside render pass)
-    // ------------------------------------------------------------
-    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-        // IMPORTANT: update() records transfer/barrier commands.
-        // Must be done BEFORE the render pass begins.
-        gpu->update(fc);
-    });
-
-    // ------------------------------------------------------------
-    // 2) RT dispatch (still here, also outside render pass)
-    // ------------------------------------------------------------
-    if (vp->drawMode() == DrawMode::RAY_TRACE)
-    {
-        if (!rtReady(m_ctx))
-            return;
-
-        renderRayTrace(vp, scene, fc);
-    }
-}
-
-//==================================================================
-// Render (NO MeshGpuResources::update(cmd) calls here anymore)
-//==================================================================
-
-//==================================================================
-// Render (RT present + raster overlays/selection)
-//==================================================================
-
-void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
-{
-    if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
-        return;
-
-    if (fc.frameIndex >= m_framesInFlight)
-        return;
-
-    if (m_pipelineLayout == VK_NULL_HANDLE)
-        return;
-
-    const VkCommandBuffer cmd      = fc.cmd;
-    const uint32_t        frameIdx = fc.frameIndex;
-
-    const uint32_t w = static_cast<uint32_t>(vp->width());
-    const uint32_t h = static_cast<uint32_t>(vp->height());
-
-    const glm::vec4 solidEdgeColor{0.10f, 0.10f, 0.10f, 0.5f};
-    const glm::vec4 wireVisibleColor{0.85f, 0.85f, 0.85f, 1.0f};
-    const glm::vec4 wireHiddenColor{0.85f, 0.85f, 0.85f, 0.25f};
-
-    auto uploadViewportUboSet0 = [&]() -> bool {
-        ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIdx);
-
-        if (frameIdx >= vpUbo.mvpBuffers.size() ||
-            frameIdx >= vpUbo.lightBuffers.size() ||
-            frameIdx >= vpUbo.uboSets.size())
-        {
-            return false;
-        }
-
-        if (!vpUbo.mvpBuffers[frameIdx].valid() ||
-            !vpUbo.lightBuffers[frameIdx].valid())
-        {
-            return false;
-        }
-
-        // ------------------------------------------------------------
-        // MVP
-        // ------------------------------------------------------------
-        {
-            MvpUBO ubo{};
-            ubo.proj = vp->projection();
-            ubo.view = vp->view();
-            vpUbo.mvpBuffers[frameIdx].upload(&ubo, sizeof(ubo));
-        }
-
-        // ------------------------------------------------------------
-        // Lights
-        // ------------------------------------------------------------
-        {
-            GpuLightsUBO lights{};
-            buildGpuLightsUBO(
-                m_lightingSettings,
-                m_headlight, // Renderer-owned modeling light
-                *vp,
-                scene,
-                lights);
-
-            static uint32_t count = 0;
-            if (count != lights.info.x)
-            {
-                count = lights.info.x;
-
-                std::cerr << "lightCount=" << lights.info.x
-                          << " ambient=(" << lights.ambient.x << "," << lights.ambient.y << "," << lights.ambient.z << "," << lights.ambient.w << ")\n";
-                if (lights.info.x > 0)
-                {
-                    const auto& L = lights.lights[0];
-                    std::cout << "L0 pos_type=(" << L.pos_type.x << "," << L.pos_type.y << "," << L.pos_type.z << "," << L.pos_type.w << ") "
-                              << "dir_range=(" << L.dir_range.x << "," << L.dir_range.y << "," << L.dir_range.z << "," << L.dir_range.w << ") "
-                              << "color_intensity=(" << L.color_intensity.x << "," << L.color_intensity.y << "," << L.color_intensity.z << "," << L.color_intensity.w << ")\n";
-                }
-            }
-            vpUbo.lightBuffers[frameIdx].upload(&lights, sizeof(lights));
-        }
-
-        // ------------------------------------------------------------
-        // Bind set=0 (MVP + Lights)
-        // ------------------------------------------------------------
-        {
-            VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
-            vkCmdBindDescriptorSets(cmd,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    m_pipelineLayout,
-                                    0,
-                                    1,
-                                    &gfxSet0,
-                                    0,
-                                    nullptr);
-        }
-
-        return true;
-    };
-
-    // ------------------------------------------------------------
-    // RAY TRACE PRESENT PATH (present RT image, then draw overlays)
-    // ------------------------------------------------------------
-    if (vp->drawMode() == DrawMode::RAY_TRACE)
-    {
-        if (!rtReady(m_ctx))
-            return;
-
-        RtViewportState& rtv = ensureRtViewportState(vp, frameIdx);
-
-        if (!ensureRtOutputImages(rtv, fc, w, h))
-            return;
-
-        if (!m_rtPresent.valid())
-            return;
-
-        if (frameIdx >= rtv.sets.size())
-            return;
-
-        // Present RT output
-        vkutil::setViewportAndScissor(cmd, w, h);
-
-        vkCmdBindPipeline(cmd,
-                          VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          m_rtPresent.pipeline());
-
-        VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
-        vkCmdBindDescriptorSets(cmd,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_rtPresent.layout(),
-                                0,
-                                1,
-                                &rtSet0,
-                                0,
-                                nullptr);
-
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-
-        // Restore normal set=0 (MVP + Lights) so overlays/selection/grid can render on top.
-        if (!uploadViewportUboSet0())
-            return;
-
-        vkutil::setViewportAndScissor(cmd, w, h);
-
-        drawSelection(cmd, vp, scene);
-
-        return;
-    }
-
-    // ------------------------------------------------------------
-    // NORMAL GRAPHICS PATH (bind MVP+Lights set=0)
-    // ------------------------------------------------------------
-    if (!uploadViewportUboSet0())
-        return;
-
-    vkutil::setViewportAndScissor(cmd, w, h);
-
-    // ------------------------------------------------------------
-    // Solid / Shaded
-    // ------------------------------------------------------------
-    if (vp->drawMode() != DrawMode::WIREFRAME)
-    {
-        const bool isShaded = (vp->drawMode() == DrawMode::SHADED);
-
-        // Choose solid or shaded pipeline
-        VkPipeline triPipe = isShaded
-                                 ? m_shadedPipeline.handle()
-                                 : m_solidPipeline.handle();
-
-        if (scene->materialHandler() &&
-            m_curMaterialCounter != scene->materialHandler()->changeCounter()->value())
-        {
-            const auto& mats = scene->materialHandler()->materials();
-            for (uint32_t i = 0; i < m_ctx.framesInFlight; ++i)
-            {
-                uploadMaterialsToGpu(mats, *scene->textureHandler(), i);
-                updateMaterialTextureTable(*scene->textureHandler(), i);
-            }
-            m_curMaterialCounter = scene->materialHandler()->changeCounter()->value();
-        }
-
-        {
-            VkDescriptorSet set1 = m_materialSets[frameIdx].set();
-            vkCmdBindDescriptorSets(cmd,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    m_pipelineLayout,
-                                    1,
-                                    1,
-                                    &set1,
-                                    0,
-                                    nullptr);
-        }
-
-        if (triPipe != VK_NULL_HANDLE)
-        {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, triPipe);
-
-            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-                PushConstants pc{};
-                pc.model = sm->model();
-                pc.color = glm::vec4(0, 0, 0, 1);
-
-                vkCmdPushConstants(cmd,
-                                   m_pipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0,
-                                   sizeof(PushConstants),
-                                   &pc);
-
-                const render::geom::GfxMeshGeometry geo = render::geom::selectGfxGeometry(sm, gpu);
-                if (!geo.valid())
-                    return;
-
-                VkBuffer     bufs[4] = {geo.posBuffer, geo.nrmBuffer, geo.uvBuffer, geo.matBuffer};
-                VkDeviceSize offs[4] = {0, 0, 0, 0};
-
-                vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
-                vkCmdDraw(cmd, geo.vertexCount, 1, 0, 0);
-            });
-        }
-
-        constexpr bool drawEdgesInSolid = true;
-        if (!isShaded && drawEdgesInSolid && m_wireOverlayPipeline.valid())
-        {
-            vkCmdBindPipeline(cmd,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              m_wireOverlayPipeline.handle());
-
-            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-                const bool useSubdiv = (sm->subdivisionLevel() > 0);
-
-                PushConstants pc{};
-                pc.model = sm->model();
-                pc.color = solidEdgeColor;
-
-                vkCmdPushConstants(cmd,
-                                   m_pipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0,
-                                   sizeof(PushConstants),
-                                   &pc);
-
-                const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
-                if (!wgeo.valid())
-                    return;
-
-                VkDeviceSize voff = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &wgeo.posVb, &voff);
-                vkCmdBindIndexBuffer(cmd, wgeo.idxIb, 0, wgeo.idxType);
-                vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
-            });
-        }
-    }
-    // ------------------------------------------------------------
-    // Wireframe mode (hidden-line)
-    // ------------------------------------------------------------
-    else
-    {
-        // 1) depth-only triangles
-        if (m_depthOnlyPipeline.valid())
-        {
-            vkCmdBindPipeline(cmd,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              m_depthOnlyPipeline.handle());
-
-            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-                PushConstants pc{};
-                pc.model = sm->model();
-                pc.color = glm::vec4(0, 0, 0, 0);
-
-                vkCmdPushConstants(cmd,
-                                   m_pipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT |
-                                       VK_SHADER_STAGE_GEOMETRY_BIT |
-                                       VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0,
-                                   sizeof(PushConstants),
-                                   &pc);
-
-                const render::geom::GfxMeshGeometry geo = render::geom::selectGfxGeometry(sm, gpu);
-                if (!geo.valid())
-                    return;
-
-                VkBuffer     bufs[4] = {geo.posBuffer, geo.nrmBuffer, geo.uvBuffer, geo.matBuffer};
-                VkDeviceSize offs[4] = {0, 0, 0, 0};
-
-                vkCmdBindVertexBuffers(cmd, 0, 4, bufs, offs);
-                vkCmdDraw(cmd, geo.vertexCount, 1, 0, 0);
-            });
-        }
-
-        auto drawEdges = [&](const GraphicsPipeline& pipeline, const glm::vec4& color) {
-            if (!pipeline.valid())
-                return;
-
-            vkCmdBindPipeline(cmd,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline.handle());
-
-            forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-                const bool useSubdiv = (sm->subdivisionLevel() > 0);
-
-                PushConstants pc{};
-                pc.model = sm->model();
-                pc.color = color;
-
-                vkCmdPushConstants(cmd,
-                                   m_pipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0,
-                                   sizeof(PushConstants),
-                                   &pc);
-
-                const render::geom::WireDrawGeo wgeo = render::geom::selectWireGeometry(gpu, useSubdiv);
-                if (!wgeo.valid())
-                    return;
-
-                VkDeviceSize voff = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &wgeo.posVb, &voff);
-                vkCmdBindIndexBuffer(cmd, wgeo.idxIb, 0, wgeo.idxType);
-                vkCmdDrawIndexed(cmd, wgeo.idxCount, 1, 0, 0, 0);
-            });
-        };
-
-        drawEdges(m_wireHiddenPipeline, wireHiddenColor);
-        drawEdges(m_wirePipeline, wireVisibleColor);
-    }
-
-    drawSelection(cmd, vp, scene);
-
-    if (scene->showSceneGrid())
-    {
-        drawSceneGrid(cmd, vp, scene);
-    }
 }
 
 //==================================================================
@@ -2415,6 +2765,10 @@ void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameConte
                          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 }
+
+//==================================================================
+// RT build helpers
+//==================================================================
 
 bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept
 {
@@ -2853,381 +3207,8 @@ bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCont
 }
 
 //==================================================================
-// drawOverlays / drawSelection / drawSceneGrid / ensureOverlayVertexCapacity
+// forEachVisibleMesh
 //==================================================================
-
-void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays)
-{
-    if (!vp)
-        return;
-
-    const std::vector<OverlayHandler::Overlay>& ovs = overlays.overlays();
-    if (ovs.empty())
-        return;
-
-    // -------------------------------------------------------------------------
-    // Build two batches:
-    //  - lineVertices: wide-line pipeline (existing)
-    //  - fillVertices: triangle list pipeline (new)
-    // -------------------------------------------------------------------------
-
-    std::vector<OverlayVertex>     lineVertices = {};
-    std::vector<OverlayFillVertex> fillVertices = {};
-
-    lineVertices.reserve(512);
-    fillVertices.reserve(512);
-
-    auto pushLine = [&](const glm::vec3& a, const glm::vec3& b, float thickness, const glm::vec4& color) {
-        OverlayVertex v0 = {};
-        v0.pos           = a;
-        v0.thickness     = thickness;
-        v0.color         = color;
-        lineVertices.push_back(v0);
-
-        OverlayVertex v1 = {};
-        v1.pos           = b;
-        v1.thickness     = thickness;
-        v1.color         = color;
-        lineVertices.push_back(v1);
-    };
-
-    auto pushTri = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec4& color) {
-        OverlayFillVertex v0 = {};
-        v0.pos               = a;
-        v0.color             = color;
-        fillVertices.push_back(v0);
-
-        OverlayFillVertex v1 = {};
-        v1.pos               = b;
-        v1.color             = color;
-        fillVertices.push_back(v1);
-
-        OverlayFillVertex v2 = {};
-        v2.pos               = c;
-        v2.color             = color;
-        fillVertices.push_back(v2);
-    };
-
-    auto triangulateFan = [&](const std::vector<glm::vec3>& pts, const glm::vec4& color) {
-        if (pts.size() < 3)
-            return;
-
-        const glm::vec3& v0 = pts[0];
-        for (size_t i = 1; i + 1 < pts.size(); ++i)
-            pushTri(v0, pts[i], pts[i + 1], color);
-    };
-
-    for (const OverlayHandler::Overlay& ov : ovs)
-    {
-        // ------------------------------------------------------------
-        // Lines
-        // ------------------------------------------------------------
-        for (const OverlayHandler::Line& L : ov.lines)
-            pushLine(L.a, L.b, L.thickness, L.color);
-
-        // ------------------------------------------------------------
-        // Polygons
-        // ------------------------------------------------------------
-        for (const OverlayHandler::Polygon& P : ov.polygons)
-        {
-            const std::vector<glm::vec3>& pts = P.verts;
-            if (pts.size() < 3)
-                continue;
-
-            if (P.filled)
-            {
-                triangulateFan(pts, P.color);
-            }
-            else
-            {
-                const float thicknessPx = (P.thicknessPx > 0.0f) ? P.thicknessPx : 2.5f;
-
-                for (size_t i = 0; i < pts.size(); ++i)
-                {
-                    const glm::vec3& a = pts[i];
-                    const glm::vec3& b = pts[(i + 1) % pts.size()];
-                    pushLine(a, b, thicknessPx, P.color);
-                }
-            }
-        }
-
-        // ------------------------------------------------------------
-        // Points -> small cross (optional)
-        // ------------------------------------------------------------
-        for (const OverlayHandler::Point& pt : ov.points)
-        {
-            const float pxW = vp->pixelScale(pt.p);
-            const float sW  = std::max(0.00001f, pxW * (pt.size * 0.5f));
-
-            const glm::vec3 r = vp->rightDirection();
-            const glm::vec3 u = vp->upDirection();
-
-            constexpr float kPointThicknessPx = 2.0f;
-
-            pushLine(pt.p - r * sW, pt.p + r * sW, kPointThicknessPx, pt.color);
-            pushLine(pt.p - u * sW, pt.p + u * sW, kPointThicknessPx, pt.color);
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Draw filled polys FIRST (so outlines sit on top)
-    // -------------------------------------------------------------------------
-    if (!fillVertices.empty())
-    {
-        const std::size_t fillCount = fillVertices.size();
-
-        ensureOverlayFillVertexCapacity(fillCount);
-        if (m_overlayFillVertexBuffer.valid() && m_overlayFillPipeline.valid())
-        {
-            const VkDeviceSize byteSize = static_cast<VkDeviceSize>(fillCount * sizeof(OverlayFillVertex));
-            m_overlayFillVertexBuffer.upload(fillVertices.data(), byteSize);
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayFillPipeline.handle());
-
-            PushConstants pc = {};
-            pc.model         = glm::mat4(1.0f);
-            pc.color         = glm::vec4(1.0f);
-            pc.overlayParams = glm::vec4(static_cast<float>(vp->width()),
-                                         static_cast<float>(vp->height()),
-                                         1.0f,
-                                         0.0f);
-
-            vkCmdPushConstants(cmd,
-                               m_pipelineLayout,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0,
-                               sizeof(PushConstants),
-                               &pc);
-
-            VkBuffer     vb      = m_overlayFillVertexBuffer.buffer();
-            VkDeviceSize offset0 = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset0);
-
-            vkCmdDraw(cmd, static_cast<uint32_t>(fillCount), 1, 0, 0);
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Draw lines AFTER
-    // -------------------------------------------------------------------------
-    if (lineVertices.empty())
-        return;
-
-    const std::size_t lineCount = lineVertices.size();
-
-    ensureOverlayVertexCapacity(lineCount);
-    if (!m_overlayVertexBuffer.valid())
-        return;
-
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(lineCount * sizeof(OverlayVertex));
-    m_overlayVertexBuffer.upload(lineVertices.data(), byteSize);
-
-    if (!m_overlayPipeline.valid())
-        return;
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayPipeline.handle());
-
-    PushConstants pc = {};
-    pc.model         = glm::mat4(1.0f);
-    pc.color         = glm::vec4(1.0f);
-    pc.overlayParams = glm::vec4(static_cast<float>(vp->width()),
-                                 static_cast<float>(vp->height()),
-                                 1.0f,
-                                 0.0f);
-
-    vkCmdPushConstants(cmd,
-                       m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0,
-                       sizeof(PushConstants),
-                       &pc);
-
-    VkBuffer     vb      = m_overlayVertexBuffer.buffer();
-    VkDeviceSize offset0 = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset0);
-
-    vkCmdDraw(cmd, static_cast<uint32_t>(lineCount), 1, 0, 0);
-}
-
-void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
-{
-    if (requiredVertexCount == 0)
-        return;
-
-    if (requiredVertexCount <= m_overlayVertexCapacity && m_overlayVertexBuffer.valid())
-        return;
-
-    if (m_overlayVertexBuffer.valid())
-        m_overlayVertexBuffer.destroy();
-
-    const VkDeviceSize bufferSize = static_cast<VkDeviceSize>(requiredVertexCount * sizeof(OverlayVertex));
-
-    m_overlayVertexBuffer.create(m_ctx.device,
-                                 m_ctx.physicalDevice,
-                                 bufferSize,
-                                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                 /*persistentMap*/ true);
-
-    if (!m_overlayVertexBuffer.valid())
-    {
-        m_overlayVertexCapacity = 0;
-        return;
-    }
-
-    m_overlayVertexCapacity = requiredVertexCount;
-}
-
-void Renderer::ensureOverlayFillVertexCapacity(std::size_t requiredVertexCount)
-{
-    if (requiredVertexCount == 0)
-        return;
-
-    if (requiredVertexCount <= m_overlayFillVertexCapacity && m_overlayFillVertexBuffer.valid())
-        return;
-
-    if (m_overlayFillVertexBuffer.valid())
-        m_overlayFillVertexBuffer.destroy();
-
-    const VkDeviceSize bufferSize = static_cast<VkDeviceSize>(requiredVertexCount * sizeof(OverlayFillVertex));
-
-    m_overlayFillVertexBuffer.create(m_ctx.device,
-                                     m_ctx.physicalDevice,
-                                     bufferSize,
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                     /*persistentMap*/ true);
-
-    if (!m_overlayFillVertexBuffer.valid())
-    {
-        m_overlayFillVertexCapacity = 0;
-        return;
-    }
-
-    m_overlayFillVertexCapacity = requiredVertexCount;
-}
-
-//==================================================================
-// drawSelection (NO MeshGpuResources::update(cmd) calls here)
-//==================================================================
-
-void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
-{
-    if (!scene || !vp)
-        return;
-
-    if (!m_selVertPipeline.valid() &&
-        !m_selEdgePipeline.valid() &&
-        !m_selPolyPipeline.valid())
-    {
-        return;
-    }
-
-    VkDeviceSize zeroOffset = 0;
-
-    const glm::vec4 selColorVisible = glm::vec4(1.0f, 0.55f, 0.10f, 0.6f);
-    const glm::vec4 selColorHidden  = glm::vec4(1.0f, 0.55f, 0.10f, 0.3f);
-
-    const bool showOccluded = (vp->drawMode() == DrawMode::WIREFRAME);
-
-    auto pushPC = [&](SceneMesh& sm, const glm::vec4& color) {
-        PushConstants pc{};
-        pc.model = sm.model();
-        pc.color = color;
-
-        vkCmdPushConstants(cmd,
-                           m_pipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0,
-                           sizeof(PushConstants),
-                           &pc);
-    };
-
-    auto drawHidden = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
-        if (!showOccluded)
-            return;
-        if (pipeline == VK_NULL_HANDLE || indexCount == 0)
-            return;
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
-        pushPC(sm, selColorHidden);
-        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
-    };
-
-    auto drawVisible = [&](SceneMesh& sm, VkPipeline pipeline, uint32_t indexCount) {
-        if (pipeline == VK_NULL_HANDLE || indexCount == 0)
-            return;
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        vkCmdSetDepthBias(cmd, -1.0f, 0.0f, -1.0f);
-        pushPC(sm, selColorVisible);
-        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
-    };
-
-    const render::geom::SelPipelines pipes{
-        .vertVis = m_selVertPipeline.handle(),
-        .vertHid = m_selVertHiddenPipeline.handle(),
-        .edgeVis = m_selEdgePipeline.handle(),
-        .edgeHid = m_selEdgeHiddenPipeline.handle(),
-        .polyVis = m_selPolyPipeline.handle(),
-        .polyHid = m_selPolyHiddenPipeline.handle(),
-    };
-
-    const SelectionMode mode = scene->selectionMode();
-
-    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-        const bool useSubdiv = (sm->subdivisionLevel() > 0);
-
-        const render::geom::SelDrawGeo geo =
-            render::geom::selectSelGeometry(gpu, useSubdiv, mode, pipes);
-
-        if (!geo.valid())
-            return;
-
-        vkCmdBindVertexBuffers(cmd, 0, 1, &geo.posVb, &zeroOffset);
-        vkCmdBindIndexBuffer(cmd, geo.selIb, 0, VK_INDEX_TYPE_UINT32);
-
-        drawHidden(*sm, geo.pipeHid, geo.selCount);
-        drawVisible(*sm, geo.pipeVis, geo.selCount);
-    });
-
-    vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
-}
-
-void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
-{
-    if (!vp || !scene)
-        return;
-
-    if (!scene->showSceneGrid())
-        return;
-
-    if (!m_grid)
-        return;
-
-    if (m_pipelineLayout == VK_NULL_HANDLE)
-        return;
-
-    glm::mat4 gridModel = render::geom::gridModelFor(vp->viewMode());
-
-    PushConstants pc{};
-    pc.model         = gridModel;
-    pc.color         = glm::vec4(0, 0, 0, 0);
-    pc.overlayParams = glm::vec4(0.0f); // unused for grid
-
-    vkCmdPushConstants(cmd,
-                       m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT |
-                           VK_SHADER_STAGE_GEOMETRY_BIT |
-                           VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0,
-                       sizeof(PushConstants),
-                       &pc);
-
-    const bool xrayGrid = (vp->drawMode() == DrawMode::WIREFRAME);
-    m_grid->render(cmd, xrayGrid);
-}
 
 template<typename Fn>
 void Renderer::forEachVisibleMesh(Scene* scene, Fn&& fn)

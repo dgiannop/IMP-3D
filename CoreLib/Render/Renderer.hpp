@@ -42,31 +42,32 @@ constexpr uint32_t kMaxTextureCount = 512;
 /**
  * @brief Minimal Vulkan renderer for the app.
  *
- * NOTE (important refactor):
- *  - RT resources are now PER-VIEWPORT (and per-frame inside each viewport).
- *    This avoids descriptor/image/camera buffer clashes when multiple viewports
- *    render RT in the same frame.
+ * Lifetime overview:
  *
- * Device-level resources (created in initDevice(), destroyed in shutdown()):
- *  - descriptor set layouts + descriptor pools
- *  - per-viewport, per-frame MVP uniform buffers + set=0 descriptor sets
- *  - pipeline layout
- *  - material SSBO (host-visible)
- *  - overlay vertex buffer (host-visible)
- *  - optional device-level grid resources
+ *  - Device lifetime (initDevice() → shutdown()):
+ *      * Descriptor set layouts / pools.
+ *      * Pipeline layouts (raster + RT).
+ *      * Material SSBO buffer.
+ *      * Overlay vertex buffers.
+ *      * RT pipeline, SBT, RT descriptor layout/pool, RT sampler, RT upload pool.
+ *      * GridRendererVK device resources.
  *
- * Swapchain-level resources (created in initSwapchain(rp), destroyed in destroySwapchainResources()):
- *  - graphics pipelines (created against a specific VkRenderPass)
- *  - grid swapchain pipelines/resources
- *  - RT present pipeline (fullscreen) (created against render pass)
+ *  - Swapchain lifetime (initSwapchain() → destroySwapchainResources()):
+ *      * Graphics pipelines (raster, selection, overlays).
+ *      * RtPresentPipeline (fullscreen present) and grid swapchain pipelines.
  *
- * Usage:
- *  - initDevice(ctx) once after VkDevice is ready
- *  - initSwapchain(renderPass) whenever swapchain (and therefore render pass) changes
- *  - renderPrePass(vp, scene, fc) BEFORE beginRenderPass (RT dispatch + uploads)
- *  - render(vp, scene, fc) per frame (raster OR RT present)
- *  - destroySwapchainResources() on swapchain teardown / resize
- *  - shutdown() on app shutdown / device teardown
+ *  - Per-frame (global, not tied to a specific viewport):
+ *      * Material descriptor sets (set = 1).
+ *      * TLAS frames (one TLAS per frame-in-flight).
+ *
+ *  - Per-viewport:
+ *      * m_viewportUbos: frame-global raster UBOs (set = 0) for each viewport.
+ *      * m_rtViewports: RT images, RT per-frame sets/buffers, RT scratch for
+ *        each viewport.
+ *
+ *  - Per-viewport + frame:
+ *      * UBOs for MVP/lights/camera.
+ *      * RT camera UBO, RT instance SSBO, RT storage image, RT scratch.
  */
 class Renderer
 {
@@ -84,12 +85,22 @@ public:
     // Public API: Lifetime / frame hooks
     // ============================================================
 
+    /// Device lifetime: call once after VkDevice is ready.
     bool initDevice(const VulkanContext& ctx);
+
+    /// Swapchain lifetime: call whenever swapchain/render pass changes.
     bool initSwapchain(VkRenderPass renderPass);
+
+    /// Swapchain teardown: call on resize / swapchain destruction.
     void destroySwapchainResources() noexcept;
+
+    /// Device teardown: destroys all device-level and swapchain-level resources.
     void shutdown() noexcept;
 
+    /// Called when the app is idle; used for RT TLAS change tracking hookup.
     void idle(Scene* scene);
+
+    /// Explicit vkDeviceWaitIdle wrapper.
     void waitDeviceIdle() noexcept;
 
     // ------------------------------------------------------------
@@ -113,15 +124,25 @@ public:
     // Public API: Rendering entry points
     // ============================================================
 
+    /// Update per-frame material texture descriptor table (set = 1).
     void updateMaterialTextureTable(const TextureHandler& textureHandler, uint32_t frameIndex);
 
-    // Pre-pass work that must occur OUTSIDE a render pass (uploads, AS builds, RT dispatch).
+    /**
+     * @brief Pre-pass work that must occur OUTSIDE a render pass.
+     *
+     * - MeshGpuResources::update()
+     * - RT dispatch (vkCmdTraceRaysKHR) for DrawMode::RAY_TRACE
+     */
     void renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
 
-    // Main pass: raster rendering OR RT present.
+    /**
+     * @brief Main pass: raster rendering OR RT present + overlays/selection.
+     *
+     * Called per-viewport, per-frame, inside the active render pass.
+     */
     void render(Viewport* vp, Scene* scene, const RenderFrameContext& fc);
 
-    // Overlay draw helpers (called inside raster pass as needed).
+    /// Overlay draw helpers (called inside raster pass as needed).
     void drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays);
 
 public:
@@ -129,7 +150,7 @@ public:
     // Shader-visible structs (must match GLSL/std140/std430)
     // ============================================================
 
-    // set=0 binding=0 (raster path)
+    // set=0 binding=0 (raster path) - per-viewport, per-frame UBO
     struct MvpUBO
     {
         glm::mat4 proj;
@@ -145,21 +166,19 @@ public:
     };
     static_assert(sizeof(PushConstants) == 96);
 
-    // set=0 binding=2 (RT path)
+    // set=0 binding=2 (RT path) - per-viewport, per-frame UBO
     struct RtCameraUBO
     {
         glm::mat4 invViewProj = {}; // CLIP -> WORLD (or whatever you currently use)
         glm::mat4 view        = {}; // WORLD -> VIEW
-        glm::mat4 invView     = {}; // VIEW -> WORLD  (NEW)
+        glm::mat4 invView     = {}; // VIEW -> WORLD
         glm::vec4 camPos      = {}; // world-space camera position
         glm::vec4 clearColor  = {}; // clear color for RT
     };
 
     static_assert(sizeof(RtCameraUBO) % 16 == 0, "RtCameraUBO must be std140-aligned");
-    // static_assert(sizeof(RtCameraUBO) == 160);
-    // static_assert(alignof(RtCameraUBO) == 16);
 
-    // set=0 binding=4 (RT path) - std430 SSBO element
+    // set=2 binding=3 (RT path) - std430 SSBO element, per-instance
     struct alignas(8) RtInstanceData
     {
         uint64_t posAdr   = 0;
@@ -181,6 +200,7 @@ public:
     // Host-only structs (CPU-side bookkeeping)
     // ============================================================
 
+    // CPU-side vertex format for wide-line overlays (gizmos, handles, etc.)
     struct OverlayVertex
     {
         glm::vec3 pos;
@@ -188,6 +208,7 @@ public:
         glm::vec4 color     = glm::vec4(1.0f);
     };
 
+    // CPU-side vertex format for filled overlay polygons (triangles).
     struct OverlayFillVertex
     {
         glm::vec3 pos;
@@ -195,16 +216,30 @@ public:
     };
     static_assert(sizeof(OverlayFillVertex) == (3 + 4) * 4);
 
+    /**
+     * @brief Per-viewport frame-global UBO state (set = 0).
+     *
+     * Scope:
+     *  - One instance per Viewport* (Renderer::m_viewportUbos).
+     *  - Inside each instance, vectors are sized to framesInFlight.
+     *
+     * Contents (per viewport, per frameIndex):
+     *  - mvpBuffers[fi]   : MvpUBO (binding 0, raster path).
+     *  - lightBuffers[fi] : GpuLightsUBO (binding 1, raster + RT).
+     *  - uboSets[fi]      : DescriptorSet for set=0 (frame globals).
+     *
+     * RtCameraUBO (binding 2) is bound into uboSets[fi] from RtViewportState.
+     */
     struct ViewportUboState
     {
-        std::vector<GpuBuffer>     mvpBuffers;
-        std::vector<GpuBuffer>     lightBuffers; // per-frame Lights UBO buffer
-        std::vector<DescriptorSet> uboSets;
+        std::vector<GpuBuffer>     mvpBuffers;   ///< per-frame MVP UBO (binding 0)
+        std::vector<GpuBuffer>     lightBuffers; ///< per-frame Lights UBO (binding 1)
+        std::vector<DescriptorSet> uboSets;      ///< per-frame frame-globals set (set = 0)
     };
 
 private:
     // ============================================================
-    // Raster helpers
+    // Raster helpers (implementation details)
     // ============================================================
 
     bool createPipelineLayout() noexcept;
@@ -215,7 +250,7 @@ private:
 
     ViewportUboState& ensureViewportUboState(Viewport* vp, uint32_t frameIndex);
 
-    // Materials (raster path)
+    // Materials (raster + RT path)
     void uploadMaterialsToGpu(const std::vector<Material>& materials,
                               TextureHandler&              texHandler,
                               uint32_t                     frameIndex);
@@ -231,9 +266,16 @@ private:
 
 private:
     // ============================================================
-    // RT per-viewport state
+    // RT per-viewport state (images, RT set, RT UBO/SSBO, scratch)
     // ============================================================
 
+    /**
+     * @brief Per-viewport, per-frame RT output image.
+     *
+     * Scope:
+     *  - One entry per frame-in-flight inside RtViewportState::images.
+     *  - Destroyed when viewport RT state is destroyed or resized.
+     */
     struct RtImagePerFrame
     {
         VkImage        image     = VK_NULL_HANDLE;
@@ -244,24 +286,43 @@ private:
         bool           needsInit = true;
     };
 
+    /**
+     * @brief RT state for a single viewport (per-viewport bucket).
+     *
+     * Scope:
+     *  - One RtViewportState per Viewport* (Renderer::m_rtViewports).
+     *  - Each vector is sized to framesInFlight.
+     *
+     * Contents (per viewport, per frameIndex):
+     *  - sets[fi]              : RT-only descriptor set (set = 2).
+     *  - cameraBuffers[fi]     : RtCameraUBO (bound into set=0/binding=2).
+     *  - instanceDataBuffers[fi]: RtInstanceData SSBO (set=2/binding=3).
+     *  - images[fi]            : RT output image + view (storage/sampled).
+     *  - scratchBuffers[fi]    : RT scratch buffer (AS build) for this viewport.
+     *  - scratchSizes[fi]      : capacity-tracking for scratchBuffers.
+     */
     struct RtViewportState
     {
-        std::vector<DescriptorSet>   sets;                ///< per-frame RT descriptor set (set=0 for RT path)
-        std::vector<GpuBuffer>       cameraBuffers;       ///< per-frame RT camera UBO (binding=2)
-        std::vector<GpuBuffer>       instanceDataBuffers; ///< per-frame instance SSBO (binding=4)
+        std::vector<DescriptorSet>   sets;                ///< per-frame RT descriptor set (set=2)
+        std::vector<GpuBuffer>       cameraBuffers;       ///< per-frame RT camera UBO (binding=2 in set=0)
+        std::vector<GpuBuffer>       instanceDataBuffers; ///< per-frame instance SSBO (binding=3 in set=2)
         std::vector<RtImagePerFrame> images;              ///< per-frame RT output image + view
 
-        std::vector<GpuBuffer>    scratchBuffers; ///< per-frame RT scratch (AS build)
+        std::vector<GpuBuffer>    scratchBuffers; ///< per-frame RT scratch (AS build) for this viewport
         std::vector<VkDeviceSize> scratchSizes;   ///< per-frame scratch capacity (bytes)
 
-        uint32_t cachedW = 0;
-        uint32_t cachedH = 0;
+        uint32_t cachedW = 0; ///< Last RT width used to create images.
+        uint32_t cachedH = 0; ///< Last RT height used to create images.
 
+        /// Destroy all device resources for this viewport (all frames).
         void destroyDeviceResources(const VulkanContext& ctx) noexcept;
     };
 
     RtViewportState& ensureRtViewportState(Viewport* vp, uint32_t frameIndex);
-    bool             ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h);
+    bool             ensureRtOutputImages(RtViewportState&          s,
+                                          const RenderFrameContext& fc,
+                                          uint32_t                  w,
+                                          uint32_t                  h);
     void             destroyRtOutputImages(RtViewportState& s) noexcept;
 
 private:
@@ -299,20 +360,27 @@ private:
 
 private:
     // ============================================================
-    // Context / frame config
+    // Context / frame config (device lifetime)
     // ============================================================
 
+    /// Immutable Vulkan handles/config for this renderer.
     VulkanContext m_ctx{};
-    uint32_t      m_framesInFlight = 1;
+
+    /// Number of frames in flight (device lifetime).
+    uint32_t m_framesInFlight = 1;
+
+    /// Upper bound for how many Viewports we allocate per-frame descriptor resources for.
+    static constexpr uint32_t kMaxViewports = 8;
 
 private:
     // ============================================================
-    // Raster pipelines / layout (swapchain-level + device-level)
+    // Raster pipelines / layout (device + swapchain lifetime)
     // ============================================================
 
+    /// Raster pipeline layout (set=0 frame globals, set=1 materials).
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 
-    // New graphics pipeline wrappers (swapchain-level)
+    // Graphics pipelines (swapchain lifetime: depend on VkRenderPass).
     GraphicsPipeline m_solidPipeline{};       // SolidDraw (triangles, unlit)
     GraphicsPipeline m_shadedPipeline{};      // ShadedDraw (triangles, lit)
     GraphicsPipeline m_depthOnlyPipeline{};   // depth prepass (triangles, no color)
@@ -330,80 +398,149 @@ private:
     GraphicsPipeline m_selEdgeHiddenPipeline{}; // selection edges hidden
     GraphicsPipeline m_selPolyHiddenPipeline{}; // selection polys hidden
 
+    /// Grid renderer (owns its own device + swapchain resources internally).
     std::unique_ptr<GridRendererVK> m_grid;
 
 private:
     // ============================================================
-    // Raster descriptors / per-viewport UBOs
+    // Raster descriptors / frame globals (device lifetime)
     // ============================================================
 
+    /**
+     * @brief Frame globals DescriptorSetLayout (set = 0).
+     *
+     * Binding 0 : MvpUBO       (raster)
+     * Binding 1 : GpuLightsUBO (raster + RT)
+     * Binding 2 : RtCameraUBO  (RT only)
+     */
     DescriptorSetLayout m_descriptorSetLayout;
+
+    /**
+     * @brief Material DescriptorSetLayout (set = 1).
+     *
+     * Binding 0 : materials SSBO
+     * Binding 1 : sampler array (texture table)
+     */
     DescriptorSetLayout m_materialSetLayout;
-    DescriptorPool      m_descriptorPool;
 
+    /**
+     * @brief Shared descriptor pool for set 0 (frame globals) and set 1 (materials).
+     *
+     * Sizes are allocated for kMaxViewports * framesInFlight frame-global sets
+     * plus framesInFlight material sets.
+     */
+    DescriptorPool m_descriptorPool;
+
+    /**
+     * @brief Per-viewport frame-global state (set = 0).
+     *
+     * Keyed by Viewport*, each value is a ViewportUboState sized to framesInFlight.
+     */
     std::unordered_map<Viewport*, ViewportUboState> m_viewportUbos;
-    std::vector<DescriptorSet>                      m_materialSets;
 
+    /**
+     * @brief Per-frame material descriptor sets (set = 1).
+     *
+     * Indexed by frameIndex (0..framesInFlight-1), independent of viewport.
+     */
+    std::vector<DescriptorSet> m_materialSets;
+
+    /// Modeling headlight state (renderer-owned implementation detail).
     HeadlightSettings m_headlight = {};
 
-    /** @brief Scene-driven lighting policy (headlight/scene lights/exposure/etc). */
+    /// Scene-driven lighting policy (headlight/scene lights/exposure/etc).
     LightingSettings m_lightingSettings = {};
 
 private:
     // ============================================================
-    // Materials SSBO
+    // Materials SSBO (device lifetime, per-frame descriptor binding)
     // ============================================================
 
-    GpuBuffer     m_materialBuffer;
-    std::uint32_t m_materialCount      = 0;
+    /// GPU buffer backing the materials SSBO (set=1, binding=0).
+    GpuBuffer m_materialBuffer;
+
+    /// Current number of Material entries stored in m_materialBuffer.
+    std::uint32_t m_materialCount = 0;
+
+    /// Change-counter snapshot for Scene materials (to avoid redundant uploads).
     std::uint64_t m_curMaterialCounter = 0;
 
 private:
     // ============================================================
-    // Overlay vertex buffer
+    // Overlay vertex buffers (device lifetime)
     // ============================================================
 
+    /// Wide-line overlay vertex buffer (OverlayVertex).
     GpuBuffer   m_overlayVertexBuffer;
     std::size_t m_overlayVertexCapacity = 0;
 
+    /// Filled overlay vertex buffer (OverlayFillVertex).
     GpuBuffer   m_overlayFillVertexBuffer;
     std::size_t m_overlayFillVertexCapacity = 0;
 
 private:
     // ============================================================
-    // Ray tracing (DrawMode::RAY_TRACE)
+    // Ray tracing (DrawMode::RAY_TRACE) - device + swapchain lifetime
     // ============================================================
 
+    /**
+     * @brief RT-only DescriptorSetLayout (set = 2).
+     *
+     * Binding 0 : storage image (raygen writes)
+     * Binding 1 : combined image sampler (present, optional raygen)
+     * Binding 2 : TLAS (VkAccelerationStructureKHR)
+     * Binding 3 : RtInstanceData SSBO
+     */
     DescriptorSetLayout m_rtSetLayout;
-    DescriptorPool      m_rtPool;
 
+    /// Descriptor pool used to allocate RT per-viewport, per-frame sets (set = 2).
+    DescriptorPool m_rtPool;
+
+    /// Sampler used by RT present pipeline to sample the RT output image.
     VkSampler m_rtSampler = VK_NULL_HANDLE;
-    VkFormat  m_rtFormat  = VK_FORMAT_R8G8B8A8_UNORM;
 
+    /// Format of RT output images.
+    VkFormat m_rtFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
+    /// RT scene pipeline (raygen/miss/hit).
     vkrt::RtPipeline m_rtPipeline;
-    vkrt::RtSbt      m_rtSbt;
 
-    // Ray tracing present pipeline (fullscreen blit)
+    /// Shader binding table for m_rtPipeline.
+    vkrt::RtSbt m_rtSbt;
+
+    /// Ray tracing present pipeline (fullscreen blit from RT output image).
     vkrt::RtPresentPipeline m_rtPresent;
 
+    /// Command pool used for RT uploads / SBT builds.
     VkCommandPool m_rtUploadPool = VK_NULL_HANDLE;
 
+    /**
+     * @brief Per-viewport RT state (images, RT sets, camera UBO, instance SSBO, scratch).
+     *
+     * Keyed by Viewport*, each value is an RtViewportState sized to framesInFlight.
+     */
     std::unordered_map<Viewport*, RtViewportState> m_rtViewports;
-
-    static constexpr uint32_t kMaxViewports = 8;
 
 private:
     // ============================================================
     // RT Acceleration Structures (BLAS per mesh, TLAS per frame)
     // ============================================================
 
+    /**
+     * @brief BLAS state for a single SceneMesh.
+     *
+     * Scope:
+     *  - One RtBlas per SceneMesh* (m_rtBlas map).
+     *  - Rebuilt when mesh topology/deform or RT geometry changes.
+     */
     struct RtBlas
     {
         VkAccelerationStructureKHR as      = VK_NULL_HANDLE;
         VkDeviceAddress            address = 0;
 
-        GpuBuffer asBuffer;
+        GpuBuffer asBuffer; ///< Backing buffer for BLAS.
 
+        // Geometry sizes for build key.
         VkBuffer posBuffer = VK_NULL_HANDLE;
         uint32_t posCount  = 0;
         VkBuffer idxBuffer = VK_NULL_HANDLE;
@@ -413,9 +550,22 @@ private:
         uint64_t topoCounter   = 0;
         uint64_t deformCounter = 0;
 
-        uint64_t buildKey = 0;
+        uint64_t buildKey = 0; ///< Hash of topo/deform/geometry used to avoid rebuild.
     };
 
+    /**
+     * @brief TLAS state for a single frame-in-flight.
+     *
+     * Scope:
+     *  - One RtTlasFrame per frameIndex (m_rtTlasFrames).
+     *
+     * Contents:
+     *  - as              : TLAS handle.
+     *  - buffer          : TLAS backing buffer.
+     *  - address         : device address for TLAS.
+     *  - instanceBuffer  : device-local instance data buffer.
+     *  - instanceStaging : host-visible buffer used to upload instances.
+     */
     struct RtTlasFrame
     {
         VkAccelerationStructureKHR as = VK_NULL_HANDLE;
@@ -426,20 +576,27 @@ private:
         GpuBuffer instanceBuffer  = {};
         GpuBuffer instanceStaging = {};
 
-        uint64_t buildKey = 0;
+        uint64_t buildKey = 0; ///< Hash used to detect when TLAS needs rebuild.
     };
 
+    /// BLAS map per SceneMesh* (device lifetime; contents change with scene).
     std::unordered_map<SceneMesh*, RtBlas> m_rtBlas = {};
-    std::vector<RtTlasFrame>               m_rtTlasFrames;
+
+    /// TLAS frames: one per frame-in-flight (device lifetime).
+    std::vector<RtTlasFrame> m_rtTlasFrames;
 
 private:
     // ============================================================
     // RT change tracking (TLAS invalidation)
     // ============================================================
 
+    /// Counter used as a parent for mesh topology/deform counters to invalidate TLAS.
     SysCounterPtr m_rtTlasChangeCounter;
-    SysMonitor    m_rtTlasChangeMonitor;
 
+    /// Monitor for m_rtTlasChangeCounter, used in Renderer::idle().
+    SysMonitor m_rtTlasChangeMonitor;
+
+    /// Meshes whose topology/deform counters have been linked to m_rtTlasChangeCounter.
     std::unordered_set<class SysMesh*> m_rtTlasLinkedMeshes;
 
 private:
@@ -447,6 +604,14 @@ private:
     // Misc helpers
     // ============================================================
 
+    /**
+     * @brief Iterate visible SceneMeshes and provide MeshGpuResources.
+     *
+     * Ensures that each visible SceneMesh has a MeshGpuResources, creating one
+     * on demand, then calls the provided functor:
+     *
+     *   fn(SceneMesh* mesh, MeshGpuResources* gpu)
+     */
     template<typename Fn>
     void forEachVisibleMesh(Scene* scene, Fn&& fn);
 };
