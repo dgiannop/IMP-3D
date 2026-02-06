@@ -6,6 +6,27 @@
 #include <vulkan/vulkan.h>
 
 /**
+ * @brief Vulkan configuration constants shared across UI + CoreLib.
+ *
+ * This header is included by both layers, so keep this section lightweight and
+ * independent of renderer implementation details.
+ */
+namespace vkcfg
+{
+    /**
+     * @brief Maximum number of frames-in-flight supported by the engine.
+     *
+     * All per-frame resources should be sized to this compile-time constant
+     * (typically via std::array<T, kMaxFramesInFlight>).
+     *
+     * A runtime-reported frames-in-flight value may still exist (e.g. swapchain
+     * or backend preference), but it must be clamped to [1, kMaxFramesInFlight]
+     * before being used for indexing.
+     */
+    static constexpr std::uint32_t kMaxFramesInFlight = 2;
+} // namespace vkcfg
+
+/**
  * @brief Optional ray tracing dispatch table (device-level function pointers).
  *
  * If VulkanContext::supportsRayTracing == true, rtDispatch is non-null and
@@ -111,8 +132,16 @@ struct VulkanContext
     VkQueue  graphicsQueue            = VK_NULL_HANDLE;
     uint32_t graphicsQueueFamilyIndex = 0;
 
-    VkSampleCountFlagBits sampleCount    = VK_SAMPLE_COUNT_1_BIT;
-    uint32_t              framesInFlight = 2;
+    VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
+
+    /**
+     * @brief Active frames-in-flight count used for indexing per-frame resources.
+     *
+     * This is a runtime value (backend/swapchain preference) but must always be
+     * clamped to [1, vkcfg::kMaxFramesInFlight] by the UI/backend layer before
+     * CoreLib uses it.
+     */
+    uint32_t framesInFlight = 2;
 
     VkPhysicalDeviceProperties deviceProps{};
 

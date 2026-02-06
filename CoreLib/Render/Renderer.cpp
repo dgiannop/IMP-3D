@@ -1,6 +1,6 @@
 #include "Renderer.hpp"
 
-#include <Sysmesh.hpp>
+#include <SysMesh.hpp>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -24,28 +24,33 @@
 // RtViewportState destruction
 //==================================================================
 
-void Renderer::RtViewportState::destroyDeviceResources(const VulkanContext& ctx) noexcept
+void Renderer::RtViewportState::destroyDeviceResources(const VulkanContext& ctx, uint32_t framesInFlight) noexcept
 {
-    for (GpuBuffer& b : cameraBuffers)
-        b.destroy();
-    cameraBuffers.clear();
+    const uint32_t fi = std::min(framesInFlight, vkcfg::kMaxFramesInFlight);
 
-    for (GpuBuffer& b : instanceDataBuffers)
-        b.destroy();
-    instanceDataBuffers.clear();
+    for (uint32_t i = 0; i < fi; ++i)
+    {
+        cameraBuffers[i].destroy();
+        cameraBuffers[i] = {};
 
-    // Per-viewport scratch
-    for (GpuBuffer& b : scratchBuffers)
-        b.destroy();
-    scratchBuffers.clear();
-    scratchSizes.clear();
+        instanceDataBuffers[i].destroy();
+        instanceDataBuffers[i] = {};
+
+        scratchBuffers[i].destroy();
+        scratchBuffers[i] = {};
+        scratchSizes[i]   = 0;
+
+        sets[i] = {}; // DescriptorSet is a small handle wrapper; releasing is pool-owned.
+    }
 
     if (ctx.device)
     {
         VkDevice device = ctx.device;
 
-        for (RtImagePerFrame& img : images)
+        for (uint32_t i = 0; i < fi; ++i)
         {
+            RtImagePerFrame& img = images[i];
+
             if (img.view)
             {
                 vkDestroyImageView(device, img.view, nullptr);
@@ -67,9 +72,7 @@ void Renderer::RtViewportState::destroyDeviceResources(const VulkanContext& ctx)
             img.needsInit = true;
         }
     }
-    images.clear();
 
-    sets.clear();
     cachedW = 0;
     cachedH = 0;
 }
@@ -85,12 +88,12 @@ Renderer::Renderer() noexcept : m_rtTlasChangeCounter{std::make_shared<SysCounte
 bool Renderer::initDevice(const VulkanContext& ctx)
 {
     m_ctx            = ctx;
-    m_framesInFlight = std::max(1u, m_ctx.framesInFlight);
+    m_framesInFlight = std::clamp(m_ctx.framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
 
     m_viewportUbos.clear();
 
-    m_rtTlasFrames.clear();
-    m_rtTlasFrames.resize(m_framesInFlight);
+    // Fixed-size storage: reset by assignment.
+    m_rtTlasFrames = {};
 
     if (!createDescriptors(m_framesInFlight))
         return false;
@@ -158,25 +161,30 @@ void Renderer::shutdown() noexcept
     // Per-viewport MVP + Lights state
     for (auto& [vp, state] : m_viewportUbos)
     {
-        for (auto& buf : state.mvpBuffers)
-            buf.destroy();
-        state.mvpBuffers.clear();
+        const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
 
-        for (auto& buf : state.lightBuffers)
-            buf.destroy();
-        state.lightBuffers.clear();
+        for (uint32_t i = 0; i < fi; ++i)
+        {
+            state.mvpBuffers[i].destroy();
+            state.mvpBuffers[i] = {};
 
-        state.uboSets.clear();
+            state.lightBuffers[i].destroy();
+            state.lightBuffers[i] = {};
+
+            state.uboSets[i] = {};
+        }
     }
     m_viewportUbos.clear();
 
     // Per-viewport RT state
     for (auto& [vp, st] : m_rtViewports)
-        st.destroyDeviceResources(m_ctx);
+        st.destroyDeviceResources(m_ctx, m_framesInFlight);
     m_rtViewports.clear();
 
     m_materialBuffer.destroy();
-    m_materialSets.clear();
+
+    for (uint32_t i = 0; i < std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight); ++i)
+        m_materialSets[i] = {};
 
     m_descriptorPool.destroy();
     m_descriptorSetLayout.destroy();
@@ -344,12 +352,9 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     auto uploadViewportUboSet0 = [&]() -> bool {
         ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIdx);
 
-        if (frameIdx >= vpUbo.mvpBuffers.size() ||
-            frameIdx >= vpUbo.lightBuffers.size() ||
-            frameIdx >= vpUbo.uboSets.size())
-        {
+        const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
+        if (frameIdx >= fi)
             return false;
-        }
 
         if (!vpUbo.mvpBuffers[frameIdx].valid() ||
             !vpUbo.lightBuffers[frameIdx].valid())
@@ -431,7 +436,8 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         if (!m_rtPresent.valid())
             return;
 
-        if (frameIdx >= rtv.sets.size())
+        const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
+        if (frameIdx >= fi)
             return;
 
         // Present RT output
@@ -1071,7 +1077,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     if (!device)
         return false;
 
-    m_framesInFlight  = std::max(1u, framesInFlight);
+    m_framesInFlight  = std::clamp(framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
     const uint32_t fi = m_framesInFlight;
 
     // ------------------------------------------------------------
@@ -1088,27 +1094,23 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     // set = 0 : Frame globals (per-viewport)
     //   binding 0 = camera / MVP (MvpUBO)
     //   binding 1 = lights UBO (GpuLightsUBO)
-    //   binding 2 = RT camera UBO (RtCameraUBO) - used only by RT, still in frame globals set
+    //   binding 2 = RT camera UBO (RtCameraUBO)
     // ------------------------------------------------------------
     {
-        DescriptorBindingInfo uboBindings[3]{};
+        DescriptorBindingInfo uboBindings[3] = {};
 
-        // binding 0: MVP (view/proj) for raster
         uboBindings[0].binding = 0;
         uboBindings[0].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        // VS/GS for raster
-        uboBindings[0].stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT;
-        uboBindings[0].count  = 1;
+        uboBindings[0].stages  = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT;
+        uboBindings[0].count   = 1;
 
-        // binding 1: Lights (visible to raster + RT closest-hit)
         uboBindings[1].binding = 1;
         uboBindings[1].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uboBindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT |
                                 VK_SHADER_STAGE_GEOMETRY_BIT |
-                                VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR; // RT lights later
+                                VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
         uboBindings[1].count = 1;
 
-        // binding 2: RT camera UBO (invViewProj, camPos, etc.)
         uboBindings[2].binding = 2;
         uboBindings[2].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uboBindings[2].stages  = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -1126,10 +1128,10 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     // ------------------------------------------------------------
     // set = 1 : Scene / materials
     //   binding 0 = materials SSBO
-    //   binding 1 = texture table (sampler array)
+    //   binding 1 = texture table (combined image sampler array)
     // ------------------------------------------------------------
     {
-        DescriptorBindingInfo matBindings[2]{};
+        DescriptorBindingInfo matBindings[2] = {};
 
         matBindings[0].binding = 0;
         matBindings[0].type    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1152,13 +1154,12 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     // Pool sizes
     //
     // Frame globals: (maxViewports * frames) each with 3 UBO bindings.
-    // Material sets: (frames) each with 1 SSBO + kMaxTextureCount samplers.
+    // Material sets: (frames) each with 1 SSBO + kMaxTextureCount combined samplers.
     // ------------------------------------------------------------
     const uint32_t rasterSetCount   = fi * kMaxViewports;
     const uint32_t materialSetCount = fi;
 
     std::array<VkDescriptorPoolSize, 3> poolSizes{
-        // 3 UBOs per frame-global set
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, rasterSetCount * 3u},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, materialSetCount},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSetCount * kMaxTextureCount},
@@ -1175,11 +1176,10 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     // ------------------------------------------------------------
     // Allocate per-frame material sets (set = 1)
     // ------------------------------------------------------------
-    m_materialSets.clear();
-    m_materialSets.resize(fi);
-
     for (uint32_t i = 0; i < fi; ++i)
     {
+        m_materialSets[i] = {};
+
         if (!m_materialSets[i].allocate(device, m_descriptorPool.pool(), m_materialSetLayout.layout()))
         {
             std::cerr << "RendererVK: Failed to allocate material DescriptorSet for frame " << i << ".\n";
@@ -1263,35 +1263,51 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
     if (!device)
         return;
 
-    const int texCount = static_cast<int>(textureHandler.size());
-    const int count    = std::min(texCount, static_cast<int>(kMaxTextureCount));
-    if (count <= 0)
+    const GpuTexture* fallback = textureHandler.fallbackTexture();
+    VkImageView       fbView   = (fallback ? fallback->view : VK_NULL_HANDLE);
+    VkSampler         fbSamp   = (fallback ? fallback->sampler : VK_NULL_HANDLE);
+
+    // If fallback isn't wired yet, fail safe by not updating (prevents invalid writes).
+    // This avoids crashing/validation spam until fallback is implemented.
+    if (fbView == VK_NULL_HANDLE || fbSamp == VK_NULL_HANDLE)
         return;
 
     std::vector<VkDescriptorImageInfo> infos;
-    infos.reserve(count);
+    infos.resize(kMaxTextureCount);
 
+    // Fill all entries with fallback first (guarantees non-null for unused slots).
+    for (uint32_t i = 0; i < kMaxTextureCount; ++i)
+    {
+        VkDescriptorImageInfo info = {};
+        info.imageLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        info.imageView             = fbView;
+        info.sampler               = fbSamp;
+        infos[i]                   = info;
+    }
+
+    const int texCount = static_cast<int>(textureHandler.size());
+    const int count    = std::min(texCount, static_cast<int>(kMaxTextureCount));
+
+    // Overwrite with real textures where available.
     for (int i = 0; i < count; ++i)
     {
         const GpuTexture* tex = textureHandler.get(i);
+        if (!tex)
+            continue;
 
-        VkDescriptorImageInfo info{};
-        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        // Use fallback for any missing pieces on a per-texture basis.
+        VkImageView view = (tex->view != VK_NULL_HANDLE) ? tex->view : fbView;
+        VkSampler   samp = (tex->sampler != VK_NULL_HANDLE) ? tex->sampler : fbSamp;
 
-        if (tex)
-        {
-            info.imageView = tex->view;
-            info.sampler   = tex->sampler;
-        }
-        else
-        {
-            info.imageView = VK_NULL_HANDLE;
-            info.sampler   = VK_NULL_HANDLE;
-        }
+        VkDescriptorImageInfo info = {};
+        info.imageLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        info.imageView             = view;
+        info.sampler               = samp;
 
-        infos.push_back(info);
+        infos[static_cast<size_t>(i)] = info;
     }
 
+    // Update entire array (binding=1) with guaranteed-valid entries.
     m_materialSets[frameIndex].writeCombinedImageSamplerArray(device, 1, infos);
 }
 
@@ -1677,14 +1693,7 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
 {
     ViewportUboState& s = m_viewportUbos[vp];
 
-    if (s.mvpBuffers.size() != m_framesInFlight)
-        s.mvpBuffers.resize(m_framesInFlight);
-    if (s.lightBuffers.size() != m_framesInFlight)
-        s.lightBuffers.resize(m_framesInFlight);
-    if (s.uboSets.size() != m_framesInFlight)
-        s.uboSets.resize(m_framesInFlight);
-
-    if (frameIdx >= m_framesInFlight)
+    if (frameIdx >= m_framesInFlight || frameIdx >= vkcfg::kMaxFramesInFlight)
         return s;
 
     bool needWrite = false;
@@ -1707,6 +1716,7 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                       true);
+
         if (!s.mvpBuffers[frameIdx].valid())
         {
             std::cerr << "RendererVK: Failed to create MVP UBO for viewport frame " << frameIdx << ".\n";
@@ -1723,6 +1733,7 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                         true);
+
         if (!s.lightBuffers[frameIdx].valid())
         {
             std::cerr << "RendererVK: Failed to create Lights UBO for viewport frame " << frameIdx << ".\n";
@@ -1734,7 +1745,6 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
         needWrite = true;
     }
 
-    // Only write descriptors for *this* frame slot.
     if (needWrite)
     {
         s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 0, s.mvpBuffers[frameIdx].buffer(), sizeof(MvpUBO));
@@ -1751,25 +1761,9 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
 
 Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_t frameIdx)
 {
-    // If already exists, just ensure current slot is ready.
     RtViewportState& st = m_rtViewports[vp];
 
-    // Size once (idempotent)
-    if (st.sets.size() != m_framesInFlight)
-        st.sets.resize(m_framesInFlight);
-    if (st.cameraBuffers.size() != m_framesInFlight)
-        st.cameraBuffers.resize(m_framesInFlight);
-    if (st.instanceDataBuffers.size() != m_framesInFlight)
-        st.instanceDataBuffers.resize(m_framesInFlight);
-    if (st.images.size() != m_framesInFlight)
-        st.images.resize(m_framesInFlight);
-
-    if (st.scratchBuffers.size() != m_framesInFlight)
-        st.scratchBuffers.resize(m_framesInFlight);
-    if (st.scratchSizes.size() != m_framesInFlight)
-        st.scratchSizes.assign(m_framesInFlight, 0);
-
-    if (frameIdx >= m_framesInFlight)
+    if (frameIdx >= m_framesInFlight || frameIdx >= vkcfg::kMaxFramesInFlight)
         return st;
 
     // Ensure the per-viewport Set0 UBO set for THIS slot exists.
@@ -1786,7 +1780,7 @@ Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_
             std::cerr << "RendererVK: Failed to allocate RT set for viewport frame " << frameIdx << ".\n";
             return st;
         }
-        needRtSetWrite = true; // at least instance buffer binding
+        needRtSetWrite = true;
     }
 
     // Create RT camera UBO for this slot (bound via Set0/binding2)
@@ -1808,12 +1802,10 @@ Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_
         needSet0BindRtCamera = true;
     }
 
-    // Bind RtCameraUBO into Set0/binding2 only when needed (new buffer or new set0)
-    if (ubo.uboSets.size() > frameIdx && ubo.uboSets[frameIdx].set() != VK_NULL_HANDLE && st.cameraBuffers[frameIdx].valid())
+    // Bind RtCameraUBO into Set0/binding2 when needed
+    if (ubo.uboSets[frameIdx].set() != VK_NULL_HANDLE && st.cameraBuffers[frameIdx].valid())
     {
-        // If set0 was created this frame, ensureViewportUboState wrote b0/b1 only;
-        // we still need b2. We also need b2 if the camera buffer was created.
-        if (needSet0BindRtCamera /* || (set0 was just allocated) */)
+        if (needSet0BindRtCamera)
         {
             ubo.uboSets[frameIdx].writeUniformBuffer(m_ctx.device,
                                                      2,
@@ -2037,15 +2029,19 @@ bool Renderer::initRayTracingResources()
 // RT output images
 //==================================================================
 
-void Renderer::destroyRtOutputImages(RtViewportState& s) noexcept
+void Renderer::destroyRtOutputImages(RtViewportState& s, uint32_t framesInFlight) noexcept
 {
     if (!m_ctx.device)
         return;
 
     VkDevice device = m_ctx.device;
 
-    for (RtImagePerFrame& img : s.images)
+    const uint32_t fi = std::min(framesInFlight, vkcfg::kMaxFramesInFlight);
+
+    for (uint32_t i = 0; i < fi; ++i)
     {
+        RtImagePerFrame& img = s.images[i];
+
         if (img.view)
         {
             vkDestroyImageView(device, img.view, nullptr);
@@ -2083,7 +2079,8 @@ bool Renderer::ensureRtOutputImages(RtViewportState& s, const RenderFrameContext
     if (frameIndex >= m_framesInFlight)
         return false;
 
-    if (s.sets.size() != m_framesInFlight || s.images.size() != m_framesInFlight)
+    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
+    if (frameIndex >= fi)
         return false;
 
     // If THIS slot already matches, we're done.
@@ -2249,12 +2246,6 @@ bool Renderer::ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDev
         return false;
 
     RtViewportState& rts = ensureRtViewportState(vp, fc.frameIndex);
-
-    if (rts.scratchBuffers.size() != m_framesInFlight)
-    {
-        rts.scratchBuffers.resize(m_framesInFlight);
-        rts.scratchSizes.resize(m_framesInFlight, 0);
-    }
 
     GpuBuffer&    scratch = rts.scratchBuffers[fc.frameIndex];
     VkDeviceSize& cap     = rts.scratchSizes[fc.frameIndex];
@@ -2431,10 +2422,13 @@ void Renderer::clearRtTlasDescriptor(Viewport* /*vp*/, uint32_t /*frameIndex*/) 
 
 void Renderer::destroyAllRtTlasFrames() noexcept
 {
-    for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTlasFrames.size()); ++i)
+    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
+
+    for (uint32_t i = 0; i < fi; ++i)
         destroyRtTlasFrame(i, true);
 
-    m_rtTlasFrames.clear();
+    // Reset handles/keys to a clean state (fixed-size storage).
+    m_rtTlasFrames = {};
 }
 
 //==================================================================

@@ -76,7 +76,7 @@ public:
     VulkanBackend& operator=(const VulkanBackend&) = delete;
     VulkanBackend& operator=(VulkanBackend&&)      = delete;
 
-    bool init(QVulkanInstance* qvk, uint32_t framesInFlight = 2);
+    bool init(QVulkanInstance* qvk, uint32_t framesInFlight = vkcfg::kMaxFramesInFlight);
     void shutdown() noexcept;
 
     ViewportSwapchain* createViewportSwapchain(QWindow* window);
@@ -155,7 +155,7 @@ private:
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     VkQueue m_presentQueue  = VK_NULL_HANDLE;
 
-    uint32_t m_framesInFlight = 2;
+    uint32_t m_framesInFlight = vkcfg::kMaxFramesInFlight;
 
     std::vector<ViewportSwapchain*> m_swapchains = {};
 

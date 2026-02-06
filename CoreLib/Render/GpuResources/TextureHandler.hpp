@@ -1,3 +1,6 @@
+//============================================================
+// TextureHandler.hpp
+//============================================================
 #pragma once
 
 #include <cstdint>
@@ -43,10 +46,35 @@ struct GpuTexture
     ImageId sourceImage{kInvalidImageId};
 };
 
+/**
+ * @brief GPU texture manager with caching (ImageId + TextureDesc -> TextureId).
+ *
+ * Responsibilities:
+ *  - Create GPU textures from ImageHandler images (raw pixels or KTX path).
+ *  - Cache textures for repeated (imageId, desc) requests.
+ *  - Provide a valid fallback texture to be used when a material references
+ *    an unset texture slot (required for descriptor table updates).
+ *
+ * Notes:
+ *  - TextureId values are stable and not reused in this implementation.
+ *  - destroy(TextureId) frees GPU resources but keeps the slot.
+ *  - fallbackTexture() returns a 1x1 RGBA texture with a valid view+sampler.
+ */
 class TextureHandler
 {
 public:
+    /**
+     * @brief Construct a texture handler.
+     *
+     * Creates a fallback 1x1 RGBA texture with a valid view and sampler.
+     * The fallback is required to safely populate unused entries in the
+     * renderer's combined image sampler descriptor table.
+     */
     TextureHandler(const VulkanContext& ctx, ImageHandler* imageHandler);
+
+    /**
+     * @brief Destroy all textures and the fallback texture.
+     */
     ~TextureHandler();
 
     TextureHandler(const TextureHandler&)            = delete;
@@ -54,31 +82,60 @@ public:
     TextureHandler(TextureHandler&&)                 = delete;
     TextureHandler& operator=(TextureHandler&&)      = delete;
 
-    // Creates a texture directly from an ImageId (no caching).
+public:
+    /**
+     * @brief Creates a texture directly from an ImageId (no caching).
+     */
     TextureId createTexture(ImageId            imageId,
                             const TextureDesc& desc,
                             const std::string& debugName);
 
-    // Returns an existing texture for (imageId, desc) if present, otherwise creates one.
+    /**
+     * @brief Returns an existing texture for (imageId, desc) if present, otherwise creates one.
+     */
     TextureId ensureTexture(ImageId            imageId,
                             const TextureDesc& desc,
                             const std::string& debugName);
 
-    const GpuTexture* get(TextureId id) const noexcept;
+    /**
+     * @brief Retrieve a GPU texture by TextureId.
+     */
+    [[nodiscard]] const GpuTexture* get(TextureId id) const noexcept;
 
+    /**
+     * @brief Destroy a GPU texture (keeps the slot; IDs are not reused).
+     */
     void destroy(TextureId id) noexcept;
+
+    /**
+     * @brief Destroy all cached/created textures (does not destroy fallback).
+     */
     void destroyAll() noexcept;
 
-    size_t size() const noexcept
+    /**
+     * @brief Returns the number of allocated texture slots (including destroyed slots).
+     */
+    [[nodiscard]] size_t size() const noexcept
     {
         return m_textures.size();
     }
 
-private:
-    VulkanContext        m_ctx;
-    ImageHandler*        m_imageHandler{};
+    /**
+     * @brief Return the fallback texture (never null after successful construction).
+     *
+     * The fallback texture is used to fill unused combined image sampler table entries
+     * so descriptor writes never contain VK_NULL_HANDLE samplers or views.
+     */
+    [[nodiscard]] const GpuTexture* fallbackTexture() const noexcept
+    {
+        return m_hasFallback ? &m_fallback : nullptr;
+    }
 
-    std::vector<GpuTexture> m_textures;
+private:
+    VulkanContext m_ctx          = {};
+    ImageHandler* m_imageHandler = nullptr;
+
+    std::vector<GpuTexture> m_textures = {};
 
     struct CacheKey
     {
@@ -102,11 +159,19 @@ private:
         }
     };
 
-    std::unordered_map<CacheKey, TextureId, CacheKeyHash> m_cache;
+    std::unordered_map<CacheKey, TextureId, CacheKeyHash> m_cache = {};
 
+private:
     TextureId createTextureInternal(ImageId            imageId,
                                     const TextureDesc& desc,
                                     const std::string& debugName);
 
     void destroyTexture(GpuTexture& tex) noexcept;
+
+private:
+    bool createFallbackTexture() noexcept;
+
+private:
+    GpuTexture m_fallback    = {};
+    bool       m_hasFallback = false;
 };

@@ -221,7 +221,7 @@ bool VulkanBackend::init(QVulkanInstance* qvk, uint32_t framesInFlight)
 
     m_qvk            = qvk;
     m_instance       = qvk->vkInstance();
-    m_framesInFlight = std::max(1u, framesInFlight);
+    m_framesInFlight = std::clamp(framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
 
     if (!instFns(m_qvk))
         return false;
@@ -461,7 +461,7 @@ bool VulkanBackend::createDevice()
         if (!findGraphicsFamily(pd, outGraphicsFamily))
             return -1;
 
-        // Hard requirement: swapchain extension (you always enable it)
+        // Hard requirement: swapchain extension (I always enable it)
         if (!hasExtInList(outExts, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
             return -1;
 
@@ -716,8 +716,8 @@ bool VulkanBackend::createDevice()
 
     m_supportsRayTracing = rtExtsOk;
 
-    // RT shaders in your pipeline currently use 64-bit addresses => SPIR-V Int64 capability.
-    // If the device doesn't support shaderInt64, disable RT cleanly.
+    // RT shaders in my pipeline currently use 64-bit addresses => SPIR-V Int64 capability.
+    // If the device doesn't support shaderInt64, disable RT.
     if (m_supportsRayTracing)
     {
         if (!supportedCore.features.shaderInt64)
@@ -784,7 +784,7 @@ bool VulkanBackend::createDevice()
     feats2.features.geometryShader    = VK_TRUE;
     feats2.features.samplerAnisotropy = VK_TRUE;
 
-    // Enable shaderInt64 if supported (required by your RT shaders).
+    // Enable shaderInt64 if supported (required by RT shaders).
     feats2.features.shaderInt64 = supportedCore.features.shaderInt64 ? VK_TRUE : VK_FALSE;
 
     // Optional RT feature chain (only used if m_supportsRayTracing == true)
@@ -1623,7 +1623,7 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
     if (sc->frames.empty())
         return false;
 
-    const uint32_t fi = sc->frameIndex % uint32_t(sc->frames.size());
+    const uint32_t fi = sc->frameIndex % m_framesInFlight;
     ViewportFrame& fr = sc->frames[fi];
 
     // Wait for this frame slot to be available.
@@ -1722,7 +1722,7 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
     if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR)
         sc->needsRecreate = true;
 
-    sc->frameIndex = (sc->frameIndex + 1) % uint32_t(sc->frames.size());
+    sc->frameIndex = (sc->frameIndex + 1) % m_framesInFlight;
 }
 
 void VulkanBackend::cancelFrame(ViewportSwapchain*          sc,
