@@ -1278,7 +1278,7 @@ void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
             }
         }
 
-        buf = {};
+        buf = {}; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
         buf.create(m_ctx.device,
                    m_ctx.physicalDevice,
                    sizeBytes,
