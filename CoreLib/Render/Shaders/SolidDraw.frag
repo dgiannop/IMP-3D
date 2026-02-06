@@ -1,5 +1,5 @@
 //==============================================================
-// SolidDraw.frag  (Modeling Solid: a pinch more Lambert contrast)
+// SolidDraw.frag  (Modeling Solid: two-sided + dim inner faces)
 //==============================================================
 #version 450
 
@@ -64,11 +64,23 @@ void main()
     vec3 N = normalize(nrm);
     vec3 V = normalize(-pos);
 
+    // ----------------------------------------------------------
+    // Two-sided "editor solid" lighting
+    // ----------------------------------------------------------
+    const bool isBackface = !gl_FrontFacing;
+    if (isBackface)
+        N = -N;
+
+    // ----------------------------------------------------------
+    // Material base color
+    // ----------------------------------------------------------
     int matCount = int(materials.length());
     int id       = (matCount > 0) ? clamp(vMaterialId, 0, matCount - 1) : 0;
     vec3 base    = (matCount > 0) ? materials[id].baseColor : vec3(0.8);
 
+    // ----------------------------------------------------------
     // Headlight (light 0) or fallback
+    // ----------------------------------------------------------
     vec3  L = normalize(vec3(0.25, 0.35, 0.90));
     vec3  c = vec3(1.0);
     float I = 1.0;
@@ -83,7 +95,7 @@ void main()
     float NdotL = saturate(dot(N, L));
 
     // Lambert (self shadowing)
-    float diff = pow(NdotL, 1.65); // This is the knob I’d expose as “Solid Contrast” if I ever add a UI slider.
+    float diff = pow(NdotL, 1.65); // "Solid Contrast" knob.
 
     // Lower baseline so shapes don't wash out
     vec3 lit = base * 0.06;
@@ -103,6 +115,26 @@ void main()
     // Rim: reduce a bit so it doesn't flatten the shadows
     float rim = pow(1.0 - saturate(dot(N, V)), 3.0);
     lit += base * rim * 0.010;
+
+    // ----------------------------------------------------------
+    // Dim interior faces so they read as "inside"
+    // ----------------------------------------------------------
+    // Tune this:
+    //  - 0.60 subtle
+    //  - 0.40 clear
+    //  - 0.25 very obvious
+    //  - 0.15 almost hidden
+    const float kInnerFaceDim = 0.35;
+
+    // Option 1 (simple): dim everything on backfaces
+    // if (isBackface) lit *= kInnerFaceDim;
+
+    // Option 2 (recommended): keep baseline, dim only the "lighting part"
+    if (isBackface)
+    {
+        vec3 baseLine = base * 0.06;
+        lit = baseLine + (lit - baseLine) * kInnerFaceDim;
+    }
 
     lit = tonemapReinhard(lit);
 
