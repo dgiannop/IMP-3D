@@ -271,10 +271,14 @@ namespace vkutil
         ia.primitiveRestartEnable = VK_FALSE;
 
         VkPipelineViewportStateCreateInfo vp = makeViewportState();
-        // Match original: no cull
+
         VkPipelineRasterizationStateCreateInfo rs = makeRasterStateFillNoCull(false);
-        VkPipelineMultisampleStateCreateInfo   ms = makeMultisampleState(sampleCount);
-        // Depth like solid
+
+        rs.cullMode = VK_CULL_MODE_BACK_BIT;
+        // rs.cullMode = VK_CULL_MODE_NONE; // quick debug
+
+        VkPipelineMultisampleStateCreateInfo ms = makeMultisampleState(sampleCount);
+
         VkPipelineDepthStencilStateCreateInfo ds =
             makeDepthState(true, true, VK_COMPARE_OP_LESS);
 
@@ -285,6 +289,7 @@ namespace vkutil
             VK_DYNAMIC_STATE_VIEWPORT,
             VK_DYNAMIC_STATE_SCISSOR,
         };
+
         VkPipelineDynamicStateCreateInfo dyn =
             vkutil::makeDynamicState(dynStates, static_cast<uint32_t>(std::size(dynStates)));
 

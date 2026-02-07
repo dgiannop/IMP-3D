@@ -76,6 +76,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
     });
     ui->btnShowGrid->setChecked(true);
 
+#ifndef NDEBUG
+    connect(ui->btnCulling, &QPushButton::toggled, this, [=, this](bool checked) {
+        if (!m_core)
+            return;
+
+        // checked = culling enabled
+        m_core->cullingEnabled(checked);
+    });
+
+    // Initialize UI from Core
+    ui->btnCulling->setChecked(m_core->cullingEnabled());
+#endif
+
     // ------------------------------------------------------------
     // Create shared Vulkan instance
     // ------------------------------------------------------------
@@ -195,8 +208,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
 #ifdef NDEBUG
         // Hide for now the Material selection
         ui->btnSelObjects->setVisible(false);
-        ui->btnCulling->setVisible(false);
+        // ui->btnCulling->setVisible(false);
 #endif
+        ui->btnCulling->setVisible(false); // always hide it for now
     }
 
     m_uiTimer = new QTimer(this);

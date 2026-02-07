@@ -308,6 +308,16 @@ public:
     /** @brief Query whether the scene grid is visible. */
     bool showSceneGrid() const noexcept;
 
+    // ------------------------------------------------------------
+    // Render culling
+    // ------------------------------------------------------------
+
+    /** @brief Enable or disable culling. */
+    void cullingEnabled(bool enabled) noexcept;
+
+    /** @brief Query whether the culling is enabled. */
+    bool cullingEnabled() const noexcept;
+
     /**
      * @brief Retrieve a monotonically increasing scene change stamp.
      *

@@ -607,6 +607,17 @@ bool Core::showSceneGrid() const noexcept
     return m_scene && m_scene->showSceneGrid();
 }
 
+void Core::cullingEnabled(bool enabled) noexcept
+{
+    if (m_scene)
+        m_scene->cullingEnabled(enabled);
+}
+
+bool Core::cullingEnabled() const noexcept
+{
+    return m_scene ? m_scene->cullingEnabled() : false;
+}
+
 uint64_t Core::sceneChangeStamp() const noexcept
 {
     if (!m_scene)

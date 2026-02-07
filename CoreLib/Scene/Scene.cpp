@@ -360,6 +360,17 @@ bool Scene::showSceneGrid() const noexcept
     return m_showGrid;
 }
 
+void Scene::cullingEnabled(bool show) noexcept
+{
+    // No-op untill I deside if I will support dynamic state
+    // or two pipelines for each render type (Shaded, RT)
+}
+
+bool Scene::cullingEnabled() const noexcept
+{
+    return true;
+}
+
 const LightingSettings& Scene::lightingSettings() const noexcept
 {
     return m_lightingSettings;
@@ -372,7 +383,7 @@ void Scene::setLightingSettings(const LightingSettings& settings) noexcept
     if (m_renderer)
         m_renderer->setLightingSettings(m_lightingSettings);
 
-    markModified();
+    m_sceneChangeCounter->change();
 }
 
 // SceneObject* Scene::selectedObject() noexcept

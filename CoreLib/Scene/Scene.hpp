@@ -252,6 +252,12 @@ public:
     /** @brief Query whether the scene grid is visible. */
     [[nodiscard]] bool showSceneGrid() const noexcept;
 
+    /** @brief Enable or disable culling. */
+    void cullingEnabled(bool show) noexcept;
+
+    /** @brief Query whether the culling is enabled. */
+    [[nodiscard]] bool cullingEnabled() const noexcept;
+
     /**
      * @brief Retrieve current lighting settings.
      *
