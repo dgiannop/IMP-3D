@@ -15,8 +15,26 @@
 
 namespace
 {
-    constexpr bool  kUseFixedSunForHeadlight = false; // set true for RT shadow testing
-    constexpr float kEps                     = 1e-8f;
+    // ------------------------------------------------------------------------
+    // Headlight test switches
+    // ------------------------------------------------------------------------
+    // If true, use a fixed world-space sun direction (useful for debugging).
+    constexpr bool kUseFixedSunForHeadlight = false;
+
+    // If true, inject the headlight as a VIEW-SPACE spotlight at the camera
+    // (a "flashlight" that always follows the view). This is typically the
+    // most intuitive behavior to validate headlight direction issues in RT.
+    constexpr bool kHeadlightAsFlashlightSpot = false;
+
+    // Flashlight tuning (only used when kHeadlightAsFlashlightSpot == true).
+    constexpr float kHeadlightRange    = 80.0f;
+    constexpr float kHeadlightInnerRad = 10.0f * 3.14159265f / 180.0f;
+    constexpr float kHeadlightOuterRad = 18.0f * 3.14159265f / 180.0f;
+
+    // Directional softness (only used when injecting as directional).
+    constexpr float kHeadlightSoftnessRadians = 0.05f; // ~3 degrees
+
+    constexpr float kEps = 1e-8f;
 
     static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
     {
@@ -73,8 +91,7 @@ namespace
         const glm::vec3 fwdView = safeNormalize(dirView, glm::vec3(0, 0, -1));
 
         // xyz = forward (VIEW space), w = softness (angular radius in radians)
-        constexpr float kSoftnessRadians = 0.05f; // ~3 degrees, tweak later
-        gl.dir_range                     = glm::vec4(fwdView, kSoftnessRadians);
+        gl.dir_range = glm::vec4(fwdView, kHeadlightSoftnessRadians);
 
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
         gl.spot_params     = glm::vec4(0.0f);
@@ -177,15 +194,36 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     // Controlled via LightingSettings + HeadlightSettings.
     if (allowHeadlight(settings, dm) && headlight.enabled && headlight.intensity > 0.0f)
     {
-        glm::vec3 dirWorld = {};
+        if (kHeadlightAsFlashlightSpot)
+        {
+            // "Flashlight" headlight:
+            // - Positioned at the camera origin in VIEW space (0,0,0).
+            // - Points forward along -Z in VIEW space.
+            // This is often the simplest way to validate that RT follows the camera.
+            const glm::vec3 posView       = glm::vec3(0.0f);
+            const glm::vec3 dirTowardView = glm::vec3(0.0f, 0.0f, -1.0f);
 
-        if (kUseFixedSunForHeadlight)
-            dirWorld = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f)); // fixed sun
+            pushLight(out,
+                      makeSpotView(posView,
+                                   dirTowardView,
+                                   headlight.color,
+                                   headlight.intensity,
+                                   kHeadlightRange,
+                                   kHeadlightInnerRad,
+                                   kHeadlightOuterRad));
+        }
         else
-            dirWorld = viewportForwardWorld(vp); // headlight follows camera forward
+        {
+            glm::vec3 dirWorld = {};
 
-        const glm::vec3 dirView = viewDir(V, dirWorld);
-        pushLight(out, makeDirectionalView(dirView, headlight.color, headlight.intensity));
+            if (kUseFixedSunForHeadlight)
+                dirWorld = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f)); // fixed sun
+            else
+                dirWorld = viewportForwardWorld(vp); // headlight follows camera forward
+
+            const glm::vec3 dirView = viewDir(V, dirWorld);
+            pushLight(out, makeDirectionalView(dirView, headlight.color, headlight.intensity));
+        }
     }
 
     // ------------------------------------------------------------

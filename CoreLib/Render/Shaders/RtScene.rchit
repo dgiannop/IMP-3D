@@ -1,450 +1,442 @@
 //==============================================================
-// RtScene.rchit
+// RtScene.rchit  (Primary shading + optional headlight shadows)
 //==============================================================
+// Conventions expected by this shader:
+// - camUbo.viewM  = WORLD -> VIEW
+// - camUbo.invV   = VIEW  -> WORLD
+// - Directional light encoding matches raster:
+//   * dirRng.xyz = forward direction the light points TOWARD (VIEW space)
+//   * surface->light (VIEW) = -forward
+//   * dirRng.w   = angular radius (radians) for soft shadows (optional)
+//==============================================================
+
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-layout(location = 0) rayPayloadInEXT vec4 payload;
+layout(location = 0) rayPayloadInEXT vec4 colorOut;
+layout(location = 1) rayPayloadEXT uint occFlag;
 
-// IMPORTANT:
-// - payloadInEXT is for the incoming primary ray.
-// - rayPayloadEXT is for rays we trace FROM this shader (shadow rays).
-layout(location = 1) rayPayloadEXT uint shadowHit;
-
-hitAttributeEXT vec2 attribs;
+hitAttributeEXT vec2 hitAttr;
 
 // ------------------------------------------------------------
 // Buffer references (device address)
 // ------------------------------------------------------------
-layout(buffer_reference, scalar) readonly buffer PosBuf   { vec4 p[]; };
-layout(buffer_reference, scalar) readonly buffer IdxBuf   { uint idx[]; }; // triCount*4 (padded)
-layout(buffer_reference, scalar) readonly buffer NrmBuf   { vec4 n[]; };   // triCount*3
-layout(buffer_reference, scalar) readonly buffer UvBuf    { vec4 uv[]; };  // triCount*3
-layout(buffer_reference, scalar) readonly buffer MatIdBuf { uint m[]; };   // triCount
+layout(buffer_reference, scalar) readonly buffer PosBuf { vec4 pos4[]; };
+layout(buffer_reference, scalar) readonly buffer IdxBuf { uint ind4[]; }; // triCnt*4 (padded)
+layout(buffer_reference, scalar) readonly buffer NrmBuf { vec4 nrm4[]; }; // triCnt*3
+layout(buffer_reference, scalar) readonly buffer UvBuf  { vec4 uvv4[]; }; // triCnt*3
+layout(buffer_reference, scalar) readonly buffer MatBuf { uint mat1[]; }; // triCnt
 
 // ------------------------------------------------------------
-// TLAS (MATCH rgen: set=2, binding=2)
+// TLAS + per-instance data
 // ------------------------------------------------------------
-layout(set = 2, binding = 2) uniform accelerationStructureEXT u_tlas;
+layout(set = 2, binding = 2) uniform accelerationStructureEXT tlasTop;
 
-// ------------------------------------------------------------
-// Per-instance data (MUST match CPU RtInstanceData exactly)
-// ------------------------------------------------------------
-struct RtInstanceData
+struct InstDat
 {
     uint64_t posAdr;
     uint64_t idxAdr;
     uint64_t nrmAdr;
-    uint64_t uvAdr;
-    uint64_t matIdAdr;
-    uint     triCount;
-    uint     _pad0;
-    uint     _pad1;
-    uint     _pad2;
+    uint64_t uvvAdr;
+    uint64_t matAdr;
+    uint     triCnt;
+    uint     pad0;
+    uint     pad1;
+    uint     pad2;
 };
 
-layout(set = 2, binding = 3, std430) readonly buffer Instances
+layout(set = 2, binding = 3, std430) readonly buffer InstBuf
 {
-    RtInstanceData inst[];
-} u_inst;
+    InstDat insts[];
+} instBuf;
 
 // ------------------------------------------------------------
-// Camera (frame set: set=0, binding=2)
+// Camera UBO (frame set)
 // ------------------------------------------------------------
-layout(set = 0, binding = 2, std140) uniform RtCameraUBO
+layout(set = 0, binding = 2, std140) uniform CamUBO
 {
-    mat4 invViewProj;
-    mat4 view;        // WORLD->VIEW
-    mat4 invView;     // VIEW->WORLD
-    vec4 camPos;      // world
-    vec4 clearColor;
-} u_cam;
+    mat4 invVP;
+    mat4 viewM;      // WORLD -> VIEW
+    mat4 invV;       // VIEW  -> WORLD
+    vec4 camPos;     // world
+    vec4 clrCol;
+} camUbo;
 
 // ------------------------------------------------------------
-// Lights (frame set: set=0, binding=1)
+// Lights UBO (frame set)
 // ------------------------------------------------------------
-struct GpuLight
+struct GpuLit
 {
-    vec4 pos_type;
-    vec4 dir_range;
-    vec4 color_intensity;
-    vec4 spot_params; // x=innerCos, y=outerCos
+    vec4 posTyp;     // xyz = pos (view), w = type
+    vec4 dirRng;     // xyz = forward dir (view), w = range (pt/spot) OR angular radius (dir)
+    vec4 colInt;     // rgb = color, a = intensity
+    vec4 spotPr;     // x = innerCos, y = outerCos
 };
 
-layout(set = 0, binding = 1, std140) uniform LightsUBO
+layout(set = 0, binding = 1, std140) uniform LitUBO
 {
-    uvec4   info;    // x = lightCount
-    vec4    ambient; // rgb, a
-    GpuLight lights[64];
-} uLights;
+    uvec4 info4;     // x = lightCount
+    vec4  ambExp;    // rgb = ambient fill, a = exposure (optional)
+    GpuLit lits[64];
+} litUbo;
 
 // ------------------------------------------------------------
-// Materials + textures (MATCH raster bindings)
+// Materials + textures (match raster bindings)
 // ------------------------------------------------------------
-struct GpuMaterial
+struct GpuMat
 {
-    vec3  baseColor;
-    float opacity;
+    vec3  baseCol;
+    float opacIt;
 
-    vec3  emissiveColor;
-    float emissiveIntensity;
+    vec3  emisCol;
+    float emisIt;
 
-    float roughness;
-    float metallic;
-    float ior;
-    float pad0;
+    float roughIt;
+    float metalIt;
+    float iorVal;
+    float padIt;
 
-    int baseColorTexture;
-    int normalTexture;
-    int mraoTexture;
-    int emissiveTexture;
+    int baseTex;
+    int normTex;
+    int mraoTex;
+    int emisTex;
 };
 
-layout(std430, set = 1, binding = 0) readonly buffer MaterialBuffer
+layout(std430, set = 1, binding = 0) readonly buffer MatSSB
 {
-    GpuMaterial materials[];
-};
+    GpuMat mats[];
+} matSsb;
 
-const int kMaxTextureCount = 512;
-layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
+const int kMaxTex = 512;
+layout(set = 1, binding = 1) uniform sampler2D tex2d[kMaxTex];
 
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
-float saturate(float x) { return clamp(x, 0.0, 1.0); }
+float satVal(float val) { return clamp(val, 0.0, 1.0); }
 
-vec3 fresnelSchlick(float cosTheta, vec3 F0)
+vec3 fresShk(float cosVh, vec3 f0Col)
 {
-    return F0 + (1.0 - F0) * pow(1.0 - saturate(cosTheta), 5.0);
+    float oneMh = 1.0 - satVal(cosVh);
+    float pow5  = oneMh * oneMh;
+    pow5        = pow5 * pow5 * oneMh;
+    return f0Col + (vec3(1.0) - f0Col) * pow5;
 }
 
-float D_GGX(float NdotH, float alpha)
+float dGgx(float ndhVal, float alpVal)
 {
-    float a2 = alpha * alpha;
-    float d  = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
-    return a2 / max(3.14159265 * d * d, 1e-7);
+    float a2Val = alpVal * alpVal;
+    float denV  = (ndhVal * ndhVal) * (a2Val - 1.0) + 1.0;
+    return a2Val / max(3.14159265 * denV * denV, 1e-7);
 }
 
-float G_SchlickGGX(float NdotX, float k)
+float gSch(float ndxVal, float kVal)
 {
-    return NdotX / max(NdotX * (1.0 - k) + k, 1e-7);
+    return ndxVal / max(ndxVal * (1.0 - kVal) + kVal, 1e-7);
 }
 
-float G_Smith(float NdotV, float NdotL, float k)
+float gSmt(float ndvVal, float ndlVal, float kVal)
 {
-    return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
+    return gSch(ndvVal, kVal) * gSch(ndlVal, kVal);
 }
 
 // ------------------------------------------------------------
-// Shadow helpers (soft shadows)
+// Soft shadow helpers
 // ------------------------------------------------------------
-
-// Simple hash for noise per-pixel / per-sample
-float hash13(uvec3 v)
+float hash13(uvec3 key3)
 {
-    v = (v ^ (v >> 16u)) * 0x7feb352du;
-    v = (v ^ (v >> 15u)) * 0x846ca68bu;
-    v = (v ^ (v >> 16u));
-    uint h = v.x ^ v.y ^ v.z;
-    return float(h) / 4294967295.0;
+    key3 = (key3 ^ (key3 >> 16u)) * 0x7feb352du;
+    key3 = (key3 ^ (key3 >> 15u)) * 0x846ca68bu;
+    key3 = (key3 ^ (key3 >> 16u));
+    uint mixV = key3.x ^ key3.y ^ key3.z;
+    return float(mixV) / 4294967295.0;
 }
 
-// Sample a cone around base direction "dir"
-vec3 sample_cone(vec3 dir, float angle, vec2 xi)
+vec3 coneSmpl(vec3 dirIn, float angRad, vec2 rnd2)
 {
-    // xi in [0,1)^2
-    float cosAngle = cos(angle);
-    float cosTheta = mix(1.0, cosAngle, xi.x);
-    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
-    float phi      = 2.0 * 3.14159265 * xi.y;
+    float cosA  = cos(angRad);
+    float cosT  = mix(1.0, cosA, rnd2.x);
+    float sinT  = sqrt(max(1.0 - cosT * cosT, 0.0));
+    float phiV  = 2.0 * 3.14159265 * rnd2.y;
 
-    vec3 w = normalize(dir);
-    vec3 u = normalize(abs(w.z) < 0.999 ? cross(w, vec3(0,0,1)) : cross(w, vec3(0,1,0)));
-    vec3 v = cross(w, u);
+    vec3 axisW  = normalize(dirIn);
+    vec3 axisU  = normalize(abs(axisW.z) < 0.999 ? cross(axisW, vec3(0, 0, 1)) : cross(axisW, vec3(0, 1, 0)));
+    vec3 axisV  = cross(axisW, axisU);
 
-    return normalize(
-        u * (cos(phi) * sinTheta) +
-        v * (sin(phi) * sinTheta) +
-        w * cosTheta);
+    vec3 dirOut = axisU * (cos(phiV) * sinT) +
+                  axisV * (sin(phiV) * sinT) +
+                  axisW * cosT;
+
+    return normalize(dirOut);
 }
 
-// N-sample soft shadow around baseDirWorld
-float trace_shadow_soft(vec3 Pw, vec3 Nw, vec3 baseDirWorld, float angularRadius)
+float shadDir(vec3 hitPos, vec3 hitNrm, vec3 dirWld, float angRad)
 {
-    const int   kSamples = 4;  // tweakable (4–8 good start)
-    const float eps      = 1e-3;
+    const int   sampCt = 4;
+    const float epsVal = 1e-3;
 
-    vec3 org = Pw + Nw * eps;
-    float visAccum = 0.0;
+    vec3 rayOrg = hitPos + hitNrm * epsVal;
+    float visSum = 0.0;
 
-    for (int i = 0; i < kSamples; ++i)
+    for (int sampIx = 0; sampIx < sampCt; ++sampIx)
     {
-        uvec3 seed = uvec3(gl_LaunchIDEXT.xy, uint(i));
-        float r1   = hash13(seed);
-        float r2   = hash13(seed ^ uvec3(12345u, 67890u, 424242u));
+        uvec3 key3 = uvec3(gl_LaunchIDEXT.xy, uint(sampIx));
+        float rndA = hash13(key3);
+        float rndB = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
 
-        vec3 dir = (angularRadius > 0.0)
-                 ? sample_cone(baseDirWorld, angularRadius, vec2(r1, r2))
-                 : normalize(baseDirWorld);
+        vec3 rayDir = (angRad > 0.0)
+                    ? coneSmpl(dirWld, angRad, vec2(rndA, rndB))
+                    : normalize(dirWld);
 
-        shadowHit = 0u;
+        occFlag = 0u;
 
         traceRayEXT(
-            u_tlas,
+            tlasTop,
             gl_RayFlagsTerminateOnFirstHitEXT |
             gl_RayFlagsOpaqueEXT |
             gl_RayFlagsCullBackFacingTrianglesEXT,
             0xFF,
-            1, // sbtRecordOffset: Hit[1] = shadow hit
-            1, // sbtRecordStride
-            1, // missIndex: Miss[1] = shadow miss
-            org,
+            1, // Hit[1]
+            1, // stride
+            1, // Miss[1]
+            rayOrg,
             0.001,
-            dir,
+            rayDir,
             1e30,
-            1  // payload location = 1
+            1
         );
 
-        visAccum += (shadowHit == 0u) ? 1.0 : 0.0;
+        visSum += (occFlag == 0u) ? 1.0 : 0.0;
     }
 
-    return visAccum / float(kSamples);
+    return visSum / float(sampCt);
 }
 
+// ------------------------------------------------------------
+// Main
+// ------------------------------------------------------------
 void main()
 {
     const uint instId = gl_InstanceCustomIndexEXT;
 
-    if (instId >= u_inst.inst.length())
+    if (instId >= instBuf.insts.length())
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0);
+        colorOut = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
-    RtInstanceData d = u_inst.inst[instId];
+    InstDat instDat = instBuf.insts[instId];
 
-    if (d.posAdr == 0ul || d.idxAdr == 0ul || d.nrmAdr == 0ul || d.uvAdr == 0ul || d.matIdAdr == 0ul || d.triCount == 0u)
+    if (instDat.posAdr == 0ul ||
+        instDat.idxAdr == 0ul ||
+        instDat.nrmAdr == 0ul ||
+        instDat.uvvAdr == 0ul ||
+        instDat.matAdr == 0ul ||
+        instDat.triCnt == 0u)
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0);
+        colorOut = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
-    const uint prim = gl_PrimitiveID;
-    if (prim >= d.triCount)
+    const uint primId = gl_PrimitiveID;
+    if (primId >= instDat.triCnt)
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0);
+        colorOut = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
-    PosBuf   pos = PosBuf(d.posAdr);
-    IdxBuf   ind = IdxBuf(d.idxAdr);
-    NrmBuf   nrm = NrmBuf(d.nrmAdr);
-    UvBuf    uvb = UvBuf(d.uvAdr);
-    MatIdBuf mid = MatIdBuf(d.matIdAdr);
+    PosBuf posBuf = PosBuf(instDat.posAdr);
+    IdxBuf idxBuf = IdxBuf(instDat.idxAdr);
+    NrmBuf nrmBuf = NrmBuf(instDat.nrmAdr);
+    UvBuf  uvvBuf = UvBuf(instDat.uvvAdr);
+    MatBuf matBuf = MatBuf(instDat.matAdr);
 
-    // World-space hit point
-    vec3 Pw = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    vec3 hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
-    // Triangle indices
-    const uint base4 = prim * 4u;
-    const uint ia    = ind.idx[base4 + 0u];
-    const uint ib    = ind.idx[base4 + 1u];
-    const uint ic    = ind.idx[base4 + 2u];
+    const uint base4 = primId * 4u;
+    const uint idxA  = idxBuf.ind4[base4 + 0u];
+    const uint idxB  = idxBuf.ind4[base4 + 1u];
+    const uint idxC  = idxBuf.ind4[base4 + 2u];
 
-    vec3 a = pos.p[ia].xyz;
-    vec3 b = pos.p[ib].xyz;
-    vec3 c = pos.p[ic].xyz;
+    vec3 posA = posBuf.pos4[idxA].xyz;
+    vec3 posB = posBuf.pos4[idxB].xyz;
+    vec3 posC = posBuf.pos4[idxC].xyz;
 
-    // Barycentrics
-    const float b1 = attribs.x;
-    const float b2 = attribs.y;
-    const float b0 = 1.0 - b1 - b2;
+    const float barB = hitAttr.x;
+    const float barC = hitAttr.y;
+    const float barA = 1.0 - barB - barC;
 
-    // Per-corner normals/uvs
-    const uint base3 = prim * 3u;
+    const uint base3 = primId * 3u;
 
-    vec3 n0 = nrm.n[base3 + 0u].xyz;
-    vec3 n1 = nrm.n[base3 + 1u].xyz;
-    vec3 n2 = nrm.n[base3 + 2u].xyz;
+    vec3 nrmA = nrmBuf.nrm4[base3 + 0u].xyz;
+    vec3 nrmB = nrmBuf.nrm4[base3 + 1u].xyz;
+    vec3 nrmC = nrmBuf.nrm4[base3 + 2u].xyz;
 
-    vec3 Nw = normalize(n0 * b0 + n1 * b1 + n2 * b2);
-    if (dot(Nw, Nw) < 1e-20)
-        Nw = normalize(cross(b - a, c - a));
+    vec3 nrmWld = normalize(nrmA * barA + nrmB * barB + nrmC * barC);
+    if (dot(nrmWld, nrmWld) < 1e-20)
+        nrmWld = normalize(cross(posB - posA, posC - posA));
 
-    vec2 uv0 = uvb.uv[base3 + 0u].xy;
-    vec2 uv1 = uvb.uv[base3 + 1u].xy;
-    vec2 uv2 = uvb.uv[base3 + 2u].xy;
-    vec2 UV  = uv0 * b0 + uv1 * b1 + uv2 * b2;
+    vec2 uvvA = uvvBuf.uvv4[base3 + 0u].xy;
+    vec2 uvvB = uvvBuf.uvv4[base3 + 1u].xy;
+    vec2 uvvC = uvvBuf.uvv4[base3 + 2u].xy;
+    vec2 texUV = uvvA * barA + uvvB * barB + uvvC * barC;
 
-    // View-space for shading
-    vec3 Pv = (u_cam.view * vec4(Pw, 1.0)).xyz;
-    vec3 Nv = normalize(mat3(u_cam.view) * Nw);
-    vec3 V  = normalize(-Pv);
+    vec3 posViw = (camUbo.viewM * vec4(hitPos, 1.0)).xyz;
+    vec3 nrmViw = normalize(mat3(camUbo.viewM) * nrmWld);
+    vec3 dirViw = normalize(-posViw);
 
-    // Material fetch
-    const uint matIdRaw = mid.m[prim];
-    const uint matCount = materials.length();
-    const uint matId    = (matCount > 0u) ? min(matIdRaw, matCount - 1u) : 0u;
+    const uint matRaw = matBuf.mat1[primId];
+    const uint matCnt = matSsb.mats.length();
+    const uint matId  = (matCnt > 0u) ? min(matRaw, matCnt - 1u) : 0u;
 
-    GpuMaterial mat = (matCount > 0u) ? materials[matId] : GpuMaterial(
-        vec3(1,0,1), 1.0,
-        vec3(0), 0.0,
+    GpuMat matDat = (matCnt > 0u) ? matSsb.mats[matId] : GpuMat(
+        vec3(1, 0, 1), 1.0,
+        vec3(0),       0.0,
         0.5, 0.0, 1.5, 0.0,
         -1, -1, -1, -1);
 
-    // Albedo
-    vec3 albedo = mat.baseColor;
-    if (mat.baseColorTexture >= 0)
-        albedo *= texture(uTextures[mat.baseColorTexture], UV).rgb;
+    vec3 albCol = matDat.baseCol;
+    if (matDat.baseTex >= 0)
+        albCol *= texture(tex2d[matDat.baseTex], texUV).rgb;
 
-    // Params (+ MRAO)
-    float roughness = clamp(mat.roughness, 0.04, 1.0);
-    float metallic  = clamp(mat.metallic,  0.0,  1.0);
-    float ao        = 1.0;
+    float rouVal = clamp(matDat.roughIt, 0.04, 1.0);
+    float metVal = clamp(matDat.metalIt, 0.0, 1.0);
+    float aoVal  = 1.0;
 
-    if (mat.mraoTexture >= 0)
+    if (matDat.mraoTex >= 0)
     {
-        vec3 mrao = texture(uTextures[mat.mraoTexture], UV).rgb;
-        ao        = clamp(mrao.r, 0.0, 1.0);
-        roughness = clamp(roughness * mrao.g, 0.04, 1.0);
-        metallic  = clamp(metallic  * mrao.b, 0.0,  1.0);
+        vec3 mraCol = texture(tex2d[matDat.mraoTex], texUV).rgb;
+        aoVal       = clamp(mraCol.r, 0.0, 1.0);
+        rouVal      = clamp(rouVal * mraCol.g, 0.04, 1.0);
+        metVal      = clamp(metVal * mraCol.b, 0.0, 1.0);
     }
 
-    float alpha = roughness * roughness;
+    float alpVal = rouVal * rouVal;
 
-    float ior = max(mat.ior, 1.0);
-    float f0s = pow((ior - 1.0) / (ior + 1.0), 2.0);
-    vec3  F0d = vec3(clamp(f0s, 0.02, 0.08));
-    vec3  F0  = mix(F0d, albedo, metallic);
+    float iorVal = max(matDat.iorVal, 1.0);
+    float f0Sca  = pow((iorVal - 1.0) / (iorVal + 1.0), 2.0);
+    vec3  f0Die  = vec3(clamp(f0Sca, 0.02, 0.08));
+    vec3  f0Col  = mix(f0Die, albCol, metVal);
 
-    // Ambient
-    float ambStrength = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
-    vec3  ambient     = uLights.ambient.rgb * ambStrength * albedo * ao;
+    float ambStr = (litUbo.ambExp.a > 0.0) ? litUbo.ambExp.a : 0.05;
+    vec3  ambCol = litUbo.ambExp.rgb * ambStr * albCol * aoVal;
 
-    // Direct lighting
-    vec3 direct = vec3(0.0);
+    vec3 lgtSum = vec3(0.0);
 
-    const uint lightCount = uLights.info.x;
-    if (lightCount == 0u)
+    const uint litCnt = litUbo.info4.x;
+    if (litCnt == 0u)
     {
-        payload = vec4(ambient + albedo * 0.02, 1.0);
+        colorOut = vec4(ambCol + albCol * 0.02, 1.0);
         return;
     }
 
-    for (uint i = 0u; i < lightCount; ++i)
+    for (uint litIdx = 0u; litIdx < litCnt; ++litIdx)
     {
-        uint t = uint(uLights.lights[i].pos_type.w + 0.5);
+        uint litTyp = uint(litUbo.lits[litIdx].posTyp.w + 0.5);
 
-        vec3  L = vec3(0.0);
-        float atten = 1.0;
+        vec3  litDir = vec3(0.0); // surface->light in VIEW
+        float attVal = 1.0;
 
-        if (t == 0u) // Directional (HEADLIGHT in view space)
+        if (litTyp == 0u) // Directional
         {
-            // Convention:
-            //  - dir_range.xyz = light "forward" in VIEW space
-            //  - dir_range.w   = angular radius (softness), radians
-            //  - surface->light = -forward (same as raster)
-            vec3 fwdView       = normalize(uLights.lights[i].dir_range.xyz);
-            vec3 L_view        = normalize(-fwdView); // surface->light in VIEW
-            float angularRadius = max(uLights.lights[i].dir_range.w, 0.0);
+            vec3 fwdViw = normalize(litUbo.lits[litIdx].dirRng.xyz);
+            vec3 dirToL = normalize(-fwdViw); // surface->light in VIEW
+            float angRad = max(litUbo.lits[litIdx].dirRng.w, 0.0);
 
-            // Convert surface->light to WORLD for shadow rays
-            vec3 baseDirWorld = normalize((u_cam.invView * vec4(L_view, 0.0)).xyz);
+            vec3 dirWld = normalize((camUbo.invV * vec4(dirToL, 0.0)).xyz);
+            float visVal = shadDir(hitPos, nrmWld, dirWld, angRad);
 
-            float visibility = trace_shadow_soft(Pw, Nw, baseDirWorld, angularRadius);
-
-            L      = L_view;      // BRDF uses VIEW space
-            atten *= visibility;  // [0..1]
+            litDir = dirToL;
+            attVal *= visVal;
         }
-        else if (t == 1u) // Point (no RT shadows yet)
+        else if (litTyp == 1u) // Point
         {
-            vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
-            float d2 = max(dot(toLight, toLight), 1e-8);
-            float d  = sqrt(d2);
-            L = toLight / d;
+            vec3 toLgt = litUbo.lits[litIdx].posTyp.xyz - posViw;
+            float dst2 = max(dot(toLgt, toLgt), 1e-8);
+            float dstV = sqrt(dst2);
+            litDir     = toLgt / dstV;
 
-            float range = uLights.lights[i].dir_range.w;
-            if (range > 0.0)
+            float rngV = litUbo.lits[litIdx].dirRng.w;
+            if (rngV > 0.0)
             {
-                float x = saturate(1.0 - (d / range));
-                atten = x * x;
+                float facV = satVal(1.0 - (dstV / rngV));
+                attVal = facV * facV;
             }
             else
             {
-                atten = 1.0 / d2;
+                attVal = 1.0 / dst2;
             }
         }
-        else if (t == 2u) // Spot (no RT shadows yet)
+        else if (litTyp == 2u) // Spot
         {
-            vec3 toLight = uLights.lights[i].pos_type.xyz - Pv;
-            float d2 = max(dot(toLight, toLight), 1e-8);
-            float d  = sqrt(d2);
-            L = toLight / d;
+            vec3 toLgt = litUbo.lits[litIdx].posTyp.xyz - posViw;
+            float dst2 = max(dot(toLgt, toLgt), 1e-8);
+            float dstV = sqrt(dst2);
+            litDir     = toLgt / dstV;
 
-            float range = uLights.lights[i].dir_range.w;
-            if (range > 0.0)
+            float rngV = litUbo.lits[litIdx].dirRng.w;
+            if (rngV > 0.0)
             {
-                float x = saturate(1.0 - (d / range));
-                atten = x * x;
+                float facV = satVal(1.0 - (dstV / rngV));
+                attVal = facV * facV;
             }
             else
             {
-                atten = 1.0 / d2;
+                attVal = 1.0 / dst2;
             }
 
-            vec3  spotFwd = normalize(uLights.lights[i].dir_range.xyz);
-            float cosAng  = dot(-L, spotFwd);
+            vec3  spotF = normalize(litUbo.lits[litIdx].dirRng.xyz);
+            float cosAn = dot(-litDir, spotF);
 
-            float innerCos = uLights.lights[i].spot_params.x;
-            float outerCos = uLights.lights[i].spot_params.y;
+            float innCs = litUbo.lits[litIdx].spotPr.x;
+            float outCs = litUbo.lits[litIdx].spotPr.y;
 
-            float cone = saturate((cosAng - outerCos) / max(innerCos - outerCos, 1e-5));
-            atten *= cone * cone;
+            float coneV = satVal((cosAn - outCs) / max(innCs - outCs, 1e-5));
+            attVal *= coneV * coneV;
         }
         else
         {
             continue;
         }
 
-        float NdotL = saturate(dot(Nv, L));
-        float NdotV = saturate(dot(Nv, V));
-        if (NdotL <= 0.0 || NdotV <= 0.0)
+        float ndlVal = satVal(dot(nrmViw, litDir));
+        float ndvVal = satVal(dot(nrmViw, dirViw));
+        if (ndlVal <= 0.0 || ndvVal <= 0.0)
             continue;
 
-        vec3 H = normalize(V + L);
+        vec3 halfV = normalize(dirViw + litDir);
 
-        float NdotH = saturate(dot(Nv, H));
-        float VdotH = saturate(dot(V, H));
+        float ndhVal = satVal(dot(nrmViw, halfV));
+        float vdhVal = satVal(dot(dirViw, halfV));
 
-        vec3  F = fresnelSchlick(VdotH, F0);
-        float D = D_GGX(NdotH, alpha);
+        vec3  frsCol = fresShk(vdhVal, f0Col);
+        float dVal   = dGgx(ndhVal, alpVal);
 
-        float r = roughness + 1.0;
-        float k = (r * r) / 8.0;
-        float G = G_Smith(NdotV, NdotL, k);
+        float rou1 = rouVal + 1.0;
+        float kVal = (rou1 * rou1) / 8.0;
+        float gVal = gSmt(ndvVal, ndlVal, kVal);
 
-        vec3  specBRDF = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
-        vec3  kd       = (vec3(1.0) - F) * (1.0 - metallic);
-        vec3  diffBRDF = kd * albedo / 3.14159265;
+        vec3 specBr = (dVal * gVal * frsCol) / max(4.0 * ndvVal * ndlVal, 1e-7);
+        vec3 kdVal  = (vec3(1.0) - frsCol) * (1.0 - metVal);
+        vec3 difBr  = kdVal * albCol / 3.14159265;
 
-        vec3  c = uLights.lights[i].color_intensity.rgb;
-        float I = uLights.lights[i].color_intensity.a;
+        vec3  litCol = litUbo.lits[litIdx].colInt.rgb;
+        float litInt = litUbo.lits[litIdx].colInt.a;
 
-        vec3 radiance = c * I;
+        vec3 radCol = litCol * litInt;
 
-        direct += (diffBRDF + specBRDF) * radiance * (NdotL * atten);
+        lgtSum += (difBr + specBr) * radCol * (ndlVal * attVal);
     }
 
-    // Emissive
-    vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;
-    if (mat.emissiveTexture >= 0)
-        emissive *= texture(uTextures[mat.emissiveTexture], UV).rgb;
+    vec3 emiCol = matDat.emisCol * matDat.emisIt;
+    if (matDat.emisTex >= 0)
+        emiCol *= texture(tex2d[matDat.emisTex], texUV).rgb;
 
-    vec3 color = ambient + direct + emissive;
-    color = max(color, vec3(0.0));
+    vec3 outCol = ambCol + lgtSum + emiCol;
+    outCol = max(outCol, vec3(0.0));
 
-    payload = vec4(color, 1.0);
+    colorOut = vec4(outCol, 1.0);
 }
