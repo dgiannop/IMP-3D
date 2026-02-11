@@ -2,10 +2,11 @@
 // ShadedDraw.frag  (Viewport PBR: SRGB swapchain safe, ACES tonemap)
 // - Assumes swapchain/target is SRGB: DO NOT gamma-encode here.
 // - Uses a modest "studio" environment + conservative IBL energy.
-// - Scene lights supported; headlight fill is fine.
+// - Scene lights supported; optional headlight in slot 0.
 //==============================================================
 #version 450
 
+// Match ShadedDraw.vert / SolidDraw.vert varyings
 layout(location = 0) in vec3 pos;              // view-space position
 layout(location = 1) in vec3 nrm;              // view-space normal
 layout(location = 2) in vec2 vUv;
@@ -14,9 +15,8 @@ layout(location = 3) flat in int vMaterialId;
 layout(location = 0) out vec4 fragColor;
 
 // ============================================================
-// Materials
+// Materials (shared layout with SolidDraw.frag)
 // ============================================================
-
 struct GpuMaterial
 {
     vec3  baseColor;           // EXPECTED LINEAR. If authored sRGB, convert on CPU.
@@ -45,21 +45,34 @@ const int kMaxTextureCount = 512;
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ============================================================
-// Lights (VIEW SPACE)
+// Lights (VIEW SPACE; same layout as SolidDraw.frag)
 // ============================================================
-
 struct GpuLight
 {
+    // For directional:
+    //   - dir_range.xyz = light forward direction in VIEW space
+    //   - pos_type.xyz  ignored
+    //   - L = -dir_range.xyz
+    //
+    // For point/spot:
+    //   - pos_type.xyz  = position in VIEW space
+    //   - dir_range.xyz = "forward" direction (view) for spot cutoff
+    //   - dir_range.w   = range
+    //   - pos_type.w    = type (see GPU_LIGHT_* below)
     vec4 pos_type;        // xyz = position (view) for point/spot, w = type
-    vec4 dir_range;       // xyz = direction the light points TOWARD (view), w = range
+    vec4 dir_range;       // xyz = forward dir (view), w = range
     vec4 color_intensity; // rgb = color (linear), a = intensity
     vec4 spot_params;     // x = innerCos, y = outerCos
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    uvec4    info;        // x = lightCount (includes headlight if you injected it)
-    vec4     ambient;     // rgb unused here, a = exposure (optional if USE_UBO_EXPOSURE)
+    // Convention:
+    //   info.x = lightCount
+    //   (If you inject a modeling headlight, it usually lives in lights[0],
+    //    and scene lights start at index 1.)
+    uvec4    info;
+    vec4     ambient;     // rgb unused here, a = exposure if USE_UBO_EXPOSURE
     GpuLight lights[64];
 } uLights;
 
@@ -78,7 +91,6 @@ const float FIXED_EXPOSURE      = 1.0;
 // ============================================================
 // Helpers
 // ============================================================
-
 float saturate(float x) { return clamp(x, 0.0, 1.0); }
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
@@ -155,7 +167,7 @@ mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
 }
 
 // ------------------------------------------------------------
-// Light evaluation
+// Light evaluation (VIEW SPACE)
 // ------------------------------------------------------------
 const uint GPU_LIGHT_DIRECTIONAL = 0u;
 const uint GPU_LIGHT_POINT       = 1u;
@@ -168,6 +180,7 @@ void evalLight(in GpuLight Ld, in vec3 P, out vec3 L, out float atten)
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
+        // dir_range.xyz is forward direction in VIEW space; light vector goes opposite.
         L = normalize(-Ld.dir_range.xyz);
         return;
     }
@@ -224,7 +237,6 @@ vec3 gammaEncode(vec3 c)
 // ============================================================
 // Main
 // ============================================================
-
 void main()
 {
     int matCount = int(materials.length());
@@ -316,7 +328,7 @@ void main()
     float hasSceneLights = (uLights.info.x > 1u) ? 1.0 : 0.0;
 
     // If only headlight exists, allow more IBL to keep viewport readable.
-    // If scene lights exist, reduce IBL so it doesn't wash the scene.
+    // If scene lights exist, reduce IBL so it does not wash the scene.
     float iblScale = mix(1.0, 0.20, hasSceneLights);
 
     vec3  Fv   = fresnelSchlick(saturate(dot(N, V)), F0);
@@ -327,13 +339,13 @@ void main()
 
     vec3 R = reflect(-V, N);
 
-    // Lower spec IBL energy (was much higher)
+    // Lower spec IBL energy
     vec3 specIBL = studioEnv(R) *
                    Fv *
                    (0.05 + 0.25 * (1.0 - roughness)) * iblScale;
 
-    // Remove black-lifting "floor" to avoid milky look
-    vec3 floorFill = albedo * 0.004; //vec3(0.0);
+    // Very small floor to avoid absolute black in some cases
+    vec3 floorFill = albedo * 0.004;
 
     // Emissive (treat as linear; if authored sRGB, store texture as SRGB)
     vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;

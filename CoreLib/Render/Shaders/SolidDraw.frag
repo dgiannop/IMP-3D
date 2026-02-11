@@ -1,17 +1,21 @@
 //==============================================================
 // SolidDraw.frag  (Modeling Solid: two-sided + dim inner faces)
+//  - Optional texture usage via USE_TEXTURES_SOLID
 //==============================================================
 #version 450
 
 layout(location = 0) in vec3 pos; // view-space position
 layout(location = 1) in vec3 nrm; // view-space normal
-layout(location = 2) in vec2 vUv; // unused (kept to match vert)
+layout(location = 2) in vec2 vUv; // kept to match vertex interface
 layout(location = 3) flat in int vMaterialId;
 
 layout(location = 0) out vec4 fragColor;
 
+// Toggle: set to false to ignore textures in Solid mode
+const bool USE_TEXTURES_SOLID = true;
+
 // ------------------------------
-// Materials (baseColor only)
+// Materials (shared layout with Shaded)
 // ------------------------------
 struct GpuMaterial
 {
@@ -36,6 +40,10 @@ layout(std430, set = 1, binding = 0) readonly buffer MaterialBuffer
 {
     GpuMaterial materials[];
 };
+
+// Texture table (shared with Shaded)
+const int kMaxTextureCount = 512;
+layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ------------------------------
 // Lights UBO (use ONLY light 0 = headlight)
@@ -72,11 +80,24 @@ void main()
         N = -N;
 
     // ----------------------------------------------------------
-    // Material base color
+    // Material base color (optionally modulated by texture)
     // ----------------------------------------------------------
     int matCount = int(materials.length());
     int id       = (matCount > 0) ? clamp(vMaterialId, 0, matCount - 1) : 0;
-    vec3 base    = (matCount > 0) ? materials[id].baseColor : vec3(0.8);
+
+    vec3 base = vec3(0.8);
+    if (matCount > 0)
+    {
+        GpuMaterial mat = materials[id];
+        base = mat.baseColor;
+
+        if (USE_TEXTURES_SOLID &&
+            mat.baseColorTexture >= 0 &&
+            mat.baseColorTexture < kMaxTextureCount)
+        {
+            base *= texture(uTextures[mat.baseColorTexture], vUv).rgb;
+        }
+    }
 
     // ----------------------------------------------------------
     // Headlight (light 0) or fallback
@@ -107,7 +128,7 @@ void main()
     // Diffuse
     lit += base * (c * (I * diff)) * 0.90;
 
-    // Tiny spec kick (Small so it doesn't look "shaded mode")
+    // Tiny spec kick (small so it doesn't look like full "shaded mode")
     vec3  H    = normalize(V + L);
     float spec = pow(saturate(dot(N, H)), 48.0) * 0.035;
     lit += (c * I) * spec;
@@ -119,17 +140,8 @@ void main()
     // ----------------------------------------------------------
     // Dim interior faces so they read as "inside"
     // ----------------------------------------------------------
-    // Tune this:
-    //  - 0.60 subtle
-    //  - 0.40 clear
-    //  - 0.25 very obvious
-    //  - 0.15 almost hidden
     const float kInnerFaceDim = 0.35;
 
-    // Option 1 (simple): dim everything on backfaces
-    // if (isBackface) lit *= kInnerFaceDim;
-
-    // Option 2 (recommended): keep baseline, dim only the "lighting part"
     if (isBackface)
     {
         vec3 baseLine = base * 0.06;

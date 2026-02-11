@@ -11,6 +11,7 @@ layout(location = 1) in float vThickness[];
 
 layout(location = 0) out vec4 gColor;
 
+// Must match Renderer::PushConstants layout
 layout(push_constant) uniform PC
 {
     layout(offset = 0)  mat4 model;

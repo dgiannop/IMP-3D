@@ -1,5 +1,5 @@
 //============================================================
-// Renderer.hpp
+// Renderer.hpp  (FULL REPLACEMENT — CameraUBO unified)
 //============================================================
 #pragma once
 
@@ -60,13 +60,13 @@ class MeshGpuResources;
  *      * TLAS frames (one TLAS per frame-in-flight).
  *
  *  - Per-viewport:
- *      * m_viewportUbos: frame-global raster UBOs (set = 0) for each viewport.
+ *      * m_viewportUbos: frame-global UBOs (set = 0) for each viewport.
  *      * m_rtViewports: RT images, RT per-frame sets/buffers, RT scratch for
  *        each viewport.
  *
  *  - Per-viewport + frame:
- *      * UBOs for MVP/lights/camera.
- *      * RT camera UBO, RT instance SSBO, RT storage image, RT scratch.
+ *      * CameraUBO + lights UBO.
+ *      * RT instance SSBO, RT storage image, RT scratch.
  *
  * Notes on frames-in-flight:
  *  - Storage is fixed-size (std::array) for vkcfg::kMaxFramesInFlight.
@@ -154,12 +154,31 @@ public:
     // Shader-visible structs (must match GLSL/std140/std430)
     // ============================================================
 
-    // set=0 binding=0 (raster path) - per-viewport, per-frame UBO
-    struct MvpUBO
+    /**
+     * @brief Unified camera UBO shared by raster + RT (set=0, binding=0).
+     *
+     * Conventions:
+     *  - proj/view matrices are whatever Viewport produces (Vulkan RH + ZO + Y-flip).
+     *  - viewProj = proj * view
+     *  - inv* are true inverses of the above.
+     *
+     * viewport = (width, height, 1/width, 1/height) in pixels.
+     */
+    struct CameraUBO
     {
-        glm::mat4 proj = {};
-        glm::mat4 view = {};
+        glm::mat4 proj     = {}; // VIEW  -> CLIP
+        glm::mat4 view     = {}; // WORLD -> VIEW
+        glm::mat4 viewProj = {}; // WORLD -> CLIP
+
+        glm::mat4 invProj     = {}; // CLIP  -> VIEW
+        glm::mat4 invView     = {}; // VIEW  -> WORLD
+        glm::mat4 invViewProj = {}; // CLIP  -> WORLD
+
+        glm::vec4 camPos     = {}; // world-space camera position (xyz, 1)
+        glm::vec4 viewport   = {}; // (w, h, 1/w, 1/h)
+        glm::vec4 clearColor = {}; // RT clear color
     };
+    static_assert(sizeof(CameraUBO) % 16 == 0, "CameraUBO must be std140-aligned");
 
     // Push constants used by raster + overlays (keep layout stable with shader)
     struct PushConstants
@@ -169,18 +188,6 @@ public:
         glm::vec4 overlayParams = {};
     };
     static_assert(sizeof(PushConstants) == 96);
-
-    // set=0 binding=2 (RT path) - per-viewport, per-frame UBO
-    struct RtCameraUBO
-    {
-        glm::mat4 invViewProj = {}; // CLIP -> WORLD
-        glm::mat4 view        = {}; // WORLD -> VIEW
-        glm::mat4 invView     = {}; // VIEW -> WORLD
-        glm::vec4 camPos      = {}; // world-space camera position
-        glm::vec4 clearColor  = {}; // clear color for RT
-    };
-
-    static_assert(sizeof(RtCameraUBO) % 16 == 0, "RtCameraUBO must be std140-aligned");
 
     // set=2 binding=3 (RT path) - std430 SSBO element, per-instance
     struct alignas(8) RtInstanceData
@@ -228,19 +235,17 @@ public:
      *  - Storage is fixed-size for vkcfg::kMaxFramesInFlight.
      *
      * Contents (per viewport, per frameIndex):
-     *  - mvpBuffers[fi]   : MvpUBO (binding 0, raster path).
-     *  - lightBuffers[fi] : GpuLightsUBO (binding 1, raster + RT).
-     *  - uboSets[fi]      : DescriptorSet for set=0 (frame globals).
-     *
-     * RtCameraUBO (binding 2) is bound into uboSets[fi] from RtViewportState.
+     *  - cameraBuffers[fi] : CameraUBO     (binding 0, raster + RT).
+     *  - lightBuffers[fi]  : GpuLightsUBO  (binding 1, raster + RT).
+     *  - uboSets[fi]       : DescriptorSet for set=0 (frame globals).
      *
      * Only indices [0..m_framesInFlight-1] are valid for the current device.
      */
     struct ViewportUboState
     {
-        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     mvpBuffers   = {}; ///< per-frame MVP UBO (binding 0)
-        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     lightBuffers = {}; ///< per-frame Lights UBO (binding 1)
-        std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> uboSets      = {}; ///< per-frame frame-globals set (set = 0)
+        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     cameraBuffers = {}; ///< per-frame camera UBO (binding 0)
+        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     lightBuffers  = {}; ///< per-frame Lights UBO (binding 1)
+        std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> uboSets       = {}; ///< per-frame frame-globals set (set = 0)
     };
 
 private:
@@ -273,16 +278,9 @@ private:
 
 private:
     // ============================================================
-    // RT per-viewport state (images, RT set, RT UBO/SSBO, scratch)
+    // RT per-viewport state (images, RT set, SSBO, scratch)
     // ============================================================
 
-    /**
-     * @brief Per-viewport, per-frame RT output image.
-     *
-     * Scope:
-     *  - One entry per frame-in-flight inside RtViewportState::images.
-     *  - Destroyed when viewport RT state is destroyed or resized.
-     */
     struct RtImagePerFrame
     {
         VkImage        image     = VK_NULL_HANDLE;
@@ -302,7 +300,6 @@ private:
      *
      * Contents (per viewport, per frameIndex):
      *  - sets[fi]               : RT-only descriptor set (set = 2).
-     *  - cameraBuffers[fi]      : RtCameraUBO (bound into set=0/binding=2).
      *  - instanceDataBuffers[fi]: RtInstanceData SSBO (set=2/binding=3).
      *  - images[fi]             : RT output image + view (storage/sampled).
      *  - scratchBuffers[fi]     : RT scratch buffer (AS build) for this viewport.
@@ -313,7 +310,6 @@ private:
     struct RtViewportState
     {
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight>   sets                = {}; ///< per-frame RT descriptor set (set=2)
-        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>       cameraBuffers       = {}; ///< per-frame RT camera UBO (binding=2 in set=0)
         std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>       instanceDataBuffers = {}; ///< per-frame instance SSBO (binding=3 in set=2)
         std::array<RtImagePerFrame, vkcfg::kMaxFramesInFlight> images              = {}; ///< per-frame RT output image + view
 
@@ -372,13 +368,10 @@ private:
     // Context / frame config (device lifetime)
     // ============================================================
 
-    /// Immutable Vulkan handles/config for this renderer.
     VulkanContext m_ctx = {};
 
-    /// Active number of frames in flight (clamped to [1..vkcfg::kMaxFramesInFlight]).
     uint32_t m_framesInFlight = 1;
 
-    /// Upper bound for how many Viewports we allocate per-frame descriptor resources for.
     static constexpr uint32_t kMaxViewports = 8;
 
 private:
@@ -386,28 +379,25 @@ private:
     // Raster pipelines / layout (device + swapchain lifetime)
     // ============================================================
 
-    /// Raster pipeline layout (set=0 frame globals, set=1 materials).
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 
-    // Graphics pipelines (swapchain lifetime: depend on VkRenderPass).
-    GraphicsPipeline m_solidPipeline       = {}; // SolidDraw (triangles, unlit)
-    GraphicsPipeline m_shadedPipeline      = {}; // ShadedDraw (triangles, lit)
-    GraphicsPipeline m_depthOnlyPipeline   = {}; // depth prepass (triangles, no color)
-    GraphicsPipeline m_wirePipeline        = {}; // visible edges (wireframe)
-    GraphicsPipeline m_wireHiddenPipeline  = {}; // hidden edges (wireframe, depth GREATER)
-    GraphicsPipeline m_wireOverlayPipeline = {}; // solid-mode wire overlay with depth bias
+    GraphicsPipeline m_solidPipeline       = {};
+    GraphicsPipeline m_shadedPipeline      = {};
+    GraphicsPipeline m_depthOnlyPipeline   = {};
+    GraphicsPipeline m_wirePipeline        = {};
+    GraphicsPipeline m_wireHiddenPipeline  = {};
+    GraphicsPipeline m_wireOverlayPipeline = {};
 
-    GraphicsPipeline m_overlayPipeline     = {}; // gizmo / overlay lines
-    GraphicsPipeline m_overlayFillPipeline = {}; // gizmo / overlay triangles
+    GraphicsPipeline m_overlayPipeline     = {};
+    GraphicsPipeline m_overlayFillPipeline = {};
 
-    GraphicsPipeline m_selVertPipeline       = {}; // selection verts visible
-    GraphicsPipeline m_selEdgePipeline       = {}; // selection edges visible
-    GraphicsPipeline m_selPolyPipeline       = {}; // selection polys visible
-    GraphicsPipeline m_selVertHiddenPipeline = {}; // selection verts hidden
-    GraphicsPipeline m_selEdgeHiddenPipeline = {}; // selection edges hidden
-    GraphicsPipeline m_selPolyHiddenPipeline = {}; // selection polys hidden
+    GraphicsPipeline m_selVertPipeline       = {};
+    GraphicsPipeline m_selEdgePipeline       = {};
+    GraphicsPipeline m_selPolyPipeline       = {};
+    GraphicsPipeline m_selVertHiddenPipeline = {};
+    GraphicsPipeline m_selEdgeHiddenPipeline = {};
+    GraphicsPipeline m_selPolyHiddenPipeline = {};
 
-    /// Grid renderer (owns its own device + swapchain resources internally).
     std::unique_ptr<GridRendererVK> m_grid;
 
 private:
@@ -418,9 +408,8 @@ private:
     /**
      * @brief Frame globals DescriptorSetLayout (set = 0).
      *
-     * Binding 0 : MvpUBO       (raster)
-     * Binding 1 : GpuLightsUBO (raster + RT)
-     * Binding 2 : RtCameraUBO  (RT only)
+     * Binding 0 : CameraUBO     (raster + RT)
+     * Binding 1 : GpuLightsUBO  (raster + RT)
      */
     DescriptorSetLayout m_descriptorSetLayout = {};
 
@@ -432,55 +421,24 @@ private:
      */
     DescriptorSetLayout m_materialSetLayout = {};
 
-    /**
-     * @brief Shared descriptor pool for set 0 (frame globals) and set 1 (materials).
-     *
-     * Sizes are allocated for kMaxViewports * framesInFlight frame-global sets
-     * plus framesInFlight material sets.
-     *
-     * Pool sizing uses the ACTIVE frames-in-flight count, but storage is fixed-size.
-     */
     DescriptorPool m_descriptorPool = {};
 
-    /**
-     * @brief Per-viewport frame-global state (set = 0).
-     *
-     * Keyed by Viewport*, each value contains fixed-size per-frame storage.
-     */
     std::unordered_map<Viewport*, ViewportUboState> m_viewportUbos = {};
 
-    /**
-     * @brief Per-frame material descriptor sets (set = 1).
-     *
-     * Indexed by frameIndex (0..m_framesInFlight-1), independent of viewport.
-     * Storage is fixed-size for vkcfg::kMaxFramesInFlight.
-     */
     std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> m_materialSets = {};
 
-    /// Modeling headlight state (renderer-owned implementation detail).
-    HeadlightSettings m_headlight = {};
-
-    /// Scene-driven lighting policy (headlight/scene lights/exposure/etc).
-    LightingSettings m_lightingSettings = {};
+    HeadlightSettings m_headlight        = {};
+    LightingSettings  m_lightingSettings = {};
 
 private:
     // ============================================================
     // Materials SSBO (device lifetime, per-frame descriptor binding)
     // ============================================================
 
-    /// GPU buffer backing the materials SSBO (set=1, binding=0).
-    // GpuBuffer m_materialBuffer = {};
     std::array<GpuBuffer, vkcfg::kMaxFramesInFlight> m_materialBuffers = {};
 
-    /// Current number of Material entries stored in m_materialBuffer.
     std::uint32_t m_materialCount = 0;
 
-    /**
-     * @brief Per-frame snapshot of the Scene materials change counter.
-     *
-     * Each frame-in-flight slot must observe (and then upload) the change at least once,
-     * otherwise frames will alternate between old/new material data and appear to flicker.
-     */
     std::array<std::uint64_t, vkcfg::kMaxFramesInFlight> m_materialCounterPerFrame = {};
 
 private:
@@ -488,11 +446,9 @@ private:
     // Overlay vertex buffers (device lifetime)
     // ============================================================
 
-    /// Wide-line overlay vertex buffer (OverlayVertex).
     GpuBuffer   m_overlayVertexBuffer   = {};
     std::size_t m_overlayVertexCapacity = 0;
 
-    /// Filled overlay vertex buffer (OverlayFillVertex).
     GpuBuffer   m_overlayFillVertexBuffer   = {};
     std::size_t m_overlayFillVertexCapacity = 0;
 
@@ -501,42 +457,19 @@ private:
     // Ray tracing (DrawMode::RAY_TRACE) - device + swapchain lifetime
     // ============================================================
 
-    /**
-     * @brief RT-only DescriptorSetLayout (set = 2).
-     *
-     * Binding 0 : storage image (raygen writes)
-     * Binding 1 : combined image sampler (present, optional raygen)
-     * Binding 2 : TLAS (VkAccelerationStructureKHR)
-     * Binding 3 : RtInstanceData SSBO
-     */
     DescriptorSetLayout m_rtSetLayout = {};
+    DescriptorPool      m_rtPool      = {};
 
-    /// Descriptor pool used to allocate RT per-viewport, per-frame sets (set = 2).
-    DescriptorPool m_rtPool = {};
-
-    /// Sampler used by RT present pipeline to sample the RT output image.
     VkSampler m_rtSampler = VK_NULL_HANDLE;
 
-    /// Format of RT output images.
     VkFormat m_rtFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
-    /// RT scene pipeline (raygen/miss/hit).
-    vkrt::RtPipeline m_rtPipeline = {};
+    vkrt::RtPipeline        m_rtPipeline = {};
+    vkrt::RtSbt             m_rtSbt      = {};
+    vkrt::RtPresentPipeline m_rtPresent  = {};
 
-    /// Shader binding table for m_rtPipeline.
-    vkrt::RtSbt m_rtSbt = {};
-
-    /// Ray tracing present pipeline (fullscreen blit from RT output image).
-    vkrt::RtPresentPipeline m_rtPresent = {};
-
-    /// Command pool used for RT uploads / SBT builds.
     VkCommandPool m_rtUploadPool = VK_NULL_HANDLE;
 
-    /**
-     * @brief Per-viewport RT state (images, RT sets, camera UBO, instance SSBO, scratch).
-     *
-     * Keyed by Viewport*, each value contains fixed-size per-frame storage.
-     */
     std::unordered_map<Viewport*, RtViewportState> m_rtViewports = {};
 
 private:
@@ -544,21 +477,13 @@ private:
     // RT Acceleration Structures (BLAS per mesh, TLAS per frame)
     // ============================================================
 
-    /**
-     * @brief BLAS state for a single SceneMesh.
-     *
-     * Scope:
-     *  - One RtBlas per SceneMesh* (m_rtBlas map).
-     *  - Rebuilt when mesh topology/deform or RT geometry changes.
-     */
     struct RtBlas
     {
         VkAccelerationStructureKHR as      = VK_NULL_HANDLE;
         VkDeviceAddress            address = 0;
 
-        GpuBuffer asBuffer = {}; ///< Backing buffer for BLAS.
+        GpuBuffer asBuffer = {};
 
-        // Geometry sizes for build key.
         VkBuffer posBuffer = VK_NULL_HANDLE;
         uint32_t posCount  = 0;
         VkBuffer idxBuffer = VK_NULL_HANDLE;
@@ -568,22 +493,9 @@ private:
         uint64_t topoCounter   = 0;
         uint64_t deformCounter = 0;
 
-        uint64_t buildKey = 0; ///< Hash of topo/deform/geometry used to avoid rebuild.
+        uint64_t buildKey = 0;
     };
 
-    /**
-     * @brief TLAS state for a single frame-in-flight.
-     *
-     * Scope:
-     *  - One RtTlasFrame per frameIndex (m_rtTlasFrames).
-     *
-     * Contents:
-     *  - as              : TLAS handle.
-     *  - buffer          : TLAS backing buffer.
-     *  - address         : device address for TLAS.
-     *  - instanceBuffer  : device-local instance data buffer.
-     *  - instanceStaging : host-visible buffer used to upload instances.
-     */
     struct RtTlasFrame
     {
         VkAccelerationStructureKHR as = VK_NULL_HANDLE;
@@ -594,13 +506,11 @@ private:
         GpuBuffer instanceBuffer  = {};
         GpuBuffer instanceStaging = {};
 
-        uint64_t buildKey = 0; ///< Hash used to detect when TLAS needs rebuild.
+        uint64_t buildKey = 0;
     };
 
-    /// BLAS map per SceneMesh* (device lifetime; contents change with scene).
     std::unordered_map<SceneMesh*, RtBlas> m_rtBlas = {};
 
-    /// TLAS frames: fixed-size storage; only [0..m_framesInFlight-1] is used.
     std::array<RtTlasFrame, vkcfg::kMaxFramesInFlight> m_rtTlasFrames = {};
 
 private:
@@ -608,13 +518,9 @@ private:
     // RT change tracking (TLAS invalidation)
     // ============================================================
 
-    /// Counter used as a parent for mesh topology/deform counters to invalidate TLAS.
     SysCounterPtr m_rtTlasChangeCounter;
+    SysMonitor    m_rtTlasChangeMonitor;
 
-    /// Monitor for m_rtTlasChangeCounter, used in Renderer::idle().
-    SysMonitor m_rtTlasChangeMonitor;
-
-    /// Meshes whose topology/deform counters have been linked to m_rtTlasChangeCounter.
     std::unordered_set<class SysMesh*> m_rtTlasLinkedMeshes = {};
 
 private:
@@ -622,14 +528,6 @@ private:
     // Misc helpers
     // ============================================================
 
-    /**
-     * @brief Iterate visible SceneMeshes and provide MeshGpuResources.
-     *
-     * Ensures that each visible SceneMesh has a MeshGpuResources, creating one
-     * on demand, then calls the provided functor:
-     *
-     *   fn(SceneMesh* mesh, MeshGpuResources* gpu)
-     */
     template<typename Fn>
     void forEachVisibleMesh(Scene* scene, Fn&& fn);
 };

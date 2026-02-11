@@ -8,11 +8,23 @@ layout(location = 1) in vec4 inColor;
 
 layout(location = 0) out vec4 vColor;
 
-layout(set = 0, binding = 0) uniform MvpUBO {
-    mat4 proj;
-    mat4 view;
+// Unified CameraUBO (matches Renderer::CameraUBO at set=0,binding=0)
+layout(set = 0, binding = 0) uniform CameraUBO
+{
+    mat4 proj;        // VIEW  -> CLIP
+    mat4 view;        // WORLD -> VIEW
+    mat4 viewProj;    // WORLD -> CLIP
+
+    mat4 invProj;     // CLIP  -> VIEW
+    mat4 invView;     // VIEW  -> WORLD
+    mat4 invViewProj; // CLIP  -> WORLD
+
+    vec4 camPos;      // world-space camera position
+    vec4 viewport;    // (w, h, 1/w, 1/h)
+    vec4 clearColor;  // RT clear color
 } ubo;
 
+// Must match Renderer::PushConstants layout
 layout(push_constant) uniform PC
 {
     layout(offset = 0)  mat4 model;
@@ -22,7 +34,9 @@ layout(push_constant) uniform PC
 
 void main()
 {
-    mat4 mvp = ubo.proj * ubo.view * pc.model;
-    gl_Position = mvp * vec4(inPos, 1.0);
+    // World -> Clip using unified CameraUBO
+    gl_Position = ubo.proj * ubo.view * pc.model * vec4(inPos, 1.0);
+
+    // Per-vertex color from attribute (not from push constants)
     vColor = inColor;
 }

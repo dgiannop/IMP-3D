@@ -5,10 +5,14 @@
 
 layout(location = 0) out vec4 outColor;
 
+// ------------------------------------------------------------
+// Push constants (matches Renderer::PushConstants)
+// ------------------------------------------------------------
 layout(push_constant) uniform PC
 {
-    layout(offset = 0)  mat4 model;
-    layout(offset = 64) vec4 color; // rgb = tint, a = overall opacity
+    mat4 model;          // unused here
+    vec4 color;          // rgb = tint, a = overall opacity
+    vec4 overlayParams;  // unused here
 } pc;
 
 void main()

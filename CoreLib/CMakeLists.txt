@@ -160,7 +160,6 @@ set(SHADERS
     Wireframe.vert
     Wireframe.frag
     WireframeDepthBias.vert
-    FullscreenTri.vert
     RtPresent.vert
     RtPresent.frag
     RtScene.rgen

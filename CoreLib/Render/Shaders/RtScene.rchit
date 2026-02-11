@@ -2,12 +2,12 @@
 // RtScene.rchit  (Primary shading + optional headlight shadows)
 //==============================================================
 // Conventions expected by this shader:
-// - camUbo.viewM  = WORLD -> VIEW
-// - camUbo.invV   = VIEW  -> WORLD
+// - uCamera.view     = WORLD -> VIEW
+// - uCamera.invView  = VIEW  -> WORLD
 // - Directional light encoding matches raster:
-//   * dirRng.xyz = forward direction the light points TOWARD (VIEW space)
-//   * surface->light (VIEW) = -forward
-//   * dirRng.w   = angular radius (radians) for soft shadows (optional)
+//   * lights[i].dir_range.xyz = forward direction the light points TOWARD (VIEW space)
+//   * surface->light (VIEW)   = -forward
+//   * lights[i].dir_range.w   = angular radius (radians) for soft shadows (optional)
 //==============================================================
 
 #version 460
@@ -54,34 +54,42 @@ layout(set = 2, binding = 3, std430) readonly buffer InstBuf
 } instBuf;
 
 // ------------------------------------------------------------
-// Camera UBO (frame set)
+// Camera UBO (frame set, unified with raster/RT)
+// set = 0, binding = 0
 // ------------------------------------------------------------
-layout(set = 0, binding = 2, std140) uniform CamUBO
+layout(set = 0, binding = 0, std140) uniform CameraUBO
 {
-    mat4 invVP;
-    mat4 viewM;      // WORLD -> VIEW
-    mat4 invV;       // VIEW  -> WORLD
+    mat4 proj;
+    mat4 view;
+    mat4 viewProj;
+
+    mat4 invProj;
+    mat4 invView;
+    mat4 invViewProj;
+
     vec4 camPos;     // world
-    vec4 clrCol;
-} camUbo;
+    vec4 viewport;   // (w, h, 1/w, 1/h)
+    vec4 clearColor; // RT clear color
+} uCamera;
 
 // ------------------------------------------------------------
-// Lights UBO (frame set)
+// Lights UBO (frame set, shared with raster)
+// set = 0, binding = 1
 // ------------------------------------------------------------
-struct GpuLit
+struct GpuLight
 {
-    vec4 posTyp;     // xyz = pos (view), w = type
-    vec4 dirRng;     // xyz = forward dir (view), w = range (pt/spot) OR angular radius (dir)
-    vec4 colInt;     // rgb = color, a = intensity
-    vec4 spotPr;     // x = innerCos, y = outerCos
+    vec4 pos_type;        // xyz = pos (view) for point/spot, w = type
+    vec4 dir_range;       // xyz = forward dir (view), w = range OR angular radius
+    vec4 color_intensity; // rgb = color, a = intensity
+    vec4 spot_params;     // x = innerCos, y = outerCos
 };
 
-layout(set = 0, binding = 1, std140) uniform LitUBO
+layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    uvec4 info4;     // x = lightCount
-    vec4  ambExp;    // rgb = ambient fill, a = exposure (optional)
-    GpuLit lits[64];
-} litUbo;
+    uvec4    info;    // x = lightCount
+    vec4     ambient; // rgb = ambient fill, a = exposure (optional)
+    GpuLight lights[64];
+} uLights;
 
 // ------------------------------------------------------------
 // Materials + textures (match raster bindings)
@@ -178,7 +186,7 @@ float shadDir(vec3 hitPos, vec3 hitNrm, vec3 dirWld, float angRad)
     const int   sampCt = 4;
     const float epsVal = 1e-3;
 
-    vec3 rayOrg = hitPos + hitNrm * epsVal;
+    vec3  rayOrg = hitPos + hitNrm * epsVal;
     float visSum = 0.0;
 
     for (int sampIx = 0; sampIx < sampCt; ++sampIx)
@@ -284,8 +292,9 @@ void main()
     vec2 uvvC = uvvBuf.uvv4[base3 + 2u].xy;
     vec2 texUV = uvvA * barA + uvvB * barB + uvvC * barC;
 
-    vec3 posViw = (camUbo.viewM * vec4(hitPos, 1.0)).xyz;
-    vec3 nrmViw = normalize(mat3(camUbo.viewM) * nrmWld);
+    // View-space position/normal from unified CameraUBO
+    vec3 posViw = (uCamera.view * vec4(hitPos, 1.0)).xyz;
+    vec3 nrmViw = normalize(mat3(uCamera.view) * nrmWld);
     vec3 dirViw = normalize(-posViw);
 
     const uint matRaw = matBuf.mat1[primId];
@@ -321,12 +330,13 @@ void main()
     vec3  f0Die  = vec3(clamp(f0Sca, 0.02, 0.08));
     vec3  f0Col  = mix(f0Die, albCol, metVal);
 
-    float ambStr = (litUbo.ambExp.a > 0.0) ? litUbo.ambExp.a : 0.05;
-    vec3  ambCol = litUbo.ambExp.rgb * ambStr * albCol * aoVal;
+    // Ambient + exposure from unified LightsUBO
+    float ambStr = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
+    vec3  ambCol = uLights.ambient.rgb * ambStr * albCol * aoVal;
 
     vec3 lgtSum = vec3(0.0);
 
-    const uint litCnt = litUbo.info4.x;
+    const uint litCnt = uLights.info.x;
     if (litCnt == 0u)
     {
         colorOut = vec4(ambCol + albCol * 0.02, 1.0);
@@ -335,18 +345,20 @@ void main()
 
     for (uint litIdx = 0u; litIdx < litCnt; ++litIdx)
     {
-        uint litTyp = uint(litUbo.lits[litIdx].posTyp.w + 0.5);
+        GpuLight Ld = uLights.lights[litIdx];
+        uint     litTyp = uint(Ld.pos_type.w + 0.5);
 
         vec3  litDir = vec3(0.0); // surface->light in VIEW
         float attVal = 1.0;
 
         if (litTyp == 0u) // Directional
         {
-            vec3 fwdViw = normalize(litUbo.lits[litIdx].dirRng.xyz);
+            vec3 fwdViw = normalize(Ld.dir_range.xyz);
             vec3 dirToL = normalize(-fwdViw); // surface->light in VIEW
-            float angRad = max(litUbo.lits[litIdx].dirRng.w, 0.0);
+            float angRad = max(Ld.dir_range.w, 0.0);
 
-            vec3 dirWld = normalize((camUbo.invV * vec4(dirToL, 0.0)).xyz);
+            // Convert surface->light direction to WORLD for shadow rays
+            vec3 dirWld = normalize((uCamera.invView * vec4(dirToL, 0.0)).xyz);
             float visVal = shadDir(hitPos, nrmWld, dirWld, angRad);
 
             litDir = dirToL;
@@ -354,12 +366,12 @@ void main()
         }
         else if (litTyp == 1u) // Point
         {
-            vec3 toLgt = litUbo.lits[litIdx].posTyp.xyz - posViw;
+            vec3 toLgt = Ld.pos_type.xyz - posViw;
             float dst2 = max(dot(toLgt, toLgt), 1e-8);
             float dstV = sqrt(dst2);
             litDir     = toLgt / dstV;
 
-            float rngV = litUbo.lits[litIdx].dirRng.w;
+            float rngV = Ld.dir_range.w;
             if (rngV > 0.0)
             {
                 float facV = satVal(1.0 - (dstV / rngV));
@@ -372,12 +384,12 @@ void main()
         }
         else if (litTyp == 2u) // Spot
         {
-            vec3 toLgt = litUbo.lits[litIdx].posTyp.xyz - posViw;
+            vec3 toLgt = Ld.pos_type.xyz - posViw;
             float dst2 = max(dot(toLgt, toLgt), 1e-8);
             float dstV = sqrt(dst2);
             litDir     = toLgt / dstV;
 
-            float rngV = litUbo.lits[litIdx].dirRng.w;
+            float rngV = Ld.dir_range.w;
             if (rngV > 0.0)
             {
                 float facV = satVal(1.0 - (dstV / rngV));
@@ -388,11 +400,11 @@ void main()
                 attVal = 1.0 / dst2;
             }
 
-            vec3  spotF = normalize(litUbo.lits[litIdx].dirRng.xyz);
+            vec3  spotF = normalize(Ld.dir_range.xyz);
             float cosAn = dot(-litDir, spotF);
 
-            float innCs = litUbo.lits[litIdx].spotPr.x;
-            float outCs = litUbo.lits[litIdx].spotPr.y;
+            float innCs = Ld.spot_params.x;
+            float outCs = Ld.spot_params.y;
 
             float coneV = satVal((cosAn - outCs) / max(innCs - outCs, 1e-5));
             attVal *= coneV * coneV;
@@ -423,8 +435,8 @@ void main()
         vec3 kdVal  = (vec3(1.0) - frsCol) * (1.0 - metVal);
         vec3 difBr  = kdVal * albCol / 3.14159265;
 
-        vec3  litCol = litUbo.lits[litIdx].colInt.rgb;
-        float litInt = litUbo.lits[litIdx].colInt.a;
+        vec3  litCol = Ld.color_intensity.rgb;
+        float litInt = Ld.color_intensity.a;
 
         vec3 radCol = litCol * litInt;
 

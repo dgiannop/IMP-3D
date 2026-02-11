@@ -1,21 +1,40 @@
 //==============================================================
 // Selection.vert
+//  - Uses unified CameraUBO (set=0, binding=0)
+//  - Push constants match Renderer::PushConstants layout
 //==============================================================
 #version 450
 
 // Position only, from unique vertex buffer (binding 0, location 0)
 layout(location = 0) in vec3 inPos;
 
-layout(set = 0, binding = 0) uniform MvpUBO
+// ------------------------------------------------------------
+// Camera UBO (shared with Solid/Shaded/RT)
+// set = 0, binding = 0
+// ------------------------------------------------------------
+layout(set = 0, binding = 0, std140) uniform CameraUBO
 {
-    mat4 proj;
-    mat4 view;
-} ubo;
+    mat4 proj;        // VIEW  -> CLIP
+    mat4 view;        // WORLD -> VIEW
+    mat4 viewProj;    // WORLD -> CLIP
 
+    mat4 invProj;     // CLIP  -> VIEW
+    mat4 invView;     // VIEW  -> WORLD
+    mat4 invViewProj; // CLIP  -> WORLD
+
+    vec4 camPos;      // world-space camera position (xyz, 1)
+    vec4 viewport;    // (w, h, 1/w, 1/h)
+    vec4 clearColor;  // RT clear color (unused here)
+} uCamera;
+
+// ------------------------------------------------------------
+// Push constants (matches Renderer::PushConstants)
+// ------------------------------------------------------------
 layout(push_constant) uniform PC
 {
-    layout(offset = 0)  mat4 model;
-    layout(offset = 64) vec4 color;
+    mat4 model;
+    vec4 color;
+    vec4 overlayParams; // unused here
 } pc;
 
 void main()
@@ -23,8 +42,9 @@ void main()
     // World space
     vec4 worldPos = pc.model * vec4(inPos, 1.0);
 
-    // Clip space
-    gl_Position = ubo.proj * ubo.view * worldPos;
+    // Clip space (use unified view/proj)
+    gl_Position = uCamera.proj * uCamera.view * worldPos;
+    // or: gl_Position = uCamera.viewProj * worldPos;
 
     // Slightly more than regular edges so selection pops on top
     gl_Position.z -= 2e-4 * gl_Position.w;
