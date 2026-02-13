@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "CoreUtilities.hpp"
 #include "Light.hpp"
 #include "LightHandler.hpp"
 #include "LightingSettings.hpp"
@@ -22,9 +23,16 @@ namespace
     constexpr bool kUseFixedSunForHeadlight = false;
 
     // If true, inject the headlight as a VIEW-SPACE spotlight at the camera
-    // (a "flashlight" that always follows the view). This is typically the
-    // most intuitive behavior to validate headlight direction issues in RT.
+    // (a "flashlight" that always follows the view).
     constexpr bool kHeadlightAsFlashlightSpot = false;
+
+    // Headlight bias (camera-locked directional):
+    // Keep this subtle for SOLID. In your tests, positive "up" tended to darken
+    // the top face, so default up bias is zero (or slightly negative).
+    constexpr bool  kUseHeadlightBias   = true;
+    constexpr float kHeadlightSideBias  = +0.10f; // negative = left
+    constexpr float kHeadlightUpBias    = 0.00f;  // positive = up (try -0.05f if top still darkens)
+    constexpr float kHeadlightBiasScale = 1.0f;   // global scaler for quick tuning
 
     // Flashlight tuning (only used when kHeadlightAsFlashlightSpot == true).
     constexpr float kHeadlightRange    = 80.0f;
@@ -35,14 +43,6 @@ namespace
     constexpr float kHeadlightSoftnessRadians = 0.05f; // ~3 degrees
 
     constexpr float kEps = 1e-8f;
-
-    static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-    {
-        const float len2 = glm::dot(v, v);
-        if (len2 <= kEps)
-            return fallback;
-        return v * (1.0f / std::sqrt(len2));
-    }
 
     static glm::vec3 clamp01(const glm::vec3& c) noexcept
     {
@@ -80,7 +80,7 @@ namespace
     static glm::vec3 viewDir(const glm::mat4& V, const glm::vec3& dWorld) noexcept
     {
         const glm::vec4 dv = V * glm::vec4(dWorld, 0.0f);
-        return safeNormalize(glm::vec3(dv.x, dv.y, dv.z), glm::vec3(0, 0, -1));
+        return un::safe_normalize(glm::vec3(dv.x, dv.y, dv.z), glm::vec3(0, 0, -1));
     }
 
     static GpuLight makeDirectionalView(const glm::vec3& dirView, const glm::vec3& color, float intensity) noexcept
@@ -88,7 +88,7 @@ namespace
         GpuLight gl{};
         gl.pos_type = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(GpuLightType::Directional));
 
-        const glm::vec3 fwdView = safeNormalize(dirView, glm::vec3(0, 0, -1));
+        const glm::vec3 fwdView = un::safe_normalize(dirView, glm::vec3(0, 0, -1));
 
         // xyz = forward (VIEW space), w = softness (angular radius in radians)
         gl.dir_range = glm::vec4(fwdView, kHeadlightSoftnessRadians);
@@ -123,9 +123,9 @@ namespace
         const float innerCos = std::cos(inner);
         const float outerCos = std::cos(outer);
 
-        GpuLight gl{};
+        GpuLight gl        = {};
         gl.pos_type        = glm::vec4(posView, static_cast<float>(GpuLightType::Spot));
-        gl.dir_range       = glm::vec4(safeNormalize(dirView, glm::vec3(0, 0, -1)), std::max(0.0f, range));
+        gl.dir_range       = glm::vec4(un::safe_normalize(dirView, glm::vec3(0, 0, -1)), std::max(0.0f, range));
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
         gl.spot_params     = glm::vec4(innerCos, outerCos, 0.0f, 0.0f);
         return gl;
@@ -136,7 +136,7 @@ namespace
         // Assumes vp.view() is WORLD->VIEW
         const glm::mat4 invV = glm::inverse(vp.view());
         const glm::vec3 fwd  = glm::vec3(invV * glm::vec4(0, 0, -1, 0));
-        return safeNormalize(fwd, glm::vec3(0, 0, -1));
+        return un::safe_normalize(fwd, glm::vec3(0, 0, -1));
     }
 
     static LightingSettings::ModePolicy policyForDrawMode(const LightingSettings& s, DrawMode mode) noexcept
@@ -196,10 +196,9 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     {
         if (kHeadlightAsFlashlightSpot)
         {
-            // "Flashlight" headlight:
+            // "Flashlight" headlight (debug):
             // - Positioned at the camera origin in VIEW space (0,0,0).
             // - Points forward along -Z in VIEW space.
-            // This is often the simplest way to validate that RT follows the camera.
             const glm::vec3 posView       = glm::vec3(0.0f);
             const glm::vec3 dirTowardView = glm::vec3(0.0f, 0.0f, -1.0f);
 
@@ -214,12 +213,38 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
         }
         else
         {
+            // Directional modeling headlight:
+            // - Default: camera-locked (derived from the viewport basis).
+            // - Optional: very subtle bias while preserving the WORLD->VIEW conversion
+            //   path (this keeps your SOLID look stable).
             glm::vec3 dirWorld = {};
 
             if (kUseFixedSunForHeadlight)
-                dirWorld = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f)); // fixed sun
+            {
+                dirWorld = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f)); // fixed sun (debug)
+            }
             else
-                dirWorld = viewportForwardWorld(vp); // headlight follows camera forward
+            {
+                const glm::vec3 forward = viewportForwardWorld(vp);
+
+                if (kUseHeadlightBias && (std::abs(kHeadlightSideBias) > 0.0f || std::abs(kHeadlightUpBias) > 0.0f))
+                {
+                    // VIEW->WORLD basis from the camera.
+                    const glm::mat4 invV = glm::inverse(vp.view());
+                    const glm::vec3 right =
+                        un::safe_normalize(glm::vec3(invV * glm::vec4(1, 0, 0, 0)), glm::vec3(1, 0, 0));
+                    const glm::vec3 up = un::safe_normalize(glm::vec3(invV * glm::vec4(0, 1, 0, 0)), glm::vec3(0, 1, 0));
+
+                    const float side = kHeadlightSideBias * kHeadlightBiasScale;
+                    const float upb  = kHeadlightUpBias * kHeadlightBiasScale;
+
+                    dirWorld = un::safe_normalize(forward + (side * right) + (upb * up), forward);
+                }
+                else
+                {
+                    dirWorld = forward;
+                }
+            }
 
             const glm::vec3 dirView = viewDir(V, dirWorld);
             pushLight(out, makeDirectionalView(dirView, headlight.color, headlight.intensity));

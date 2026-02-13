@@ -14,13 +14,6 @@ SphereGizmo::SphereGizmo(glm::vec3* center, glm::vec3* radius) : m_center(center
 {
 }
 
-glm::vec3 SphereGizmo::safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-{
-    if (glm::length2(v) < 1e-12f)
-        return fallback;
-    return glm::normalize(v);
-}
-
 float SphereGizmo::clampMin(float v, float minV) noexcept
 {
     if (v < minV)
@@ -76,7 +69,7 @@ glm::vec3 SphereGizmo::dragPointOnAxisPlane(Viewport*        vp,
     // n = cross(axis, cross(viewDir, axis))
     const glm::vec3 camPos  = vp->cameraPosition();
     glm::vec3       viewDir = camPos - origin; // origin -> camera
-    viewDir                 = safeNormalize(viewDir, glm::vec3{0.f, 0.f, 1.f});
+    viewDir                 = un::safe_normalize(viewDir, glm::vec3{0.f, 0.f, 1.f});
 
     glm::vec3 n = glm::cross(axis, glm::cross(viewDir, axis));
 
@@ -87,7 +80,7 @@ glm::vec3 SphereGizmo::dragPointOnAxisPlane(Viewport*        vp,
             n = glm::cross(axis, glm::vec3{0.f, 1.f, 0.f});
     }
 
-    n = safeNormalize(n, glm::vec3{0.f, 0.f, 1.f});
+    n = un::safe_normalize(n, glm::vec3{0.f, 0.f, 1.f});
 
     glm::vec3 hit = glm::vec3{0.f};
     if (vp->rayPlaneHit(mx, my, origin, n, hit))
@@ -200,7 +193,7 @@ void SphereGizmo::render(Viewport* vp, Scene* scene)
 
     const glm::vec3 right = vp->rightDirection();
     const glm::vec3 up    = vp->upDirection();
-    const glm::vec3 faceN = safeNormalize(glm::cross(right, up), glm::vec3{0.f, 0.f, 1.f});
+    const glm::vec3 faceN = un::safe_normalize(glm::cross(right, up), glm::vec3{0.f, 0.f, 1.f});
 
     // Center disk (handle 3)
     {

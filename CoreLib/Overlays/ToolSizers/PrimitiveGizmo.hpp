@@ -81,8 +81,6 @@ private:
     static glm::vec3 axisDir(Mode m) noexcept;
     static int32_t   axisIndex(Mode m) noexcept; // 0=x, 1=y, 2=z, -1=none
 
-    static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept;
-
     [[nodiscard]] glm::vec3 dragPointOnAxisPlane(Viewport*        vp,
                                                  const glm::vec3& origin,
                                                  const glm::vec3& axisDir,

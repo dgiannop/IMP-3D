@@ -16,13 +16,6 @@ namespace
     constexpr int32_t kHandle = 0;
 } // namespace
 
-glm::vec3 NormalPullGizmo::safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-{
-    if (glm::length2(v) < 1e-12f)
-        return fallback;
-    return glm::normalize(v);
-}
-
 NormalPullGizmo::NormalPullGizmo(float* amount) : m_amount(amount)
 {
     if (m_amount)
@@ -35,12 +28,12 @@ glm::vec3 NormalPullGizmo::dragPointOnAxisPlane(Viewport*        vp,
                                                 float            mx,
                                                 float            my) const
 {
-    const glm::vec3 aDir = safeNormalize(axisDir, glm::vec3{0.0f, 0.0f, 1.0f});
+    const glm::vec3 aDir = un::safe_normalize(axisDir, glm::vec3{0.0f, 0.0f, 1.0f});
 
     // The drag plane contains the axis and is chosen to face the camera as much as possible.
     const glm::vec3 camPos  = vp->cameraPosition();
     glm::vec3       viewDir = origin - camPos;
-    viewDir                 = safeNormalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
+    viewDir                 = un::safe_normalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
 
     glm::vec3 n = glm::cross(aDir, viewDir);
 
@@ -52,7 +45,7 @@ glm::vec3 NormalPullGizmo::dragPointOnAxisPlane(Viewport*        vp,
             n = glm::cross(aDir, glm::vec3{0.0f, 1.0f, 0.0f});
     }
 
-    n = safeNormalize(glm::cross(aDir, n), glm::vec3{0.0f, 0.0f, 1.0f}); // plane normal
+    n = un::safe_normalize(glm::cross(aDir, n), glm::vec3{0.0f, 0.0f, 1.0f}); // plane normal
 
     glm::vec3 hit = glm::vec3{0.0f};
     if (vp->rayPlaneHit(mx, my, origin, n, hit))
@@ -75,7 +68,7 @@ void NormalPullGizmo::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& ev)
     m_startAmount = *m_amount;
 
     m_origin = sel::selection_center_bounds(scene);
-    m_axis   = safeNormalize(sel::selection_normal(scene), glm::vec3{0.0f, 0.0f, 1.0f});
+    m_axis   = un::safe_normalize(sel::selection_normal(scene), glm::vec3{0.0f, 0.0f, 1.0f});
 
     m_startHit   = dragPointOnAxisPlane(vp, m_origin, m_axis, ev.x, ev.y);
     m_startParam = glm::dot(m_startHit - m_origin, m_axis);
@@ -108,7 +101,7 @@ void NormalPullGizmo::render(Viewport* vp, Scene* scene)
     if (!m_dragging)
     {
         m_origin = sel::selection_center_bounds(scene);
-        m_axis   = safeNormalize(sel::selection_normal(scene), glm::vec3{0.0f, 0.0f, 1.0f});
+        m_axis   = un::safe_normalize(sel::selection_normal(scene), glm::vec3{0.0f, 0.0f, 1.0f});
     }
 
     const float px = vp->pixelScale(m_origin);
@@ -145,7 +138,7 @@ void NormalPullGizmo::render(Viewport* vp, Scene* scene)
     // Tip disk should face the camera (billboard) to avoid the "tilted/shaded" look.
     const glm::vec3 r = vp->rightDirection();
     const glm::vec3 u = vp->upDirection();
-    const glm::vec3 n = safeNormalize(glm::cross(r, u), glm::vec3{0.0f, 0.0f, 1.0f});
+    const glm::vec3 n = un::safe_normalize(glm::cross(r, u), glm::vec3{0.0f, 0.0f, 1.0f});
 
     // The overlay axis hint is used as the circle plane normal by add_filled_circle().
     m_overlayHandler.set_axis(n);

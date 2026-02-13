@@ -47,8 +47,6 @@ private:
     void buildDirectional(Viewport* vp, const Light& l, float px, const glm::vec4& color);
     void buildSpot(Viewport* vp, const Light& l, float px, const glm::vec4& color);
 
-    static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept;
-
 private:
     OverlayHandler m_overlays = {};
 };

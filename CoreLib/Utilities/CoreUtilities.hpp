@@ -135,10 +135,12 @@ namespace un
 
     /**
      * @brief Normalize a vector safely with a fallback.
-     *      * Behaves like `glm::normalize()` but avoids NaNs for tiny or invalid inputs.
+     *
+     * Behaves like `glm::normalize()` but avoids NaNs for tiny or invalid inputs.
      * If the vector length is near zero or non-finite, the provided fallback
      * vector is returned instead.
-     *      * @param v        Input vector.
+     *
+     * @param v        Input vector.
      * @param fallback Vector to return if @p v is degenerate.
      * @param eps      Threshold under which the vector is treated as zero.
      * @return Normalized vector, or @p fallback on degenerate input.

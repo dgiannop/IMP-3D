@@ -68,8 +68,6 @@ private:
         }
     }
 
-    static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept;
-
     static float clampMin(float v, float minV) noexcept;
 
     void computePlaneFrame(glm::vec3& outN, glm::vec3& outU, glm::vec3& outV) const noexcept;

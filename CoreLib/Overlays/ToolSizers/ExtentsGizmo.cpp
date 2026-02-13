@@ -15,13 +15,6 @@ ExtentsGizmo::ExtentsGizmo(glm::vec3* center, glm::vec3* extents) : m_center(cen
     // The tool owns initial values; the gizmo only edits them.
 }
 
-glm::vec3 ExtentsGizmo::safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-{
-    if (glm::length2(v) < 1e-12f)
-        return fallback;
-    return glm::normalize(v);
-}
-
 float ExtentsGizmo::clampExtent(float v, float minV) noexcept
 {
     // Extents/radii are non-negative by convention.
@@ -58,7 +51,7 @@ glm::vec3 ExtentsGizmo::dragPointOnAxisPlane(Viewport*        vp,
     // Plane containing the axis and facing the camera as much as possible.
     const glm::vec3 camPos  = vp->cameraPosition();
     glm::vec3       viewDir = origin - camPos;
-    viewDir                 = safeNormalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
+    viewDir                 = un::safe_normalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
 
     glm::vec3 n = glm::cross(aDir, viewDir);
 
@@ -70,7 +63,7 @@ glm::vec3 ExtentsGizmo::dragPointOnAxisPlane(Viewport*        vp,
             n = glm::cross(aDir, glm::vec3{0.0f, 1.0f, 0.0f});
     }
 
-    n = safeNormalize(glm::cross(aDir, n), glm::vec3{0.0f, 0.0f, 1.0f});
+    n = un::safe_normalize(glm::cross(aDir, n), glm::vec3{0.0f, 0.0f, 1.0f});
 
     glm::vec3 hit = glm::vec3{0.0f};
     if (vp->rayPlaneHit(mx, my, origin, n, hit))
@@ -190,7 +183,7 @@ void ExtentsGizmo::render(Viewport* vp, Scene* scene)
     // Camera-facing normal for billboarded disks.
     const glm::vec3 right = vp->rightDirection();
     const glm::vec3 up    = vp->upDirection();
-    const glm::vec3 faceN = safeNormalize(glm::cross(right, up), glm::vec3{0.0f, 0.0f, 1.0f});
+    const glm::vec3 faceN = un::safe_normalize(glm::cross(right, up), glm::vec3{0.0f, 0.0f, 1.0f});
 
     // -----------------------------------------------------------------
     // Center disk (free move) - handle 3

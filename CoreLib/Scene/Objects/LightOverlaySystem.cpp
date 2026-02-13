@@ -124,14 +124,6 @@ namespace
     }
 } // namespace
 
-glm::vec3 LightOverlaySystem::safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-{
-    const float d2 = glm::dot(v, v);
-    if (d2 < 1e-12f)
-        return fallback;
-    return v * (1.0f / std::sqrt(d2));
-}
-
 void LightOverlaySystem::render(Viewport* vp, Scene* scene)
 {
     if (!vp || !scene)
@@ -149,7 +141,7 @@ void LightOverlaySystem::render(Viewport* vp, Scene* scene)
             continue;
 
         const glm::vec3 pos = l->position;
-        const glm::vec3 dir = safeNormalize(l->direction, glm::vec3(0, 0, -1));
+        const glm::vec3 dir = un::safe_normalize(l->direction, glm::vec3(0, 0, -1));
 
         const float px = std::max(0.0001f, vp->pixelScale(pos));
 
@@ -208,7 +200,7 @@ void LightOverlaySystem::buildPoint(Viewport* vp, const Light& l, float px, cons
 
 void LightOverlaySystem::buildDirectional(Viewport* vp, const Light& l, float px, const glm::vec4& color)
 {
-    const glm::vec3 dir = safeNormalize(l.direction, glm::vec3(0, 0, -1));
+    const glm::vec3 dir = un::safe_normalize(l.direction, glm::vec3(0, 0, -1));
 
     const float thick = 3.0f;
     const float len   = std::max(0.02f, px * 70.0f);
@@ -221,7 +213,7 @@ void LightOverlaySystem::buildDirectional(Viewport* vp, const Light& l, float px
 
 void LightOverlaySystem::buildSpot(Viewport* vp, const Light& l, float px, const glm::vec4& color)
 {
-    const glm::vec3 dir = safeNormalize(l.direction, glm::vec3(0, 0, -1));
+    const glm::vec3 dir = un::safe_normalize(l.direction, glm::vec3(0, 0, -1));
 
     const float thick = 3.0f;
     const float len   = std::max(0.05f, px * 90.0f);

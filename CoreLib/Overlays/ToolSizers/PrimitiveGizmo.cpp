@@ -13,13 +13,6 @@ PrimitiveGizmo::PrimitiveGizmo(glm::vec3* center, glm::vec3* size) : m_center(ce
 {
 }
 
-glm::vec3 PrimitiveGizmo::safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-{
-    if (glm::length2(v) < 1e-12f)
-        return fallback;
-    return glm::normalize(v);
-}
-
 glm::vec3 PrimitiveGizmo::axisDir(Mode m) noexcept
 {
     switch (m)
@@ -65,12 +58,12 @@ glm::vec3 PrimitiveGizmo::dragPointOnAxisPlane(Viewport*        vp,
                                                float            mx,
                                                float            my) const
 {
-    const glm::vec3 aDir = safeNormalize(axisDirIn, glm::vec3{1.0f, 0.0f, 0.0f});
+    const glm::vec3 aDir = un::safe_normalize(axisDirIn, glm::vec3{1.0f, 0.0f, 0.0f});
 
     // Plane containing the axis and facing the camera as much as possible.
     const glm::vec3 camPos  = vp->cameraPosition();
     glm::vec3       viewDir = origin - camPos;
-    viewDir                 = safeNormalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
+    viewDir                 = un::safe_normalize(viewDir, glm::vec3{0.0f, 0.0f, -1.0f});
 
     glm::vec3 n = glm::cross(aDir, viewDir);
 
@@ -82,7 +75,7 @@ glm::vec3 PrimitiveGizmo::dragPointOnAxisPlane(Viewport*        vp,
             n = glm::cross(aDir, glm::vec3{0.0f, 1.0f, 0.0f});
     }
 
-    n = safeNormalize(glm::cross(aDir, n), glm::vec3{0.0f, 0.0f, 1.0f});
+    n = un::safe_normalize(glm::cross(aDir, n), glm::vec3{0.0f, 0.0f, 1.0f});
 
     glm::vec3 hit = glm::vec3{0.0f};
     if (vp->rayPlaneHit(mx, my, origin, n, hit))
@@ -112,8 +105,8 @@ void PrimitiveGizmo::buildBillboardSquare(Viewport*        vp,
         u = vp->upDirection();
     }
 
-    r = safeNormalize(r, glm::vec3{1.0f, 0.0f, 0.0f});
-    u = safeNormalize(u, glm::vec3{0.0f, 1.0f, 0.0f});
+    r = un::safe_normalize(r, glm::vec3{1.0f, 0.0f, 0.0f});
+    u = un::safe_normalize(u, glm::vec3{0.0f, 1.0f, 0.0f});
 
     const glm::vec3 p0 = center + (-r - u) * halfExtentWorld;
     const glm::vec3 p1 = center + (r - u) * halfExtentWorld;
@@ -178,8 +171,8 @@ void PrimitiveGizmo::mouseDown(Viewport* vp, Scene*, const CoreEvent& ev)
         return;
 
     // Freezes billboard basis for this drag (prevents flicker).
-    m_bbRight = safeNormalize(vp->rightDirection(), glm::vec3{1.0f, 0.0f, 0.0f});
-    m_bbUp    = safeNormalize(vp->upDirection(), glm::vec3{0.0f, 1.0f, 0.0f});
+    m_bbRight = un::safe_normalize(vp->rightDirection(), glm::vec3{1.0f, 0.0f, 0.0f});
+    m_bbUp    = un::safe_normalize(vp->upDirection(), glm::vec3{0.0f, 1.0f, 0.0f});
 
     m_startCenter = *m_center;
     m_startSize   = *m_size;
@@ -258,7 +251,7 @@ void PrimitiveGizmo::render(Viewport* vp, Scene*)
     // Camera-facing normal for billboarded tip disks.
     const glm::vec3 right = m_dragging ? m_bbRight : vp->rightDirection();
     const glm::vec3 up    = m_dragging ? m_bbUp : vp->upDirection();
-    const glm::vec3 faceN = safeNormalize(glm::cross(right, up), glm::vec3{0.0f, 0.0f, 1.0f});
+    const glm::vec3 faceN = un::safe_normalize(glm::cross(right, up), glm::vec3{0.0f, 0.0f, 1.0f});
 
     // Center handle
     {

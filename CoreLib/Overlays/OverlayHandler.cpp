@@ -77,25 +77,17 @@ static bool pointInPolygon2D(const glm::vec2&              p,
     return inside;
 }
 
-static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept
-{
-    const float l2 = glm::dot(v, v);
-    if (l2 <= 1e-20f)
-        return fallback;
-    return v / std::sqrt(l2);
-}
-
 static void orthonormalBasis(const glm::vec3& n, glm::vec3& outU, glm::vec3& outV) noexcept
 {
     // Builds a stable basis (u,v) perpendicular to n.
-    const glm::vec3 nn = safeNormalize(n, glm::vec3(0.0f, 0.0f, 1.0f));
+    const glm::vec3 nn = un::safe_normalize(n, glm::vec3(0.0f, 0.0f, 1.0f));
 
     const glm::vec3 a = (std::abs(nn.z) < 0.999f)
                             ? glm::vec3(0.0f, 0.0f, 1.0f)
                             : glm::vec3(0.0f, 1.0f, 0.0f);
 
-    outU = safeNormalize(glm::cross(a, nn), glm::vec3(1.0f, 0.0f, 0.0f));
-    outV = safeNormalize(glm::cross(nn, outU), glm::vec3(0.0f, 1.0f, 0.0f));
+    outU = un::safe_normalize(glm::cross(a, nn), glm::vec3(1.0f, 0.0f, 0.0f));
+    outV = un::safe_normalize(glm::cross(nn, outU), glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
 // -----------------------------------------------------------------------------
@@ -227,7 +219,7 @@ void OverlayHandler::add_filled_circle(const glm::vec3& center,
 
     segments = std::max(3, segments);
 
-    const glm::vec3 n = safeNormalize(o->axis, glm::vec3(0.0f, 0.0f, 1.0f));
+    const glm::vec3 n = un::safe_normalize(o->axis, glm::vec3(0.0f, 0.0f, 1.0f));
 
     glm::vec3 u, v;
     orthonormalBasis(n, u, v);

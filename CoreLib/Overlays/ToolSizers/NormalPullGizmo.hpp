@@ -34,8 +34,6 @@ public:
     [[nodiscard]] bool followAmountBase() const noexcept { return m_followAmountBase; }
 
 private:
-    static glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback) noexcept;
-
     [[nodiscard]] glm::vec3 dragPointOnAxisPlane(Viewport*        vp,
                                                  const glm::vec3& origin,
                                                  const glm::vec3& axisDir,
