@@ -184,7 +184,7 @@ vec3 coneSmpl(vec3 dirIn, float angRad, vec2 rnd2)
 float shadDir(vec3 hitPos, vec3 hitNrm, vec3 dirWld, float angRad)
 {
     const int   sampCt = 4;
-    const float epsVal = 1e-3;
+    float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);   // scale with distance
 
     vec3  rayOrg = hitPos + hitNrm * epsVal;
     float visSum = 0.0;

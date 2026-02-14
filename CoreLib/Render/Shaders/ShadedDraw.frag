@@ -1,18 +1,38 @@
 //==============================================================
-// ShadedDraw.frag  (Viewport PBR: SRGB swapchain safe, ACES tonemap)
+// ShadedDraw.frag  (WORLD-space shading to match SOLID world mode)
 // - Assumes swapchain/target is SRGB: DO NOT gamma-encode here.
 // - Uses a modest "studio" environment + conservative IBL energy.
-// - Scene lights supported; optional headlight in slot 0.
+// - Directional lights are WORLD-space (dir_range.xyz = forward world).
+// - Point/spot lights are TEMPORARILY treated as VIEW-space (from your current C++ builder),
+//   and converted to WORLD for BRDF evaluation.
 //==============================================================
 #version 450
 
-// Match ShadedDraw.vert / SolidDraw.vert varyings
-layout(location = 0) in vec3 pos;              // view-space position
-layout(location = 1) in vec3 nrm;              // view-space normal
+// Match ShadedDraw.vert (WORLD outputs)
+layout(location = 0) in vec3 posW;             // world-space position
+layout(location = 1) in vec3 nrmW;             // world-space normal
 layout(location = 2) in vec2 vUv;
 layout(location = 3) flat in int vMaterialId;
 
 layout(location = 0) out vec4 fragColor;
+
+// ============================================================
+// Camera UBO (needed for camPos + view/invView conversions)
+// ============================================================
+layout(set = 0, binding = 0, std140) uniform CameraUBO
+{
+    mat4 proj;
+    mat4 view;
+    mat4 viewProj;
+
+    mat4 invProj;
+    mat4 invView;
+    mat4 invViewProj;
+
+    vec4 camPos;     // world-space camera position
+    vec4 viewport;
+    vec4 clearColor;
+} uCamera;
 
 // ============================================================
 // Materials (shared layout with SolidDraw.frag)
@@ -32,7 +52,7 @@ struct GpuMaterial
 
     int baseColorTexture;      // sRGB texture recommended
     int normalTexture;         // linear
-    int mraoTexture;           // linear (R=AO, G=rough, B=metal) unless you define otherwise
+    int mraoTexture;           // linear (R=AO, G=rough, B=metal)
     int emissiveTexture;       // sRGB if you want artist-friendly emissive colors
 };
 
@@ -45,47 +65,38 @@ const int kMaxTextureCount = 512;
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ============================================================
-// Lights (VIEW SPACE; same layout as SolidDraw.frag)
+// Lights (MIGRATION STATE)
 // ============================================================
+// Directional:
+//   - dir_range.xyz = light forward direction in WORLD space
+//   - L_world = -dir_range.xyz
+//
+// Point/Spot (TEMP, from current C++ builder):
+//   - pos_type.xyz  = position in VIEW space
+//   - dir_range.xyz = spot forward direction in VIEW space
+//   - dir_range.w   = range
+//   - pos_type.w    = type
 struct GpuLight
 {
-    // For directional:
-    //   - dir_range.xyz = light forward direction in VIEW space
-    //   - pos_type.xyz  ignored
-    //   - L = -dir_range.xyz
-    //
-    // For point/spot:
-    //   - pos_type.xyz  = position in VIEW space
-    //   - dir_range.xyz = "forward" direction (view) for spot cutoff
-    //   - dir_range.w   = range
-    //   - pos_type.w    = type (see GPU_LIGHT_* below)
     vec4 pos_type;        // xyz = position (view) for point/spot, w = type
-    vec4 dir_range;       // xyz = forward dir (view), w = range
+    vec4 dir_range;       // xyz = forward dir (world for directional, view for spot), w = range
     vec4 color_intensity; // rgb = color (linear), a = intensity
     vec4 spot_params;     // x = innerCos, y = outerCos
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    // Convention:
-    //   info.x = lightCount
-    //   (If you inject a modeling headlight, it usually lives in lights[0],
-    //    and scene lights start at index 1.)
-    uvec4    info;
-    vec4     ambient;     // rgb unused here, a = exposure if USE_UBO_EXPOSURE
+    uvec4    info;        // x = lightCount
+    vec4     ambient;     // a = exposure if USE_UBO_EXPOSURE
     GpuLight lights[64];
 } uLights;
 
 // ============================================================
 // Output controls
 // ============================================================
-
-// SRGB swapchain: keep gamma encode OFF to avoid double-gamma wash.
 const bool  ENABLE_GAMMA_ENCODE = false; // keep false for VK_FORMAT_*_SRGB
 const bool  ENABLE_TONEMAP      = true;
 const bool  USE_UBO_EXPOSURE    = false;
-
-// Conservative default exposure (avoid milky compression).
 const float FIXED_EXPOSURE      = 1.0;
 
 // ============================================================
@@ -117,6 +128,7 @@ float G_Smith(float NdotV, float NdotL, float k)
 
 // ------------------------------------------------------------
 // Modest studio environment (viewport IBL) - LOWER ENERGY
+// NOTE: now interpreted in WORLD space; +Y is WORLD up.
 // ------------------------------------------------------------
 vec3 studioEnv(vec3 dir)
 {
@@ -124,20 +136,17 @@ vec3 studioEnv(vec3 dir)
 
     float t = saturate(dir.y * 0.5 + 0.5);
 
-    // Lower-energy gradient
     vec3 top    = vec3(1.0, 1.0, 1.05) * 0.75;
     vec3 bottom = vec3(0.03, 0.03, 0.035) * 0.55;
 
     vec3 col = mix(bottom, top, pow(t, 0.65));
 
-    // Soft boxes (much weaker than your previous)
     vec3 box0 = normalize(vec3(0.15, 0.85, 0.35));
     col += vec3(1.0, 0.98, 0.95) * pow(saturate(dot(dir, box0)), 25.0) * 1.5;
 
     vec3 box1 = normalize(vec3(-0.55, 0.65, 0.50));
     col += vec3(0.95, 0.98, 1.0) * pow(saturate(dot(dir, box1)), 35.0) * 1.1;
 
-    // Mild horizon tint
     col += vec3(0.20, 0.25, 0.30) * (1.0 - abs(dir.y)) * 0.15;
     return col;
 }
@@ -167,28 +176,34 @@ mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
 }
 
 // ------------------------------------------------------------
-// Light evaluation (VIEW SPACE)
+// Light evaluation
+//   - Directional: WORLD
+//   - Point/Spot: VIEW -> converted to WORLD direction for BRDF
 // ------------------------------------------------------------
 const uint GPU_LIGHT_DIRECTIONAL = 0u;
 const uint GPU_LIGHT_POINT       = 1u;
 const uint GPU_LIGHT_SPOT        = 2u;
 
-void evalLight(in GpuLight Ld, in vec3 P, out vec3 L, out float atten)
+void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 {
     uint lt = uint(Ld.pos_type.w + 0.5);
     atten   = 1.0;
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
-        // dir_range.xyz is forward direction in VIEW space; light vector goes opposite.
-        L = normalize(-Ld.dir_range.xyz);
+        // WORLD: dir_range.xyz is forward direction the light points toward.
+        Lworld = normalize(-Ld.dir_range.xyz); // surface->light in WORLD
         return;
     }
 
-    vec3  toLight = Ld.pos_type.xyz - P;
+    // TEMP: point/spot are provided in VIEW space by current C++ builder
+    vec3 Pview = (uCamera.view * vec4(Pworld, 1.0)).xyz;
+
+    vec3  toLight = Ld.pos_type.xyz - Pview;
     float dist2   = max(dot(toLight, toLight), 1e-6);
     float dist    = sqrt(dist2);
-    L             = toLight / dist;
+
+    vec3 Lview = toLight / dist;
 
     // Inverse-square attenuation
     atten = 1.0 / dist2;
@@ -202,8 +217,8 @@ void evalLight(in GpuLight Ld, in vec3 P, out vec3 L, out float atten)
 
     if (lt == GPU_LIGHT_SPOT)
     {
-        vec3  spotDir = normalize(Ld.dir_range.xyz);
-        float cd      = dot(normalize(-spotDir), L);
+        vec3  spotDirV = normalize(Ld.dir_range.xyz);     // view-space forward
+        float cd       = dot(normalize(-spotDirV), Lview);
 
         float innerC = Ld.spot_params.x;
         float outerC = Ld.spot_params.y;
@@ -214,10 +229,13 @@ void evalLight(in GpuLight Ld, in vec3 P, out vec3 L, out float atten)
 
         atten *= s;
     }
+
+    // Convert L to WORLD so BRDF stays world-space
+    Lworld = normalize((uCamera.invView * vec4(Lview, 0.0)).xyz);
 }
 
 // ------------------------------------------------------------
-// Tonemap (ACES fitted) - reliable contrast for viewports
+// Tonemap (ACES fitted)
 // ------------------------------------------------------------
 vec3 tonemapACES(vec3 x)
 {
@@ -243,7 +261,6 @@ void main()
     int id       = (matCount > 0) ? clamp(vMaterialId, 0, matCount - 1) : 0;
     GpuMaterial mat = (matCount > 0) ? materials[id] : materials[0];
 
-    // Base color (albedo) in linear space.
     vec3 albedo = mat.baseColor;
 
     if (mat.baseColorTexture >= 0)
@@ -252,12 +269,12 @@ void main()
         albedo *= texture(uTextures[mat.baseColorTexture], vUv).rgb;
     }
 
-    vec3 N = normalize(nrm);
-    vec3 V = normalize(-pos);
+    vec3 N = normalize(nrmW);
+    vec3 V = normalize(uCamera.camPos.xyz - posW);
 
     if (mat.normalTexture >= 0)
     {
-        mat3 TBN = tbnFromDerivatives(pos, N, vUv);
+        mat3 TBN = tbnFromDerivatives(posW, N, vUv);
         N = normalize(TBN * sampleNormalMapTS(mat.normalTexture, vUv));
     }
 
@@ -291,7 +308,7 @@ void main()
     {
         vec3  L;
         float atten;
-        evalLight(uLights.lights[i], pos, L, atten);
+        evalLight(uLights.lights[i], posW, L, atten);
 
         float NdotL = saturate(dot(N, L));
         float NdotV = saturate(dot(N, V));
@@ -316,7 +333,6 @@ void main()
         vec3 radiance = uLights.lights[i].color_intensity.rgb *
                         (uLights.lights[i].color_intensity.a * atten);
 
-        // Keep a sane cap for pathological files, but lower than 50 to reduce wash
         radiance = min(radiance, vec3(25.0));
 
         direct += (diff + spec) * radiance * NdotL;
@@ -326,39 +342,30 @@ void main()
     // Indirect (viewport IBL) - conservative
     // --------------------------------------------------------
     float hasSceneLights = (uLights.info.x > 1u) ? 1.0 : 0.0;
-
-    // If only headlight exists, allow more IBL to keep viewport readable.
-    // If scene lights exist, reduce IBL so it does not wash the scene.
     float iblScale = mix(1.0, 0.20, hasSceneLights);
 
     vec3  Fv   = fresnelSchlick(saturate(dot(N, V)), F0);
     vec3  kdI  = (vec3(1.0) - Fv) * (1.0 - metallic);
 
-    // Lower diffuse IBL energy (was 0.25 in your version)
     vec3 diffIBL = kdI * albedo * studioEnv(N) * 0.10 * ao * iblScale;
 
     vec3 R = reflect(-V, N);
 
-    // Lower spec IBL energy
     vec3 specIBL = studioEnv(R) *
                    Fv *
                    (0.05 + 0.25 * (1.0 - roughness)) * iblScale;
 
-    // Very small floor to avoid absolute black in some cases
     vec3 floorFill = albedo * 0.004;
 
-    // Emissive (treat as linear; if authored sRGB, store texture as SRGB)
     vec3 emissive = mat.emissiveColor * mat.emissiveIntensity;
     if (mat.emissiveTexture >= 0)
         emissive *= texture(uTextures[mat.emissiveTexture], vUv).rgb;
 
     vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive;
 
-    // Exposure:
     float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0)
                                       : FIXED_EXPOSURE;
 
-    // Slight boost only when ONLY headlight exists (optional; keeps headlight-only views pleasant)
     if (USE_UBO_EXPOSURE == false && uLights.info.x <= 1u)
         exposure *= 1.10;
 
@@ -369,7 +376,6 @@ void main()
     else
         outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
 
-    // SRGB swapchain path: keep gamma encode OFF.
     if (ENABLE_GAMMA_ENCODE)
         outRgb = gammaEncode(outRgb);
 
