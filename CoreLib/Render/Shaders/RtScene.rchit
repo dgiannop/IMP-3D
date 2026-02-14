@@ -1,13 +1,15 @@
 //==============================================================
 // RtScene.rchit  (Primary shading + optional headlight shadows)
 //==============================================================
-// Conventions expected by this shader:
-// - uCamera.view     = WORLD -> VIEW
-// - uCamera.invView  = VIEW  -> WORLD
-// - Directional light encoding matches raster:
-//   * lights[i].dir_range.xyz = forward direction the light points TOWARD (VIEW space)
-//   * surface->light (VIEW)   = -forward
+// WORLD-space lighting conventions (post-refactor):
+// - Directional:
+//   * lights[i].dir_range.xyz = light forward direction in WORLD space
+//   * surface->light (WORLD)  = -forward
 //   * lights[i].dir_range.w   = angular radius (radians) for soft shadows (optional)
+// - Point/Spot:
+//   * lights[i].pos_type.xyz  = position in WORLD space
+//   * lights[i].dir_range.xyz = forward direction in WORLD space (spot only)
+//   * lights[i].dir_range.w   = range
 //==============================================================
 
 #version 460
@@ -73,13 +75,13 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 } uCamera;
 
 // ------------------------------------------------------------
-// Lights UBO (frame set, shared with raster)
+// Lights UBO (WORLD space; shared with raster)
 // set = 0, binding = 1
 // ------------------------------------------------------------
 struct GpuLight
 {
-    vec4 pos_type;        // xyz = pos (view) for point/spot, w = type
-    vec4 dir_range;       // xyz = forward dir (view), w = range OR angular radius
+    vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
+    vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius
     vec4 color_intensity; // rgb = color, a = intensity
     vec4 spot_params;     // x = innerCos, y = outerCos
 };
@@ -152,7 +154,7 @@ float gSmt(float ndvVal, float ndlVal, float kVal)
 }
 
 // ------------------------------------------------------------
-// Soft shadow helpers
+// Soft shadow helpers (WORLD)
 // ------------------------------------------------------------
 float hash13(uvec3 key3)
 {
@@ -181,12 +183,12 @@ vec3 coneSmpl(vec3 dirIn, float angRad, vec2 rnd2)
     return normalize(dirOut);
 }
 
-float shadDir(vec3 hitPos, vec3 hitNrm, vec3 dirWld, float angRad)
+float shadDir(vec3 hitPosW, vec3 hitNrmW, vec3 dirToLightW, float angRad)
 {
     const int   sampCt = 4;
-    float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);   // scale with distance
+    float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);
 
-    vec3  rayOrg = hitPos + hitNrm * epsVal;
+    vec3  rayOrg = hitPosW + hitNrmW * epsVal;
     float visSum = 0.0;
 
     for (int sampIx = 0; sampIx < sampCt; ++sampIx)
@@ -196,8 +198,8 @@ float shadDir(vec3 hitPos, vec3 hitNrm, vec3 dirWld, float angRad)
         float rndB = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
 
         vec3 rayDir = (angRad > 0.0)
-                    ? coneSmpl(dirWld, angRad, vec2(rndA, rndB))
-                    : normalize(dirWld);
+                    ? coneSmpl(dirToLightW, angRad, vec2(rndA, rndB))
+                    : normalize(dirToLightW);
 
         occFlag = 0u;
 
@@ -262,7 +264,7 @@ void main()
     UvBuf  uvvBuf = UvBuf(instDat.uvvAdr);
     MatBuf matBuf = MatBuf(instDat.matAdr);
 
-    vec3 hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    vec3 hitPosW = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
     const uint base4 = primId * 4u;
     const uint idxA  = idxBuf.ind4[base4 + 0u];
@@ -287,15 +289,13 @@ void main()
     if (dot(nrmWld, nrmWld) < 1e-20)
         nrmWld = normalize(cross(posB - posA, posC - posA));
 
-    vec2 uvvA = uvvBuf.uvv4[base3 + 0u].xy;
-    vec2 uvvB = uvvBuf.uvv4[base3 + 1u].xy;
-    vec2 uvvC = uvvBuf.uvv4[base3 + 2u].xy;
+    vec2 uvvA  = uvvBuf.uvv4[base3 + 0u].xy;
+    vec2 uvvB  = uvvBuf.uvv4[base3 + 1u].xy;
+    vec2 uvvC  = uvvBuf.uvv4[base3 + 2u].xy;
     vec2 texUV = uvvA * barA + uvvB * barB + uvvC * barC;
 
-    // View-space position/normal from unified CameraUBO
-    vec3 posViw = (uCamera.view * vec4(hitPos, 1.0)).xyz;
-    vec3 nrmViw = normalize(mat3(uCamera.view) * nrmWld);
-    vec3 dirViw = normalize(-posViw);
+    // View vector in WORLD space
+    vec3 Vw = normalize(uCamera.camPos.xyz - hitPosW);
 
     const uint matRaw = matBuf.mat1[primId];
     const uint matCnt = matSsb.mats.length();
@@ -330,13 +330,13 @@ void main()
     vec3  f0Die  = vec3(clamp(f0Sca, 0.02, 0.08));
     vec3  f0Col  = mix(f0Die, albCol, metVal);
 
-    // Ambient + exposure from unified LightsUBO
+    // Ambient + exposure from LightsUBO (same convention you had)
     float ambStr = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
     vec3  ambCol = uLights.ambient.rgb * ambStr * albCol * aoVal;
 
     vec3 lgtSum = vec3(0.0);
 
-    const uint litCnt = uLights.info.x;
+    const uint litCnt = min(uLights.info.x, 64u);
     if (litCnt == 0u)
     {
         colorOut = vec4(ambCol + albCol * 0.02, 1.0);
@@ -345,63 +345,56 @@ void main()
 
     for (uint litIdx = 0u; litIdx < litCnt; ++litIdx)
     {
-        GpuLight Ld = uLights.lights[litIdx];
+        GpuLight Ld    = uLights.lights[litIdx];
         uint     litTyp = uint(Ld.pos_type.w + 0.5);
 
-        vec3  litDir = vec3(0.0); // surface->light in VIEW
+        vec3  Lw    = vec3(0.0); // surface->light in WORLD
         float attVal = 1.0;
 
         if (litTyp == 0u) // Directional
         {
-            vec3 fwdViw = normalize(Ld.dir_range.xyz);
-            vec3 dirToL = normalize(-fwdViw); // surface->light in VIEW
+            vec3 fwdW = normalize(Ld.dir_range.xyz);
+            Lw        = normalize(-fwdW);
+
             float angRad = max(Ld.dir_range.w, 0.0);
-
-            // Convert surface->light direction to WORLD for shadow rays
-            vec3 dirWld = normalize((uCamera.invView * vec4(dirToL, 0.0)).xyz);
-            float visVal = shadDir(hitPos, nrmWld, dirWld, angRad);
-
-            litDir = dirToL;
+            float visVal = shadDir(hitPosW, nrmWld, Lw, angRad);
             attVal *= visVal;
         }
         else if (litTyp == 1u) // Point
         {
-            vec3 toLgt = Ld.pos_type.xyz - posViw;
-            float dst2 = max(dot(toLgt, toLgt), 1e-8);
-            float dstV = sqrt(dst2);
-            litDir     = toLgt / dstV;
+            vec3  toLgt = Ld.pos_type.xyz - hitPosW;
+            float dst2  = max(dot(toLgt, toLgt), 1e-8);
+            float dstV  = sqrt(dst2);
+            Lw          = toLgt / dstV;
+
+            // Match raster: inverse-square * optional range window
+            attVal = 1.0 / dst2;
 
             float rngV = Ld.dir_range.w;
             if (rngV > 0.0)
             {
                 float facV = satVal(1.0 - (dstV / rngV));
-                attVal = facV * facV;
-            }
-            else
-            {
-                attVal = 1.0 / dst2;
+                attVal *= facV * facV;
             }
         }
         else if (litTyp == 2u) // Spot
         {
-            vec3 toLgt = Ld.pos_type.xyz - posViw;
-            float dst2 = max(dot(toLgt, toLgt), 1e-8);
-            float dstV = sqrt(dst2);
-            litDir     = toLgt / dstV;
+            vec3  toLgt = Ld.pos_type.xyz - hitPosW;
+            float dst2  = max(dot(toLgt, toLgt), 1e-8);
+            float dstV  = sqrt(dst2);
+            Lw          = toLgt / dstV;
+
+            attVal = 1.0 / dst2;
 
             float rngV = Ld.dir_range.w;
             if (rngV > 0.0)
             {
                 float facV = satVal(1.0 - (dstV / rngV));
-                attVal = facV * facV;
-            }
-            else
-            {
-                attVal = 1.0 / dst2;
+                attVal *= facV * facV;
             }
 
-            vec3  spotF = normalize(Ld.dir_range.xyz);
-            float cosAn = dot(-litDir, spotF);
+            vec3  spotF = normalize(Ld.dir_range.xyz);     // forward (WORLD)
+            float cosAn = dot(normalize(-Lw), spotF);       // compare light->surface vs forward
 
             float innCs = Ld.spot_params.x;
             float outCs = Ld.spot_params.y;
@@ -414,15 +407,15 @@ void main()
             continue;
         }
 
-        float ndlVal = satVal(dot(nrmViw, litDir));
-        float ndvVal = satVal(dot(nrmViw, dirViw));
+        float ndlVal = satVal(dot(nrmWld, Lw));
+        float ndvVal = satVal(dot(nrmWld, Vw));
         if (ndlVal <= 0.0 || ndvVal <= 0.0)
             continue;
 
-        vec3 halfV = normalize(dirViw + litDir);
+        vec3 halfV = normalize(Vw + Lw);
 
-        float ndhVal = satVal(dot(nrmViw, halfV));
-        float vdhVal = satVal(dot(dirViw, halfV));
+        float ndhVal = satVal(dot(nrmWld, halfV));
+        float vdhVal = satVal(dot(Vw, halfV));
 
         vec3  frsCol = fresShk(vdhVal, f0Col);
         float dVal   = dGgx(ndhVal, alpVal);
