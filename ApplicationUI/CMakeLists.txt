@@ -41,6 +41,8 @@ qt_add_executable(ApplicationUI
     SubWindows/LightingSettingsDialog.hpp SubWindows/LightingSettingsDialog.cpp SubWindows/LightingSettingsDialog.ui
     SubWindows/CreateLightDialog.hpp SubWindows/CreateLightDialog.cpp SubWindows/CreateLightDialog.ui
     SubWindows/SceneStatsDialog.hpp SubWindows/SceneStatsDialog.cpp SubWindows/SceneStatsDialog.ui
+    SubWindows/TextureEditorDialog.hpp SubWindows/TextureEditorDialog.cpp SubWindows/TextureEditorDialog.ui
+    SubWindows/LoadTextureDialog.hpp SubWindows/LoadTextureDialog.cpp SubWindows/LoadTextureDialog.ui
 )
 
 set_target_properties(ApplicationUI PROPERTIES OUTPUT_NAME "Imp3d")

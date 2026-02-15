@@ -12,11 +12,13 @@
 #include "SubWindows/CreateLightDialog.hpp"
 #include "SubWindows/LightingSettingsDialog.hpp"
 #include "SubWindows/LightsEditorDialog.hpp"
+#include "SubWindows/LoadTextureDialog.hpp"
 #include "SubWindows/MaterialAssignDialog.hpp"
 #include "SubWindows/MaterialEditorDialog.hpp"
 #include "SubWindows/PropertyWindow.hpp"
 #include "SubWindows/SceneStatsDialog.hpp"
 #include "SubWindows/SubWindowManager.hpp"
+#include "SubWindows/TextureEditorDialog.hpp"
 #include "ViewportManager.hpp"
 #include "ui_MainWindow.h"
 
@@ -132,6 +134,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         m_subWindowManager->addSubWindow("CREATE_LIGHT_DIALOG", new CreateLightDialog(this));
         m_subWindowManager->addSubWindow("LIGHTING_SETTINGS_DIALOG", new LightingSettingsDialog(this));
         m_subWindowManager->addSubWindow("SCENE_INFO_STATS", new SceneStatsDialog(this));
+        m_subWindowManager->addSubWindow("TEXTURE_EDITOR_DIALOG", new TextureEditorDialog(this));
+        m_subWindowManager->addSubWindow("LOAD_TEXTURE_DIALOG", new LoadTextureDialog(this));
 
         connect(ui->btnNumPanel, &QPushButton::toggled, this, [=, this](bool checked) {
             if (checked)
@@ -173,6 +177,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
                 m_subWindowManager->showSubWindow("SCENE_INFO_STATS");
             else
                 m_subWindowManager->hideSubWindow("SCENE_INFO_STATS");
+        });
+
+        connect(ui->btnTexEditor, &QPushButton::toggled, this, [=, this](bool checked) {
+            if (checked)
+                m_subWindowManager->showSubWindow("TEXTURE_EDITOR_DIALOG");
+            else
+                m_subWindowManager->hideSubWindow("TEXTURE_EDITOR_DIALOG");
+        });
+
+        // Optional: if you have a "+" next to Texture Editor in the header (like materials/lights):
+        connect(ui->btnTexEditorPlus, &QPushButton::toggled, this, [=, this](bool checked) {
+            if (checked)
+                m_subWindowManager->showSubWindow("LOAD_TEXTURE_DIALOG");
+            else
+                m_subWindowManager->hideSubWindow("LOAD_TEXTURE_DIALOG");
         });
 
         connect(m_subWindowManager.get(), &SubWindowManager::onSubWindowClosed, this, &MainWindow::onSubWindowClosed);
@@ -330,6 +349,15 @@ void MainWindow::onSubWindowClosed(QString name, int result)
     else if (name == "LIGHT_EDITOR_DIALOG")
     {
         ui->btnLightEditor->setChecked(false);
+    }
+    else if (name == "TEXTURE_EDITOR_DIALOG")
+    {
+        ui->btnTexEditor->setChecked(false);
+    }
+    else if (name == "LOAD_TEXTURE_DIALOG")
+    {
+        if (ui->btnTexEditorPlus)
+            ui->btnTexEditorPlus->setChecked(false);
     }
 }
 
@@ -799,6 +827,10 @@ void MainWindow::handleAction()
         else if (name == "actionMaterialEditor")
         {
             m_subWindowManager->showSubWindow("MAT_EDITOR_DIALOG");
+        }
+        else if (name == "actionTextureEditor")
+        {
+            m_subWindowManager->showSubWindow("TEXTURE_EDITOR_DIALOG");
         }
         else if (name == "actionLightsEditor")
         {
