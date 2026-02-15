@@ -1,8 +1,11 @@
 #pragma once
 
 #include <QListWidgetItem>
+#include <cstdint>
 
 #include "SubWindowBase.hpp"
+
+class QComboBox;
 
 namespace Ui
 {
@@ -39,6 +42,18 @@ private slots:
 private:
     void applyCollapsedState(bool collapsed, bool force = false);
 
+    void      refreshMaterialList();
+    void      loadMaterialToUi(int32_t id);
+    void      setUiEnabled(bool enabled);
+    int32_t   currentMaterialId() const noexcept;
+    Material* currentMaterialMutable() noexcept;
+
+    void    initMapCombos();
+    void    rebuildMapCombosIfNeeded();
+    void    fillImageCombo(QComboBox* cb);
+    void    setComboToImageId(QComboBox* cb, ImageId imageId);
+    ImageId comboImageId(const QComboBox* cb) const noexcept;
+
 private:
     Ui::MaterialEditorDialog* ui = nullptr;
 
@@ -56,13 +71,7 @@ private:
     QSize m_expandedMinSize;
     QSize m_expandedMaxSize;
 
-    void      refreshMaterialList();
-    void      loadMaterialToUi(int32_t id);
-    void      setUiEnabled(bool enabled);
-    int32_t   currentMaterialId() const noexcept;
-    Material* currentMaterialMutable() noexcept;
-    void      initMapCombos();
-
     uint64_t m_lastLibraryCounter  = 0;
     uint64_t m_lastMaterialCounter = 0;
+    uint64_t m_lastImagesCounter   = 0;
 };

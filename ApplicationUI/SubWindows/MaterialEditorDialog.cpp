@@ -1,9 +1,12 @@
-// MaterialEditorDialog.cpp
-
+//============================================================
+// MaterialEditorDialog.cpp  (FULL REPLACEMENT)
+//============================================================
 #include "MaterialEditorDialog.hpp"
 
 #include <QAbstractButton>
 #include <QColorDialog>
+#include <QComboBox>
+#include <QLineEdit>
 #include <QListWidgetItem>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -11,6 +14,7 @@
 #include <cmath>
 
 #include "Core.hpp"
+#include "ImageHandler.hpp"
 #include "Material.hpp"
 #include "MaterialEditor.hpp"
 #include "SubWindows/ui_MaterialEditorDialog.h"
@@ -18,6 +22,7 @@
 namespace
 {
     static constexpr int kRoleMaterialId = Qt::UserRole + 1;
+    static constexpr int kRoleImageId    = Qt::UserRole + 2;
 
     // -----------------------------
     // Slider mapping helpers
@@ -32,7 +37,6 @@ namespace
         return std::clamp(v, lo, hi);
     }
 
-    /// Map slider int [smin..smax] -> float [fmin..fmax]
     static float slider_to_float(int v, int smin, int smax, float fmin, float fmax) noexcept
     {
         if (smax <= smin)
@@ -44,7 +48,6 @@ namespace
         return fmin + (fmax - fmin) * t;
     }
 
-    /// Map float [fmin..fmax] -> slider int [smin..smax]
     static int slider_from_float(float x, float fmin, float fmax, int smin, int smax) noexcept
     {
         if (smax <= smin)
@@ -58,13 +61,11 @@ namespace
         return clamp_int(static_cast<int>(sv + 0.5f), smin, smax);
     }
 
-    /// Map slider int -> normalized [0..1]
     static float slider_to_01(int v, int smin, int smax) noexcept
     {
         return slider_to_float(v, smin, smax, 0.0f, 1.0f);
     }
 
-    /// Map normalized [0..1] -> slider int
     static int slider_from_01(float t, int smin, int smax) noexcept
     {
         return slider_from_float(t, 0.0f, 1.0f, smin, smax);
@@ -73,8 +74,6 @@ namespace
     // -----------------------------
     // Roughness perceptual mapping
     // -----------------------------
-    // UI: perceptual t in [0..1]
-    // Material: roughness r in [0..1] where r = t^2
     static float perceptual_to_roughness(float t) noexcept
     {
         t = clamp_float(t, 0.0f, 1.0f);
@@ -117,7 +116,7 @@ namespace
     }
 
     // -----------------------------
-    // Slider ranges (one place)
+    // Slider ranges
     // -----------------------------
     struct SliderRange
     {
@@ -127,15 +126,10 @@ namespace
         float fmax = 1.0f;
     };
 
-    static constexpr SliderRange kMetallicRange = {0, 100, 0.0f, 1.0f};
-    static constexpr SliderRange kOpacityRange  = {0, 100, 0.0f, 1.0f};
-
-    // Roughness UI still uses 0..100, but is perceptual in the handler.
+    static constexpr SliderRange kMetallicRange    = {0, 100, 0.0f, 1.0f};
+    static constexpr SliderRange kOpacityRange     = {0, 100, 0.0f, 1.0f};
     static constexpr SliderRange kRoughnessUiRange = {0, 100, 0.0f, 1.0f};
-
-    // IOR: make the slider actually represent 1.0..3.0 (artist-friendly)
-    // Slider shows 100..300 -> 1.00..3.00
-    static constexpr SliderRange kIorRange = {100, 300, 1.0f, 3.0f};
+    static constexpr SliderRange kIorRange         = {100, 300, 1.0f, 3.0f};
 
 } // namespace
 
@@ -181,9 +175,6 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
         ui->splitterMain->setCollapsible(m_rightIndex, false);
     }
 
-    // -----------------------------
-    // Set slider ranges ONCE
-    // -----------------------------
     if (ui->metallicSlider)
         ui->metallicSlider->setRange(kMetallicRange.smin, kMetallicRange.smax);
 
@@ -196,25 +187,18 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     if (ui->iorSlider)
         ui->iorSlider->setRange(kIorRange.smin, kIorRange.smax);
 
-    // Toggle
     if (ui->toggleLeftButton)
         connect(ui->toggleLeftButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onToggleLeft);
 
-    // List selection -> load material
     if (ui->materialList)
-    {
         connect(ui->materialList, &QListWidget::currentItemChanged, this, &MaterialEditorDialog::onMaterialSelectionChanged);
-    }
 
-    // Assign
     if (ui->assignButton)
         connect(ui->assignButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onAssignClicked);
 
-    // Name edit
     if (ui->nameEdit)
         connect(ui->nameEdit, &QLineEdit::editingFinished, this, &MaterialEditorDialog::onNameEdited);
 
-    // Sliders
     if (ui->metallicSlider)
         connect(ui->metallicSlider, &QSlider::valueChanged, this, &MaterialEditorDialog::onMetallicChanged);
 
@@ -227,14 +211,12 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     if (ui->opacitySlider)
         connect(ui->opacitySlider, &QSlider::valueChanged, this, &MaterialEditorDialog::onOpacityChanged);
 
-    // Color pick buttons
     if (ui->baseColorPickButton)
         connect(ui->baseColorPickButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onPickBaseColor);
 
     if (ui->emissivePickButton)
         connect(ui->emissivePickButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onPickEmissive);
 
-    // Map combos (placeholder "None" only for now)
     initMapCombos();
 
     if (ui->baseMapCombo)
@@ -250,24 +232,32 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     if (ui->emissiveMapCombo)
         connect(ui->emissiveMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onEmissiveMapChanged);
 
-    // Start expanded
     m_leftCollapsed    = false;
     m_lastExpandedSize = sizeHint();
 
-    for (QWidget* w : ui->propsFrame->findChildren<QWidget*>())
+    if (ui->propsFrame)
     {
-        w->setFixedHeight(25);
+        for (QWidget* w : ui->propsFrame->findChildren<QWidget*>())
+        {
+            w->setFixedHeight(25);
+        }
     }
 
-    ui->materialList->setUniformItemSizes(true);
-    ui->materialList->setSpacing(0);
-    ui->materialList->setStyleSheet("QListWidget::item { height: 25px; }");
+    if (ui->materialList)
+    {
+        ui->materialList->setUniformItemSizes(true);
+        ui->materialList->setSpacing(0);
+        ui->materialList->setStyleSheet("QListWidget::item { height: 25px; }");
+    }
 
-    ui->rightPanel->setMinimumWidth(300);
-    ui->rightPanel->setMaximumWidth(300);
+    if (ui->rightPanel)
+    {
+        ui->rightPanel->setMinimumWidth(300);
+        ui->rightPanel->setMaximumWidth(300);
 
-    m_rightPanelMinW = ui->rightPanel->minimumWidth();
-    m_rightPanelMaxW = ui->rightPanel->maximumWidth();
+        m_rightPanelMinW = ui->rightPanel->minimumWidth();
+        m_rightPanelMaxW = ui->rightPanel->maximumWidth();
+    }
 
     if (ui->propsGrid)
     {
@@ -279,8 +269,6 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
             ui->propsGrid->setRowMinimumHeight(r, 24);
     }
 }
-
-// ------------------------------------------------------------
 
 MaterialEditorDialog::~MaterialEditorDialog() noexcept
 {
@@ -299,6 +287,8 @@ void MaterialEditorDialog::idleEvent(Core* core)
         setUiEnabled(false);
         return;
     }
+
+    rebuildMapCombosIfNeeded();
 
     const SysCounterPtr ctr = ed->changeCounter();
     const uint64_t      v   = ctr ? ctr->value() : 0;
@@ -324,6 +314,123 @@ void MaterialEditorDialog::idleEvent(Core* core)
             }
         }
     }
+}
+
+// ------------------------------------------------------------
+// Combo helpers
+// ------------------------------------------------------------
+
+void MaterialEditorDialog::initMapCombos()
+{
+    // Start with "None" so the UI is usable before Core is set.
+    auto initNone = [](QComboBox* cb) {
+        if (!cb)
+            return;
+        QSignalBlocker b(*cb);
+        cb->clear();
+        cb->addItem("None", QVariant::fromValue<int>(static_cast<int>(kInvalidImageId)));
+    };
+
+    initNone(ui->baseMapCombo);
+    initNone(ui->metallicMapCombo);
+    initNone(ui->roughnessMapCombo);
+    initNone(ui->normalMapCombo);
+    initNone(ui->aoMapCombo);
+    initNone(ui->emissiveMapCombo);
+}
+
+void MaterialEditorDialog::rebuildMapCombosIfNeeded()
+{
+    if (!m_core)
+        return;
+
+    ImageHandler* ih = m_core->imageHandler();
+    if (!ih)
+        return;
+
+    const SysCounterPtr ctr = ih->changeCounter();
+    const uint64_t      v   = ctr ? ctr->value() : 0;
+
+    if (v == m_lastImagesCounter)
+        return;
+
+    m_lastImagesCounter = v;
+
+    fillImageCombo(ui->baseMapCombo);
+    fillImageCombo(ui->normalMapCombo);
+    fillImageCombo(ui->metallicMapCombo);
+    fillImageCombo(ui->roughnessMapCombo);
+    fillImageCombo(ui->aoMapCombo);
+    fillImageCombo(ui->emissiveMapCombo);
+
+    // Re-apply current material selections into the now-refreshed combos.
+    const int32_t mid = currentMaterialId();
+    if (mid >= 0)
+        loadMaterialToUi(mid);
+}
+
+void MaterialEditorDialog::fillImageCombo(QComboBox* cb)
+{
+    if (!cb || !m_core)
+        return;
+
+    ImageHandler* ih = m_core->imageHandler();
+    if (!ih)
+        return;
+
+    const auto& imgs = ih->images();
+
+    QSignalBlocker b(*cb);
+    cb->clear();
+
+    cb->addItem("None", QVariant::fromValue<int>(static_cast<int>(kInvalidImageId)));
+
+    for (int32_t i = 0; i < static_cast<int32_t>(imgs.size()); ++i)
+    {
+        const Image&      img = imgs[static_cast<size_t>(i)];
+        const std::string nm  = img.name();
+
+        QString label;
+        if (!nm.empty())
+            label = QString::fromStdString(nm);
+        else
+            label = QString("Image %1").arg(i);
+
+        cb->addItem(label, QVariant::fromValue<int>(i));
+    }
+}
+
+void MaterialEditorDialog::setComboToImageId(QComboBox* cb, ImageId imageId)
+{
+    if (!cb)
+        return;
+
+    const int want = static_cast<int>(imageId);
+
+    for (int i = 0; i < cb->count(); ++i)
+    {
+        const int v = cb->itemData(i).toInt();
+        if (v == want)
+        {
+            cb->setCurrentIndex(i);
+            return;
+        }
+    }
+
+    // If the image id no longer exists, fall back to None.
+    cb->setCurrentIndex(0);
+}
+
+ImageId MaterialEditorDialog::comboImageId(const QComboBox* cb) const noexcept
+{
+    if (!cb)
+        return kInvalidImageId;
+
+    const int idx = cb->currentIndex();
+    if (idx < 0)
+        return kInvalidImageId;
+
+    return static_cast<ImageId>(cb->itemData(idx).toInt());
 }
 
 // ------------------------------------------------------------
@@ -449,8 +556,6 @@ void MaterialEditorDialog::loadMaterialToUi(int32_t id)
 
     if (ui->roughnessSlider)
     {
-        // Material stores linear roughness r in [0..1]
-        // UI shows perceptual t = sqrt(r)
         const float t  = roughness_to_perceptual(m->roughness());
         const int   sv = slider_from_01(t, kRoughnessUiRange.smin, kRoughnessUiRange.smax);
         ui->roughnessSlider->setValue(sv);
@@ -482,18 +587,23 @@ void MaterialEditorDialog::loadMaterialToUi(int32_t id)
     if (ui->emissivePreviewButton)
         set_button_swatch(ui->emissivePreviewButton, to_qcolor(m->emissiveColor()));
 
+    // Textures
     if (ui->baseMapCombo)
-        ui->baseMapCombo->setCurrentIndex(0);
+        setComboToImageId(ui->baseMapCombo, m->baseColorTexture());
+
     if (ui->normalMapCombo)
-        ui->normalMapCombo->setCurrentIndex(0);
+        setComboToImageId(ui->normalMapCombo, m->normalTexture());
+
+    // MRAO is a single slot in Material, so keep the three combos in sync.
     if (ui->metallicMapCombo)
-        ui->metallicMapCombo->setCurrentIndex(0);
+        setComboToImageId(ui->metallicMapCombo, m->mraoTexture());
     if (ui->roughnessMapCombo)
-        ui->roughnessMapCombo->setCurrentIndex(0);
+        setComboToImageId(ui->roughnessMapCombo, m->mraoTexture());
     if (ui->aoMapCombo)
-        ui->aoMapCombo->setCurrentIndex(0);
+        setComboToImageId(ui->aoMapCombo, m->mraoTexture());
+
     if (ui->emissiveMapCombo)
-        ui->emissiveMapCombo->setCurrentIndex(0);
+        setComboToImageId(ui->emissiveMapCombo, m->emissiveTexture());
 
     const SysCounterPtr mctr = m->changeCounter();
     m_lastMaterialCounter    = mctr ? mctr->value() : 0;
@@ -571,10 +681,7 @@ void MaterialEditorDialog::onRoughnessChanged(int v)
     if (!m)
         return;
 
-    // v -> perceptual t in [0..1]
     const float t = slider_to_01(v, kRoughnessUiRange.smin, kRoughnessUiRange.smax);
-
-    // perceptual -> linear roughness
     const float r = perceptual_to_roughness(t);
 
     m->roughness(r);
@@ -641,38 +748,67 @@ void MaterialEditorDialog::onPickEmissive()
 }
 
 // ------------------------------------------------------------
-// Maps (placeholder wiring)
+// Maps
 // ------------------------------------------------------------
-
-void MaterialEditorDialog::initMapCombos()
-{
-    auto initNone = [](QComboBox* cb) {
-        if (!cb)
-            return;
-        QSignalBlocker b(*cb);
-        cb->clear();
-        cb->addItem("None", QVariant::fromValue<int>(-1));
-    };
-
-    initNone(ui->baseMapCombo);
-    initNone(ui->metallicMapCombo);
-    initNone(ui->roughnessMapCombo);
-    initNone(ui->normalMapCombo);
-    initNone(ui->aoMapCombo);
-    initNone(ui->emissiveMapCombo);
-}
 
 void MaterialEditorDialog::onBaseMapChanged(int)
 {
+    Material* m = currentMaterialMutable();
+    if (!m || !ui)
+        return;
+
+    m->baseColorTexture(comboImageId(ui->baseMapCombo));
 }
+
 void MaterialEditorDialog::onNormalMapChanged(int)
 {
+    Material* m = currentMaterialMutable();
+    if (!m || !ui)
+        return;
+
+    m->normalTexture(comboImageId(ui->normalMapCombo));
 }
+
 void MaterialEditorDialog::onMraoMapChanged(int)
 {
+    Material* m = currentMaterialMutable();
+    if (!m || !ui)
+        return;
+
+    // All three UI combos represent the single Material::mraoTexture() slot.
+    // Choose the combo that triggered the signal by taking the first non-null
+    // and syncing all to the new value.
+    const ImageId idM = comboImageId(ui->metallicMapCombo);
+    const ImageId idR = comboImageId(ui->roughnessMapCombo);
+    const ImageId idA = comboImageId(ui->aoMapCombo);
+
+    ImageId chosen = idM;
+    if (chosen == kInvalidImageId)
+        chosen = idR;
+    if (chosen == kInvalidImageId)
+        chosen = idA;
+
+    m->mraoTexture(chosen);
+
+    // Keep the UI consistent.
+    {
+        const QSignalBlocker b0(ui->metallicMapCombo);
+        const QSignalBlocker b1(ui->roughnessMapCombo);
+        const QSignalBlocker b2(ui->aoMapCombo);
+
+        setComboToImageId(ui->metallicMapCombo, chosen);
+        setComboToImageId(ui->roughnessMapCombo, chosen);
+        setComboToImageId(ui->aoMapCombo, chosen);
+    }
 }
+
 void MaterialEditorDialog::onEmissiveMapChanged(int)
 {
+    Material* m = currentMaterialMutable();
+    if (!m || !ui)
+        return;
+
+    m->emissiveTexture(comboImageId(ui->emissiveMapCombo));
 }
 
 // ------------------------------------------------------------
@@ -701,7 +837,6 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
     {
         ui->leftPanel->setVisible(false);
 
-        // Let right panel actually fill the dialog in collapsed mode
         ui->rightPanel->setMinimumWidth(0);
         ui->rightPanel->setMaximumWidth(QWIDGETSIZE_MAX);
         ui->rightPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -712,11 +847,11 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
             sizes.push_back((i == m_rightIndex) ? 1 : 0);
         ui->splitterMain->setSizes(sizes);
 
-        // Compute tight width from sizeHint + frame margins (prevents “gap”)
         const int marginW =
-            (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) + (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
+            (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) +
+            (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
 
-        const int newW = ui->rightPanel->sizeHint().width() + marginW + 2; // +2 safety
+        const int newW = ui->rightPanel->sizeHint().width() + marginW + 2;
         setFixedWidth(std::max(newW, minimumSizeHint().width()));
         resize(width(), height());
     }
@@ -724,7 +859,6 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
     {
         ui->leftPanel->setVisible(true);
 
-        // Restore right panel constraints for expanded mode
         ui->rightPanel->setMinimumWidth(m_rightPanelMinW);
         ui->rightPanel->setMaximumWidth(m_rightPanelMaxW);
         ui->rightPanel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
