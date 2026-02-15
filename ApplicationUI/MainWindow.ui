@@ -535,6 +535,9 @@ QPushButton:hover {
             <property name="text">
              <string>+</string>
             </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
            </widget>
           </item>
          </layout>

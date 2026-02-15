@@ -22,7 +22,6 @@ public:
 
     QString filePath() const;
     QString displayName() const;
-    bool    isSrgb() const;
 
 private slots:
     void onBrowse();

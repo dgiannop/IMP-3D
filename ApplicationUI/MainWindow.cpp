@@ -158,6 +158,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
                 m_subWindowManager->hideSubWindow("ASSIGN_MAT_DIALOG");
         });
 
+        connect(ui->btnTexEditorPlus, &QPushButton::toggled, this, [=, this](bool checked) {
+            if (checked)
+                m_subWindowManager->showSubWindow("LOAD_TEXTURE_DIALOG");
+            else
+                m_subWindowManager->hideSubWindow("LOAD_TEXTURE_DIALOG");
+        });
+
         connect(ui->btnLightEditor, &QPushButton::toggled, this, [=, this](bool checked) {
             if (checked)
                 m_subWindowManager->showSubWindow("LIGHT_EDITOR_DIALOG");
@@ -184,14 +191,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
                 m_subWindowManager->showSubWindow("TEXTURE_EDITOR_DIALOG");
             else
                 m_subWindowManager->hideSubWindow("TEXTURE_EDITOR_DIALOG");
-        });
-
-        // Optional: if you have a "+" next to Texture Editor in the header (like materials/lights):
-        connect(ui->btnTexEditorPlus, &QPushButton::toggled, this, [=, this](bool checked) {
-            if (checked)
-                m_subWindowManager->showSubWindow("LOAD_TEXTURE_DIALOG");
-            else
-                m_subWindowManager->hideSubWindow("LOAD_TEXTURE_DIALOG");
         });
 
         connect(m_subWindowManager.get(), &SubWindowManager::onSubWindowClosed, this, &MainWindow::onSubWindowClosed);

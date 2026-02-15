@@ -17,8 +17,6 @@ LoadTextureDialog::LoadTextureDialog(QWidget* parent) : SubWindowBase(parent)
     connect(ui->loadButton, &QPushButton::clicked, this, &LoadTextureDialog::onLoad);
     connect(ui->cancelButton, &QPushButton::clicked, this, &LoadTextureDialog::onCancel);
     connect(ui->fileLineEdit, &QLineEdit::textEdited, this, &LoadTextureDialog::onFileEdited);
-
-    ui->colorSpaceCombo->setCurrentIndex(0);
 }
 
 LoadTextureDialog::~LoadTextureDialog() noexcept
@@ -44,11 +42,6 @@ QString LoadTextureDialog::filePath() const
 QString LoadTextureDialog::displayName() const
 {
     return ui->nameLineEdit->text();
-}
-
-bool LoadTextureDialog::isSrgb() const
-{
-    return (ui->colorSpaceCombo->currentIndex() == 0);
 }
 
 void LoadTextureDialog::onBrowse()
