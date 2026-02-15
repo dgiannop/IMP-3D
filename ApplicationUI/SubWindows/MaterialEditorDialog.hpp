@@ -12,6 +12,9 @@ namespace Ui
     class MaterialEditorDialog;
 } // namespace Ui
 
+class Material;
+using ImageId = int32_t;
+
 class MaterialEditorDialog final : public SubWindowBase
 {
     Q_OBJECT
@@ -48,11 +51,11 @@ private:
     int32_t   currentMaterialId() const noexcept;
     Material* currentMaterialMutable() noexcept;
 
+    // Texture combo helpers (UI-side only)
     void    initMapCombos();
     void    rebuildMapCombosIfNeeded();
-    void    fillImageCombo(QComboBox* cb);
-    void    setComboToImageId(QComboBox* cb, ImageId imageId);
-    ImageId comboImageId(const QComboBox* cb) const noexcept;
+    ImageId comboImageId(QComboBox* cb) const noexcept;
+    void    setComboToImageId(QComboBox* cb, ImageId imageId) noexcept;
 
 private:
     Ui::MaterialEditorDialog* ui = nullptr;

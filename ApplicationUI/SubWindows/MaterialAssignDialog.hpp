@@ -1,3 +1,6 @@
+//============================================================
+// MaterialAssignDialog.hpp  (FULL REPLACEMENT)
+//============================================================
 #ifndef MATERIALASSIGNDIALOG_HPP
 #define MATERIALASSIGNDIALOG_HPP
 
@@ -55,7 +58,7 @@ private:
     Core*                      m_core = nullptr;
 
     SysCounterPtr m_lastMatCounter = {};
-    uint64_t      m_lastMatStamp   = 0; // or whatever your SysCounter exposes
+    uint64_t      m_lastMatStamp   = 0;
     bool          m_hasInitialList = false;
 };
 
