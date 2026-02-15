@@ -252,6 +252,22 @@ public:
     void assignMaterial(int32_t materialId) noexcept;
 
     // ------------------------------------------------------------
+    // Images / textures
+    // ------------------------------------------------------------
+
+    /** @brief Access the image handler (images list used by Texture Editor). */
+    [[nodiscard]] ImageHandler* imageHandler() noexcept;
+
+    /** @brief Access the image handler (const). */
+    [[nodiscard]] const ImageHandler* imageHandler() const noexcept;
+
+    /** @brief Access the texture handler (GPU textures), if needed by UI later. */
+    [[nodiscard]] TextureHandler* textureHandler() noexcept;
+
+    /** @brief Access the texture handler (const). */
+    [[nodiscard]] const TextureHandler* textureHandler() const noexcept;
+
+    // ------------------------------------------------------------
     // Tool properties (UI polling)
     // ------------------------------------------------------------
 

@@ -491,6 +491,29 @@ void Core::assignMaterial(int32_t materialId) noexcept
 }
 
 // ------------------------------------------------------------
+// Images / textures
+// ------------------------------------------------------------
+
+ImageHandler* Core::imageHandler() noexcept
+{
+    return m_scene ? m_scene->imageHandler() : nullptr;
+}
+
+const ImageHandler* Core::imageHandler() const noexcept
+{
+    return m_scene ? m_scene->imageHandler() : nullptr;
+}
+
+TextureHandler* Core::textureHandler() noexcept
+{
+    return m_scene ? m_scene->textureHandler() : nullptr;
+}
+
+const TextureHandler* Core::textureHandler() const noexcept
+{
+    return m_scene ? m_scene->textureHandler() : nullptr;
+}
+// ------------------------------------------------------------
 // Tool properties (UI polling)
 // ------------------------------------------------------------
 

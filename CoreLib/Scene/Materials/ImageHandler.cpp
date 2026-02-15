@@ -1,3 +1,6 @@
+//============================================================
+// ImageHandler.cpp  (FULL REPLACEMENT)
+//============================================================
 #include "ImageHandler.hpp"
 
 #include <iostream>
@@ -14,22 +17,73 @@ namespace
     {
         return id >= 0 && static_cast<std::size_t>(id) < size;
     }
+
+    [[nodiscard]] bool nameExists(const std::vector<Image>& images, const std::string& name)
+    {
+        if (name.empty())
+            return false;
+
+        for (const Image& img : images)
+        {
+            if (img.name() == name)
+                return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::string makeUniqueName(const std::vector<Image>& images, const std::string& base)
+    {
+        if (base.empty())
+            return base;
+
+        if (!nameExists(images, base))
+            return base;
+
+        for (int n = 2; n < 1000000; ++n)
+        {
+            std::string candidate = base;
+            candidate += " (";
+            candidate += std::to_string(n);
+            candidate += ")";
+
+            if (!nameExists(images, candidate))
+                return candidate;
+        }
+
+        return base;
+    }
+
+    [[nodiscard]] std::string fallbackEmbeddedName(ImageId id)
+    {
+        return std::string("EmbeddedImage_") + std::to_string(id);
+    }
+
+    [[nodiscard]] std::string fallbackRawName(ImageId id)
+    {
+        return std::string("Image_") + std::to_string(id);
+    }
+
+    [[nodiscard]] std::string stemNameOrEmpty(const std::filesystem::path& p)
+    {
+        // stem().string() can be empty for odd paths; keep it safe.
+        return p.stem().string();
+    }
 } // namespace
 
 // ---------------------------------------------------------
 // Public API
 // ---------------------------------------------------------
+
 ImageHandler::ImageHandler() : m_changeCounter{std::make_shared<SysCounter>()}
 {
 }
 
-ImageId ImageHandler::loadFromFile(const std::filesystem::path& path,
-                                   bool                         flipY)
+ImageId ImageHandler::loadFromFile(const std::filesystem::path& path, bool flipY)
 {
-    // Normalize the path (so the same file isn't loaded twice)
+    // Normalize the path (so the same file isn't loaded twice).
     const std::string normalized = PathUtil::normalizedPath(path);
 
-    // Reuse existing image if already loaded
+    // Reuse existing image if already loaded.
     if (auto it = m_pathToId.find(normalized); it != m_pathToId.end())
     {
         return it->second;
@@ -38,17 +92,30 @@ ImageId ImageHandler::loadFromFile(const std::filesystem::path& path,
     Image img;
     if (!img.loadFromFile(path, flipY))
     {
-        // std::cerr << "ImageHandler::loadFromFile: failed to load image: " << normalized << "\n";
         return kInvalidImageId;
     }
 
-    // Ensure the Image knows its source path (if Image supports this)
+    // Allocate ID before pushing so fallback naming can include the final ID.
+    const ImageId id = static_cast<ImageId>(m_images.size());
+
+    // Ensure the Image knows its source path.
     img.setPath(normalized);
 
-    const ImageId id = static_cast<ImageId>(m_images.size());
+    // Enforce non-empty name.
+    std::string baseName = img.name();
+    if (baseName.empty())
+    {
+        baseName = stemNameOrEmpty(path);
+        if (baseName.empty())
+            baseName = fallbackRawName(id);
+    }
+
+    img.setName(makeUniqueName(m_images, baseName));
+
     m_images.push_back(std::move(img));
     m_pathToId.emplace(normalized, id);
 
+    m_changeCounter->change();
     return id;
 }
 
@@ -69,13 +136,20 @@ ImageId ImageHandler::loadFromEncodedMemory(std::span<const unsigned char> encod
         return kInvalidImageId;
     }
 
-    // For embedded images there is no filesystem path; I can
-    // optionally store the nameHint somewhere inside Image if I add it.
-    // e.g. img.setName(nameHint);
-
     const ImageId id = static_cast<ImageId>(m_images.size());
+
+    // Enforce non-empty name (prefer hint; otherwise deterministic fallback).
+    std::string baseName = nameHint;
+    if (baseName.empty())
+        baseName = fallbackEmbeddedName(id);
+
+    img.setName(makeUniqueName(m_images, baseName));
+
+    // No filesystem path for embedded images.
+
     m_images.push_back(std::move(img));
 
+    m_changeCounter->change();
     return id;
 }
 
@@ -92,16 +166,25 @@ ImageId ImageHandler::createFromRaw(const unsigned char* pixels,
     Image img;
     if (!img.loadFromMemory(pixels, width, height, channels, flipY))
     {
-        std::cerr << "ImageHandler::createFromRaw: failed to create image from raw data: " << nameHint << "\n";
+        std::cerr << "ImageHandler::createFromRaw: failed to create image from raw data: "
+                  << nameHint << "\n";
         return kInvalidImageId;
     }
 
-    // If Image later has a name field, set it here.
-    // img.setName(nameHint);
-
     const ImageId id = static_cast<ImageId>(m_images.size());
+
+    // Enforce non-empty name.
+    std::string baseName = nameHint;
+    if (baseName.empty())
+        baseName = fallbackRawName(id);
+
+    img.setName(makeUniqueName(m_images, baseName));
+
+    // No filesystem path for raw images by default.
+
     m_images.push_back(std::move(img));
 
+    m_changeCounter->change();
     return id;
 }
 
@@ -123,8 +206,13 @@ Image* ImageHandler::get(ImageId id) noexcept
 
 void ImageHandler::clear() noexcept
 {
+    if (m_images.empty() && m_pathToId.empty())
+        return;
+
     m_images.clear();
     m_pathToId.clear();
+
+    m_changeCounter->change();
 }
 
 SysCounterPtr ImageHandler::changeCounter() const noexcept
