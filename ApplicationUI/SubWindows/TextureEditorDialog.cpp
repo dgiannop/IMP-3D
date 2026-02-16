@@ -68,8 +68,8 @@ TextureEditorDialog::TextureEditorDialog(QWidget* parent) : SubWindowBase(parent
     // TextureEditor is an IMAGE LIST. Color space is not handled here.
     if (ui->colorSpaceCombo)
         ui->colorSpaceCombo->setVisible(false);
-    if (ui->colorSpaceLabel)
-        ui->colorSpaceLabel->setVisible(false);
+    // if (ui->colorSpaceLabel)
+    // ui->colorSpaceLabel->setVisible(false);
 
     // Make preview area visibly usable
     ui->previewWidgetPlaceholder->setAlignment(Qt::AlignCenter);

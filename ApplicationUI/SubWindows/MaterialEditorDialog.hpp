@@ -6,6 +6,7 @@
 #include "SubWindowBase.hpp"
 
 class QComboBox;
+class QDoubleSpinBox;
 
 namespace Ui
 {
@@ -14,6 +15,8 @@ namespace Ui
 
 class Material;
 using ImageId = int32_t;
+
+// static constexpr ImageId kInvalidImageId = -1;
 
 class MaterialEditorDialog final : public SubWindowBase
 {
@@ -30,16 +33,27 @@ private slots:
     void onMaterialSelectionChanged(QListWidgetItem* current, QListWidgetItem* previous);
     void onAssignClicked();
     void onNameEdited();
+
     void onMetallicChanged(int v);
     void onRoughnessChanged(int v);
     void onIorChanged(int v);
     void onOpacityChanged(int v);
+    void onEmissiveIntensityChanged(int v);
+
+    void onMetallicSpinChanged(double v);
+    void onRoughnessSpinChanged(double v);
+    void onIorSpinChanged(double v);
+    void onOpacitySpinChanged(double v);
+    void onEmissiveIntensitySpinChanged(double v);
+
     void onPickBaseColor();
     void onPickEmissive();
 
     void onBaseMapChanged(int);
     void onNormalMapChanged(int);
-    void onMraoMapChanged(int);
+    void onMetallicMapChanged(int);
+    void onRoughnessMapChanged(int);
+    void onAoMapChanged(int);
     void onEmissiveMapChanged(int);
 
 private:
@@ -56,6 +70,9 @@ private:
     void    rebuildMapCombosIfNeeded();
     ImageId comboImageId(QComboBox* cb) const noexcept;
     void    setComboToImageId(QComboBox* cb, ImageId imageId) noexcept;
+
+    // Spin helpers
+    void setSpinSilently(QDoubleSpinBox* sp, double v) noexcept;
 
 private:
     Ui::MaterialEditorDialog* ui = nullptr;
@@ -77,4 +94,6 @@ private:
     uint64_t m_lastLibraryCounter  = 0;
     uint64_t m_lastMaterialCounter = 0;
     uint64_t m_lastImagesCounter   = 0;
+
+    bool m_blockSpinSignals = false;
 };

@@ -1,6 +1,11 @@
 #include "Material.hpp"
 
 #include <algorithm> // std::clamp
+#include <utility>   // std::move
+
+Material::Material() : m_name{}, m_changeCounter{std::make_shared<SysCounter>()}
+{
+}
 
 Material::Material(std::string name) : m_name{std::move(name)}, m_changeCounter{std::make_shared<SysCounter>()}
 {
@@ -112,6 +117,17 @@ void Material::ior(float value) noexcept
     m_changeCounter->change();
 }
 
+bool Material::doubleSided() const noexcept
+{
+    return m_doubleSided;
+}
+
+void Material::doubleSided(bool value) noexcept
+{
+    m_doubleSided = value;
+    m_changeCounter->change();
+}
+
 // -----------------------------
 // Texture slots
 // -----------------------------
@@ -153,6 +169,39 @@ void Material::mraoTexture(ImageId id) noexcept
     m_changeCounter->change();
 }
 
+ImageId Material::metallicTexture() const noexcept
+{
+    return m_metallicTex;
+}
+
+void Material::metallicTexture(ImageId id) noexcept
+{
+    m_metallicTex = id;
+    m_changeCounter->change();
+}
+
+ImageId Material::roughnessTexture() const noexcept
+{
+    return m_roughnessTex;
+}
+
+void Material::roughnessTexture(ImageId id) noexcept
+{
+    m_roughnessTex = id;
+    m_changeCounter->change();
+}
+
+ImageId Material::aoTexture() const noexcept
+{
+    return m_aoTex;
+}
+
+void Material::aoTexture(ImageId id) noexcept
+{
+    m_aoTex = id;
+    m_changeCounter->change();
+}
+
 ImageId Material::emissiveTexture() const noexcept
 {
     return m_emissiveTex;
@@ -175,17 +224,6 @@ Material::AlphaMode Material::alphaMode() const noexcept
 void Material::alphaMode(AlphaMode mode) noexcept
 {
     m_alphaMode = mode;
-    m_changeCounter->change();
-}
-
-bool Material::doubleSided() const noexcept
-{
-    return m_doubleSided;
-}
-
-void Material::doubleSided(bool value) noexcept
-{
-    m_doubleSided = value;
     m_changeCounter->change();
 }
 

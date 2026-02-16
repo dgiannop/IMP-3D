@@ -10,6 +10,12 @@
     <height>461</height>
    </rect>
   </property>
+  <property name="minimumSize">
+   <size>
+    <width>760</width>
+    <height>300</height>
+   </size>
+  </property>
   <property name="windowTitle">
    <string>Material Editor</string>
   </property>
@@ -21,6 +27,7 @@
     padding: 5px 0px;
     border-radius: 0px;
 }
+
 QPushButton {
     background-color: rgb(35,35,37);
     border: none; color: rgb(107,117,128);
@@ -30,7 +37,8 @@ QPushButton {
 QPushButton:pressed { background-color: rgb(68,93,132); }
 QPushButton:hover  { background-color: rgb(35,35,36); }
 
-#colorSwatch, #emissiveSwatch {
+/* Swatches (match actual objectNames) */
+#baseColorPreviewButton, #emissivePreviewButton {
   padding: 0;
   border: 0px solid #555A66;
   background-color: #3a4150;
@@ -45,38 +53,38 @@ QComboBox {
 }
 
 QComboBox::down-arrow {
-    image: url(:/images/arrow_down.png); /* Custom arrow image */
-    width: 8px; /* Adjust width of the arrow */
-    height: 8px; /* Adjust height of the arrow */
+    image: url(:/images/arrow_down.png);
+    width: 8px;
+    height: 8px;
     border-radius: 0px;
 }
 
 QComboBox::drop-down {
-    border: none; /* Remove the dropdown border */
-    border-radius: 0px; /* No radius on the drop-down button */
+    border: none;
+    border-radius: 0px;
 }
 
 QComboBox::popup {
-    border: none; /* Remove the border from the dropdown */
-    background-color: #282b2e; /* Set the same background color for the dropdown */
+    border: none;
+    background-color: #282b2e;
     padding: 0px;
-    overflow: hidden; /* Prevent the radius from being clipped */
-    border-radius: 8px; /* Apply border radius to the dropdown */
+    overflow: hidden;
+    border-radius: 8px;
 }
 
 QComboBox QAbstractItemView {
-    background-color: #282b2e; /* Same background for dropdown items */
-    color: white; /* Set item text color */
-    border: none; /* No border for item list */
-    border-radius: 0px; /* No border radius for dropdown items */
-    border-bottom-left-radius: 4px;  /* rounded bottom-left corner */
-    border-bottom-right-radius: 5px; /* rounded bottom-right corner */
+    background-color: #282b2e;
+    color: white;
+    border: none;
+    border-radius: 0px;
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 5px;
 }
 
 QComboBox::indicator {
     width: 8px;
     height: 8px;
-    background-color: transparent; /* To remove indicator styling */
+    background-color: transparent;
 }
 
 QSlider::groove:horizontal {
@@ -90,60 +98,22 @@ QSlider::handle:horizontal {
     height: 14px;
     border-radius: 7px;
     background: #6b7580;
-    margin: -4px -8px; /* centers handle on the groove */
+    margin: -4px -8px;
 }
 
-/* Remove any outer frame/border that style may add */
+QSlider::handle:horizontal:hover { background: #7e8a96; }
+QSlider::sub-page:horizontal { background: #445066; border-radius: 3px; }
+QSlider::add-page:horizontal { background: #2b2f36; border-radius: 3px; }
+
 QSplitter {
     background: transparent;
     border: 0px;
     margin: 0px;
     padding: 0px;
 }
-
-/* Make the handle invisible + remove spacing */
-QSplitter::handle {
-    background: transparent;
-    border: 0px;
-    margin: 0px;
-    padding: 0px;
-}
-
-/* For *thin* divider line instead of nothing, use this:
-QSplitter::handle:horizontal { width: 1px; background: rgba(255,255,255,25); }
-QSplitter::handle:vertical   { height: 1px; background: rgba(255,255,255,25); }
-*/
+QSplitter::handle { background: transparent; border: 0px; margin: 0px; padding: 0px; }
 QSplitter::handle:horizontal { width: 0px; }
 QSplitter::handle:vertical   { height: 0px; }
-
-QSlider::handle:horizontal:hover { background: #7e8a96; }
-QSlider::sub-page:horizontal { background: #445066; border-radius: 3px; }
-QSlider::add-page:horizontal { background: #2b2f36; border-radius: 3px; }
-
-QPushButton {
-    background-color: rgb(35, 35, 37);
-    border: none; 
-    color: rgb(127, 137, 148); /*#57616c;*/ 
-    padding: 1px 0px; 
-    text-align: center; 
-    text-decoration: none;
-    font-size: 9pt; 
-	line-height: 23px;
-    margin: 0px 0px; 
-}
-
-QPushButton:pressed {
-	background-color: rgb(68, 93, 132);
-}
-
-QPushButton:hover {
-    background-color: rgb(35, 35, 36);
-}
-
-QPushButton:checked {
-    background-color: rgb(68, 93, 132);
-    color: white; /* #a4b0bd;*/
-}
 
 QListWidget {
     border: 0px;
@@ -153,13 +123,13 @@ QListWidget {
 
 QListWidget::item {
     border-radius: 0px;
-    margin-left: 1px; 
-   margin-right: 1px;
+    margin-left: 1px;
+    margin-right: 1px;
     padding: 0px 8px;
 }
 
 QListWidget::item:selected {
-    background: rgba(60, 120, 215, 180);   /* Qt-ish blue */
+    background: rgba(60, 120, 215, 180);
     color: white;
 }
 
@@ -174,6 +144,14 @@ QListWidget::item:hover {
 
 QListView::item {
     border-radius: 0px;
+}
+
+/* Spin boxes to match theme */
+QDoubleSpinBox {
+    background-color: #282b2e;
+    border: none;
+    color: rgb(127, 137, 148);
+    padding-left: 5px;
 }</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayoutRoot">
@@ -201,6 +179,12 @@ QListView::item {
       <enum>Qt::Orientation::Horizontal</enum>
      </property>
      <widget class="QWidget" name="leftPanel">
+      <property name="minimumSize">
+       <size>
+        <width>220</width>
+        <height>0</height>
+       </size>
+      </property>
       <layout class="QVBoxLayout" name="leftLayout">
        <property name="spacing">
         <number>1</number>
@@ -336,9 +320,6 @@ QListView::item {
             <property name="text">
              <string>+</string>
             </property>
-            <property name="checkable">
-             <bool>false</bool>
-            </property>
            </widget>
           </item>
           <item>
@@ -358,9 +339,6 @@ QListView::item {
             <property name="text">
              <string>-</string>
             </property>
-            <property name="checkable">
-             <bool>false</bool>
-            </property>
            </widget>
           </item>
          </layout>
@@ -368,6 +346,7 @@ QListView::item {
        </item>
       </layout>
      </widget>
+
      <widget class="QWidget" name="rightPanel">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
@@ -403,6 +382,7 @@ QListView::item {
        <property name="bottomMargin">
         <number>0</number>
        </property>
+
        <item>
         <widget class="QFrame" name="rightHeaderFrame">
          <property name="frameShape">
@@ -465,6 +445,7 @@ QListView::item {
          </layout>
         </widget>
        </item>
+
        <item>
         <widget class="QFrame" name="propsFrame">
          <property name="frameShape">
@@ -486,6 +467,7 @@ QListView::item {
           <property name="spacing">
            <number>1</number>
           </property>
+
           <item row="0" column="0">
            <widget class="QLabel" name="nameLabel">
             <property name="text">
@@ -493,9 +475,10 @@ QListView::item {
             </property>
            </widget>
           </item>
-          <item row="0" column="1">
+          <item row="0" column="1" colspan="2">
            <widget class="QLineEdit" name="nameEdit"/>
           </item>
+
           <item row="1" column="0">
            <widget class="QLabel" name="baseColorLabel">
             <property name="text">
@@ -503,7 +486,7 @@ QListView::item {
             </property>
            </widget>
           </item>
-          <item row="1" column="1">
+          <item row="1" column="1" colspan="2">
            <layout class="QHBoxLayout" name="baseColorLayout">
             <property name="spacing">
              <number>1</number>
@@ -519,7 +502,7 @@ QListView::item {
               <property name="minimumSize">
                <size>
                 <width>0</width>
-                <height>20</height>
+                <height>25</height>
                </size>
               </property>
               <property name="text">
@@ -542,6 +525,8 @@ QListView::item {
             </item>
            </layout>
           </item>
+
+          <!-- Metallic -->
           <item row="2" column="0">
            <widget class="QLabel" name="metallicLabel">
             <property name="text">
@@ -551,78 +536,53 @@ QListView::item {
           </item>
           <item row="2" column="1">
            <widget class="QSlider" name="metallicSlider">
-            <property name="minimum">
-             <number>0</number>
-            </property>
-            <property name="maximum">
-             <number>100</number>
-            </property>
-            <property name="value">
-             <number>0</number>
-            </property>
-            <property name="orientation">
-             <enum>Qt::Orientation::Horizontal</enum>
-            </property>
+            <property name="minimum"><number>0</number></property>
+            <property name="maximum"><number>100</number></property>
+            <property name="value"><number>0</number></property>
+            <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
            </widget>
           </item>
+          <item row="2" column="2">
+           <widget class="QDoubleSpinBox" name="metallicSpin">
+            <property name="decimals"><number>2</number></property>
+            <property name="minimum"><double>0.00</double></property>
+            <property name="maximum"><double>1.00</double></property>
+            <property name="singleStep"><double>0.01</double></property>
+           </widget>
+          </item>
+
+          <!-- Roughness -->
           <item row="3" column="0">
            <widget class="QLabel" name="roughnessLabel">
-            <property name="text">
-             <string>Roughness</string>
-            </property>
+            <property name="text"><string>Roughness</string></property>
            </widget>
           </item>
           <item row="3" column="1">
            <widget class="QSlider" name="roughnessSlider">
-            <property name="minimum">
-             <number>0</number>
-            </property>
-            <property name="maximum">
-             <number>100</number>
-            </property>
-            <property name="value">
-             <number>50</number>
-            </property>
-            <property name="orientation">
-             <enum>Qt::Orientation::Horizontal</enum>
-            </property>
+            <property name="minimum"><number>0</number></property>
+            <property name="maximum"><number>100</number></property>
+            <property name="value"><number>50</number></property>
+            <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
            </widget>
           </item>
+          <item row="3" column="2">
+           <widget class="QDoubleSpinBox" name="roughnessSpin">
+            <property name="decimals"><number>2</number></property>
+            <property name="minimum"><double>0.00</double></property>
+            <property name="maximum"><double>1.00</double></property>
+            <property name="singleStep"><double>0.01</double></property>
+           </widget>
+          </item>
+
+          <!-- Emissive Color -->
           <item row="4" column="0">
-           <widget class="QLabel" name="iorLabel">
-            <property name="text">
-             <string>IOR</string>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="1">
-           <widget class="QSlider" name="iorSlider">
-            <property name="minimum">
-             <number>100</number>
-            </property>
-            <property name="maximum">
-             <number>300</number>
-            </property>
-            <property name="value">
-             <number>100</number>
-            </property>
-            <property name="orientation">
-             <enum>Qt::Orientation::Horizontal</enum>
-            </property>
-           </widget>
-          </item>
-          <item row="5" column="0">
            <widget class="QLabel" name="emissiveLabel">
-            <property name="text">
-             <string>Emissive</string>
-            </property>
+            <property name="text"><string>Emissive Color</string></property>
            </widget>
           </item>
-          <item row="5" column="1">
+          <item row="4" column="1" colspan="2">
            <layout class="QHBoxLayout" name="emissiveLayout">
-            <property name="spacing">
-             <number>1</number>
-            </property>
+            <property name="spacing"><number>1</number></property>
             <item>
              <widget class="QPushButton" name="emissivePreviewButton">
               <property name="sizePolicy">
@@ -634,12 +594,10 @@ QListView::item {
               <property name="minimumSize">
                <size>
                 <width>0</width>
-                <height>20</height>
+                <height>25</height>
                </size>
               </property>
-              <property name="text">
-               <string/>
-              </property>
+              <property name="text"><string/></property>
              </widget>
             </item>
             <item>
@@ -650,115 +608,176 @@ QListView::item {
                 <height>25</height>
                </size>
               </property>
-              <property name="text">
-               <string>E</string>
-              </property>
+              <property name="text"><string>E</string></property>
              </widget>
             </item>
            </layout>
           </item>
+
+          <!-- Emissive Intensity -->
+          <item row="5" column="0">
+           <widget class="QLabel" name="emissiveIntensityLabel">
+            <property name="text"><string>Emissive Intensity</string></property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QSlider" name="emissiveIntensitySlider">
+            <property name="minimum"><number>0</number></property>
+            <property name="maximum"><number>200</number></property>
+            <property name="value"><number>0</number></property>
+            <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+           </widget>
+          </item>
+          <item row="5" column="2">
+           <widget class="QDoubleSpinBox" name="emissiveIntensitySpin">
+            <property name="decimals"><number>2</number></property>
+            <property name="minimum"><double>0.00</double></property>
+            <property name="maximum"><double>2.00</double></property>
+            <property name="singleStep"><double>0.05</double></property>
+           </widget>
+          </item>
+
+          <!-- Opacity -->
           <item row="6" column="0">
            <widget class="QLabel" name="opacityLabel">
-            <property name="text">
-             <string>Opacity</string>
-            </property>
+            <property name="text"><string>Opacity</string></property>
            </widget>
           </item>
           <item row="6" column="1">
            <widget class="QSlider" name="opacitySlider">
-            <property name="minimum">
-             <number>0</number>
-            </property>
-            <property name="maximum">
-             <number>100</number>
-            </property>
-            <property name="value">
-             <number>100</number>
-            </property>
-            <property name="orientation">
-             <enum>Qt::Orientation::Horizontal</enum>
-            </property>
+            <property name="minimum"><number>0</number></property>
+            <property name="maximum"><number>100</number></property>
+            <property name="value"><number>100</number></property>
+            <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
            </widget>
           </item>
+          <item row="6" column="2">
+           <widget class="QDoubleSpinBox" name="opacitySpin">
+            <property name="decimals"><number>2</number></property>
+            <property name="minimum"><double>0.00</double></property>
+            <property name="maximum"><double>1.00</double></property>
+            <property name="singleStep"><double>0.01</double></property>
+           </widget>
+          </item>
+
+          <!-- IOR -->
           <item row="7" column="0">
-           <widget class="QLabel" name="baseMapLabel">
-            <property name="text">
-             <string>Base Map</string>
-            </property>
+           <widget class="QLabel" name="iorLabel">
+            <property name="text"><string>IOR</string></property>
            </widget>
           </item>
           <item row="7" column="1">
+           <widget class="QSlider" name="iorSlider">
+            <property name="minimum"><number>100</number></property>
+            <property name="maximum"><number>300</number></property>
+            <property name="value"><number>150</number></property>
+            <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+           </widget>
+          </item>
+          <item row="7" column="2">
+           <widget class="QDoubleSpinBox" name="iorSpin">
+            <property name="decimals"><number>2</number></property>
+            <property name="minimum"><double>1.00</double></property>
+            <property name="maximum"><double>3.00</double></property>
+            <property name="singleStep"><double>0.01</double></property>
+           </widget>
+          </item>
+
+          <!-- Textures -->
+          <item row="8" column="0">
+           <widget class="QLabel" name="baseMapLabel">
+            <property name="text"><string>Base Map</string></property>
+           </widget>
+          </item>
+          <item row="8" column="1" colspan="2">
            <widget class="QComboBox" name="baseMapCombo"/>
           </item>
-          <item row="8" column="0">
-           <widget class="QLabel" name="metallicMapLabel">
-            <property name="text">
-             <string>Metallic Map</string>
-            </property>
-           </widget>
-          </item>
-          <item row="8" column="1">
-           <widget class="QComboBox" name="metallicMapCombo"/>
-          </item>
+
           <item row="9" column="0">
-           <widget class="QLabel" name="roughnessMapLabel">
-            <property name="text">
-             <string>Roughness Map</string>
-            </property>
-           </widget>
-          </item>
-          <item row="9" column="1">
-           <widget class="QComboBox" name="roughnessMapCombo"/>
-          </item>
-          <item row="10" column="0">
            <widget class="QLabel" name="normalMapLabel">
-            <property name="text">
-             <string>Normal Map</string>
-            </property>
+            <property name="text"><string>Normal Map</string></property>
            </widget>
           </item>
-          <item row="10" column="1">
+          <item row="9" column="1" colspan="2">
            <widget class="QComboBox" name="normalMapCombo"/>
           </item>
-          <item row="11" column="0">
-           <widget class="QLabel" name="aoMapLabel">
-            <property name="text">
-             <string>AO Map</string>
-            </property>
+
+          <item row="10" column="0">
+           <widget class="QLabel" name="metallicMapLabel">
+            <property name="text"><string>Metallic Map</string></property>
            </widget>
           </item>
-          <item row="11" column="1">
+          <item row="10" column="1" colspan="2">
+           <widget class="QComboBox" name="metallicMapCombo"/>
+          </item>
+
+          <item row="11" column="0">
+           <widget class="QLabel" name="roughnessMapLabel">
+            <property name="text"><string>Roughness Map</string></property>
+           </widget>
+          </item>
+          <item row="11" column="1" colspan="2">
+           <widget class="QComboBox" name="roughnessMapCombo"/>
+          </item>
+
+          <item row="12" column="0">
+           <widget class="QLabel" name="aoMapLabel">
+            <property name="text"><string>AO Map</string></property>
+           </widget>
+          </item>
+          <item row="12" column="1" colspan="2">
            <widget class="QComboBox" name="aoMapCombo"/>
           </item>
-          <item row="12" column="0">
-           <widget class="QLabel" name="emissiveMapLabel">
-            <property name="text">
-             <string>Emissive Map</string>
+
+          <!-- MRAO display-only row (disabled for now) -->
+          <item row="13" column="0">
+           <widget class="QLabel" name="mraoMapLabel">
+            <property name="text"><string>MRAO Map</string></property>
+           </widget>
+          </item>
+          <item row="13" column="1" colspan="2">
+           <widget class="QComboBox" name="mraoMapCombo">
+            <property name="enabled">
+             <bool>false</bool>
             </property>
            </widget>
           </item>
-          <item row="12" column="1">
+
+          <item row="14" column="0">
+           <widget class="QLabel" name="emissiveMapLabel">
+            <property name="text"><string>Emissive Map</string></property>
+           </widget>
+          </item>
+          <item row="14" column="1" colspan="2">
            <widget class="QComboBox" name="emissiveMapCombo"/>
           </item>
+
          </layout>
         </widget>
        </item>
+
+       <!-- Bottom filler with 1px separators -->
        <item>
-        <spacer name="rightBottomSpacer">
-         <property name="orientation">
-          <enum>Qt::Orientation::Vertical</enum>
+        <widget class="QFrame" name="propsFillFrame">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>1</verstretch>
+          </sizepolicy>
          </property>
-         <property name="sizeType">
-          <enum>QSizePolicy::Policy::Expanding</enum>
+         <property name="frameShape">
+          <enum>QFrame::Shape::NoFrame</enum>
          </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>20</width>
-           <height>40</height>
-          </size>
+         <property name="styleSheet">
+          <string notr="true">QFrame#propsFillFrame {
+    background-color: #2b2f36; 
+    border-top: 1px solid #23262c;
+    border-bottom: 1px solid #23262c;
+}</string>
          </property>
-        </spacer>
+        </widget>
        </item>
+
        <item>
         <widget class="QFrame" name="rightFooterFrame">
          <property name="frameShape">
@@ -833,6 +852,7 @@ QListView::item {
          </layout>
         </widget>
        </item>
+
       </layout>
      </widget>
     </widget>

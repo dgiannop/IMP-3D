@@ -2,17 +2,17 @@
 
 #include <cstdint>
 #include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
 #include <string>
+#include <type_traits>
 
-#include "ImageHandler.hpp" // for ImageId
+#include "ImageHandler.hpp" // ImageId, kInvalidImageId
 #include "SysCounter.hpp"
 
 /// \brief PBR-style material used by Scene and GPU.
 ///
-/// This is the high-level CPU-side representation. It is:
+/// High-level CPU-side representation:
 /// - friendly for OBJ / glTF IO,
-/// - easy to convert to a compact GPU struct (MaterialGpu),
+/// - easy to convert to a compact GPU struct,
 /// - referenced by index (materialId) from meshes.
 class Material
 {
@@ -25,16 +25,14 @@ public:
         Blend   ///< Standard alpha blending.
     };
 
-    Material() = default;
+    Material();
     explicit Material(std::string name);
 
     // -----------------------------
     // Identity
     // -----------------------------
-
     const std::string& name() const noexcept;
-
-    void name(const std::string& name);
+    void               name(const std::string& name);
 
     /// Optional stable numeric ID (typically its index in SceneMaterials).
     std::uint32_t id() const noexcept;
@@ -76,7 +74,7 @@ public:
 
     // -----------------------------
     // Texture slots
-    // Indices reference SceneTextures or similar.
+    // Indices reference ImageHandler (or similar).
     // -1 means "no texture".
     // -----------------------------
     ImageId baseColorTexture() const noexcept;
@@ -85,8 +83,19 @@ public:
     ImageId normalTexture() const noexcept;
     void    normalTexture(ImageId id) noexcept;
 
+    /// Optional packed Metallic-Roughness-AO texture (display-only for now).
     ImageId mraoTexture() const noexcept;
     void    mraoTexture(ImageId id) noexcept;
+
+    /// Separate channel maps (preferred UI path for now).
+    ImageId metallicTexture() const noexcept;
+    void    metallicTexture(ImageId id) noexcept;
+
+    ImageId roughnessTexture() const noexcept;
+    void    roughnessTexture(ImageId id) noexcept;
+
+    ImageId aoTexture() const noexcept;
+    void    aoTexture(ImageId id) noexcept;
 
     ImageId emissiveTexture() const noexcept;
     void    emissiveTexture(ImageId id) noexcept;
@@ -105,16 +114,19 @@ public:
     SysCounterPtr changeCounter() const noexcept;
 
 private:
+    void touch() noexcept;
+
+private:
     // Identity
     std::string   m_name;
-    std::uint32_t m_id = 0; ///< Scene-assigned id (index in material array).
+    std::uint32_t m_id = 0;
 
     // Core PBR parameters
     glm::vec3 m_baseColor = {1.f, 1.f, 1.f};
     float     m_opacity   = 1.f;
 
-    glm::vec3 m_emissiveColor     = {0.f, 0.f, 0.f};
-    float     m_emissiveIntensity = 0.f;
+    glm::vec3 m_emissiveColor     = {1.f, 1.f, 1.f}; // white
+    float     m_emissiveIntensity = 0.f;             // off
 
     float m_roughness = 0.5f;
     float m_metallic  = 0.0f;
@@ -123,10 +135,19 @@ private:
     AlphaMode m_alphaMode   = AlphaMode::Opaque;
     bool      m_doubleSided = false;
 
+    // Texture ids
     ImageId m_baseColorTex = kInvalidImageId;
     ImageId m_normalTex    = kInvalidImageId;
-    ImageId m_mraoTex      = kInvalidImageId;
-    ImageId m_emissiveTex  = kInvalidImageId;
+
+    // Packed (optional / transitional)
+    ImageId m_mraoTex = kInvalidImageId;
+
+    // Separate (preferred)
+    ImageId m_metallicTex  = kInvalidImageId;
+    ImageId m_roughnessTex = kInvalidImageId;
+    ImageId m_aoTex        = kInvalidImageId;
+
+    ImageId m_emissiveTex = kInvalidImageId;
 
     SysCounterPtr m_changeCounter;
 };

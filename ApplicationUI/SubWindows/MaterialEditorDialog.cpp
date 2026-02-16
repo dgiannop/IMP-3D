@@ -1,9 +1,10 @@
 #include "MaterialEditorDialog.hpp"
 
 #include <QAbstractButton>
-#include <QAbstractItemView> // NEW
+#include <QAbstractItemView>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QListWidgetItem>
 #include <QSignalBlocker>
@@ -36,9 +37,8 @@ namespace
         if (smax <= smin)
             return fmin;
 
-        v = clamp_int(v, smin, smax);
-
-        const float t = (static_cast<float>(v - smin)) / static_cast<float>(smax - smin);
+        v             = clamp_int(v, smin, smax);
+        const float t = float(v - smin) / float(smax - smin);
         return fmin + (fmax - fmin) * t;
     }
 
@@ -47,12 +47,10 @@ namespace
         if (smax <= smin)
             return smin;
 
-        x = clamp_float(x, fmin, fmax);
-
+        x              = clamp_float(x, fmin, fmax);
         const float t  = (x - fmin) / (fmax - fmin);
-        const float sv = static_cast<float>(smin) + t * static_cast<float>(smax - smin);
-
-        return clamp_int(static_cast<int>(sv + 0.5f), smin, smax);
+        const float sv = float(smin) + t * float(smax - smin);
+        return clamp_int(int(sv + 0.5f), smin, smax);
     }
 
     static float slider_to_01(int v, int smin, int smax) noexcept
@@ -79,18 +77,15 @@ namespace
 
     static QColor to_qcolor(const glm::vec3& c) noexcept
     {
-        const int r = static_cast<int>(std::clamp(c.r, 0.0f, 1.0f) * 255.0f + 0.5f);
-        const int g = static_cast<int>(std::clamp(c.g, 0.0f, 1.0f) * 255.0f + 0.5f);
-        const int b = static_cast<int>(std::clamp(c.b, 0.0f, 1.0f) * 255.0f + 0.5f);
+        const int r = int(std::clamp(c.r, 0.0f, 1.0f) * 255.0f + 0.5f);
+        const int g = int(std::clamp(c.g, 0.0f, 1.0f) * 255.0f + 0.5f);
+        const int b = int(std::clamp(c.b, 0.0f, 1.0f) * 255.0f + 0.5f);
         return QColor(r, g, b);
     }
 
     static glm::vec3 from_qcolor(const QColor& c) noexcept
     {
-        return glm::vec3(
-            static_cast<float>(c.red()) / 255.0f,
-            static_cast<float>(c.green()) / 255.0f,
-            static_cast<float>(c.blue()) / 255.0f);
+        return glm::vec3(float(c.red()) / 255.0f, float(c.green()) / 255.0f, float(c.blue()) / 255.0f);
     }
 
     static void set_button_swatch(QWidget* w, const QColor& c)
@@ -98,12 +93,13 @@ namespace
         if (!w)
             return;
 
-        const QString css = QString("background-color: %1; border: 1px solid rgba(255,255,255,40);")
-                                .arg(c.name(QColor::HexRgb));
+        // Force the button background even if other styles apply.
+        w->setAutoFillBackground(true);
+        const QString css =
+            QString("background-color: %1; border: 1px solid rgba(255,255,255,40);").arg(c.name(QColor::HexRgb));
         w->setStyleSheet(css);
     }
 
-    // NEW: keep row widgets compact, without affecting combobox popups
     static void set_fixed_row_height(QWidget* w, int h)
     {
         if (!w)
@@ -112,13 +108,12 @@ namespace
         w->setMaximumHeight(h);
     }
 
-    // NEW: make combo dropdown show N items before scrolling
     static void tune_combo_popup(QComboBox* cb, int maxVisibleItems)
     {
         if (!cb)
             return;
+
         cb->setMaxVisibleItems(maxVisibleItems);
-        // Avoid any accidental fixed height on the popup view
         if (cb->view())
         {
             cb->view()->setMinimumHeight(0);
@@ -139,9 +134,10 @@ namespace
     static constexpr SliderRange kRoughnessUiRange = {0, 100, 0.0f, 1.0f};
     static constexpr SliderRange kIorRange         = {100, 300, 1.0f, 3.0f};
 
-} // namespace
+    // Emissive intensity: keep it simple for now: 0..2 mapped to 0..200 slider.
+    static constexpr SliderRange kEmissiveIntRange = {0, 200, 0.0f, 2.0f};
 
-// ------------------------------------------------------------
+} // namespace
 
 MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     SubWindowBase(parent),
@@ -152,8 +148,10 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     setWindowTitle("Material Editor");
 
-    setMinimumSize(420, 150);
-    setMaximumSize(900, 700);
+    // Prevent "pic1" shrink: keep a sane minimum when expanded.
+    // Collapsed mode is handled in applyCollapsedState().
+    setMinimumSize(760, 300);
+    setMaximumSize(900, 900);
 
     m_expandedMinSize = minimumSize();
     m_expandedMaxSize = maximumSize();
@@ -186,21 +184,23 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     if (ui->metallicSlider)
         ui->metallicSlider->setRange(kMetallicRange.smin, kMetallicRange.smax);
-
     if (ui->roughnessSlider)
         ui->roughnessSlider->setRange(kRoughnessUiRange.smin, kRoughnessUiRange.smax);
-
     if (ui->opacitySlider)
         ui->opacitySlider->setRange(kOpacityRange.smin, kOpacityRange.smax);
-
     if (ui->iorSlider)
         ui->iorSlider->setRange(kIorRange.smin, kIorRange.smax);
+    if (ui->emissiveIntensitySlider)
+        ui->emissiveIntensitySlider->setRange(kEmissiveIntRange.smin, kEmissiveIntRange.smax);
 
     if (ui->toggleLeftButton)
         connect(ui->toggleLeftButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onToggleLeft);
 
     if (ui->materialList)
-        connect(ui->materialList, &QListWidget::currentItemChanged, this, &MaterialEditorDialog::onMaterialSelectionChanged);
+        connect(ui->materialList,
+                &QListWidget::currentItemChanged,
+                this,
+                &MaterialEditorDialog::onMaterialSelectionChanged);
 
     if (ui->assignButton)
         connect(ui->assignButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onAssignClicked);
@@ -208,25 +208,42 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     if (ui->nameEdit)
         connect(ui->nameEdit, &QLineEdit::editingFinished, this, &MaterialEditorDialog::onNameEdited);
 
+    // Slider -> material
     if (ui->metallicSlider)
         connect(ui->metallicSlider, &QSlider::valueChanged, this, &MaterialEditorDialog::onMetallicChanged);
-
     if (ui->roughnessSlider)
         connect(ui->roughnessSlider, &QSlider::valueChanged, this, &MaterialEditorDialog::onRoughnessChanged);
-
     if (ui->iorSlider)
         connect(ui->iorSlider, &QSlider::valueChanged, this, &MaterialEditorDialog::onIorChanged);
-
     if (ui->opacitySlider)
         connect(ui->opacitySlider, &QSlider::valueChanged, this, &MaterialEditorDialog::onOpacityChanged);
+    if (ui->emissiveIntensitySlider)
+        connect(ui->emissiveIntensitySlider,
+                &QSlider::valueChanged,
+                this,
+                &MaterialEditorDialog::onEmissiveIntensityChanged);
+
+    // Spin -> material
+    if (ui->metallicSpin)
+        connect(ui->metallicSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MaterialEditorDialog::onMetallicSpinChanged);
+    if (ui->roughnessSpin)
+        connect(ui->roughnessSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MaterialEditorDialog::onRoughnessSpinChanged);
+    if (ui->iorSpin)
+        connect(ui->iorSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MaterialEditorDialog::onIorSpinChanged);
+    if (ui->opacitySpin)
+        connect(ui->opacitySpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MaterialEditorDialog::onOpacitySpinChanged);
+    if (ui->emissiveIntensitySpin)
+        connect(ui->emissiveIntensitySpin,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this,
+                &MaterialEditorDialog::onEmissiveIntensitySpinChanged);
 
     if (ui->baseColorPickButton)
         connect(ui->baseColorPickButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onPickBaseColor);
-
     if (ui->emissivePickButton)
         connect(ui->emissivePickButton, &QAbstractButton::clicked, this, &MaterialEditorDialog::onPickEmissive);
 
-    // Populate combos with "None" now; will be rebuilt when Core is available.
+    // Populate combos with "None" now; rebuilt when Core is available.
     initMapCombos();
 
     if (ui->baseMapCombo)
@@ -234,34 +251,66 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     if (ui->normalMapCombo)
         connect(ui->normalMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onNormalMapChanged);
     if (ui->metallicMapCombo)
-        connect(ui->metallicMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onMraoMapChanged);
+        connect(ui->metallicMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onMetallicMapChanged);
     if (ui->roughnessMapCombo)
-        connect(ui->roughnessMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onMraoMapChanged);
+        connect(ui->roughnessMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onRoughnessMapChanged);
     if (ui->aoMapCombo)
-        connect(ui->aoMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onMraoMapChanged);
+        connect(ui->aoMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onAoMapChanged);
     if (ui->emissiveMapCombo)
         connect(ui->emissiveMapCombo, &QComboBox::currentIndexChanged, this, &MaterialEditorDialog::onEmissiveMapChanged);
+
+    // MRAO display combo is disabled; no signal.
 
     m_leftCollapsed    = false;
     m_lastExpandedSize = sizeHint();
 
-    // NEW: Keep the main row widgets at 25px, but DO NOT clamp the combo popup views.
-    // The previous blanket findChildren() approach can accidentally clamp the popup views to 25px too.
-    constexpr int kRowH = 25;
+    constexpr int kRowH  = 25;
+    constexpr int kSpinW = 64;
 
-    // labels
-    set_fixed_row_height(ui->baseMapLabel, kRowH);
-    set_fixed_row_height(ui->metallicMapLabel, kRowH);
-    set_fixed_row_height(ui->roughnessMapLabel, kRowH);
-    set_fixed_row_height(ui->normalMapLabel, kRowH);
-    set_fixed_row_height(ui->aoMapLabel, kRowH);
-    set_fixed_row_height(ui->emissiveMapLabel, kRowH);
-
+    // Fixed row heights
     set_fixed_row_height(ui->nameEdit, kRowH);
     set_fixed_row_height(ui->baseColorPickButton, kRowH);
     set_fixed_row_height(ui->baseColorPreviewButton, kRowH);
     set_fixed_row_height(ui->emissivePickButton, kRowH);
     set_fixed_row_height(ui->emissivePreviewButton, kRowH);
+
+    set_fixed_row_height(ui->metallicSlider, kRowH);
+    set_fixed_row_height(ui->roughnessSlider, kRowH);
+    set_fixed_row_height(ui->iorSlider, kRowH);
+    set_fixed_row_height(ui->opacitySlider, kRowH);
+    set_fixed_row_height(ui->emissiveIntensitySlider, kRowH);
+
+    set_fixed_row_height(ui->metallicSpin, kRowH);
+    set_fixed_row_height(ui->roughnessSpin, kRowH);
+    set_fixed_row_height(ui->iorSpin, kRowH);
+    set_fixed_row_height(ui->opacitySpin, kRowH);
+    set_fixed_row_height(ui->emissiveIntensitySpin, kRowH);
+
+    if (ui->metallicSpin)
+    {
+        ui->metallicSpin->setFixedWidth(kSpinW);
+        ui->metallicSpin->setAlignment(Qt::AlignRight);
+    }
+    if (ui->roughnessSpin)
+    {
+        ui->roughnessSpin->setFixedWidth(kSpinW);
+        ui->roughnessSpin->setAlignment(Qt::AlignRight);
+    }
+    if (ui->iorSpin)
+    {
+        ui->iorSpin->setFixedWidth(kSpinW);
+        ui->iorSpin->setAlignment(Qt::AlignRight);
+    }
+    if (ui->opacitySpin)
+    {
+        ui->opacitySpin->setFixedWidth(kSpinW);
+        ui->opacitySpin->setAlignment(Qt::AlignRight);
+    }
+    if (ui->emissiveIntensitySpin)
+    {
+        ui->emissiveIntensitySpin->setFixedWidth(kSpinW);
+        ui->emissiveIntensitySpin->setAlignment(Qt::AlignRight);
+    }
 
     set_fixed_row_height(ui->baseMapCombo, kRowH);
     set_fixed_row_height(ui->normalMapCombo, kRowH);
@@ -269,20 +318,15 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     set_fixed_row_height(ui->roughnessMapCombo, kRowH);
     set_fixed_row_height(ui->aoMapCombo, kRowH);
     set_fixed_row_height(ui->emissiveMapCombo, kRowH);
+    set_fixed_row_height(ui->mraoMapCombo, kRowH);
 
-    // Keep sliders compact too (optional; comment out if you don't want this)
-    set_fixed_row_height(ui->metallicSlider, kRowH);
-    set_fixed_row_height(ui->roughnessSlider, kRowH);
-    set_fixed_row_height(ui->iorSlider, kRowH);
-    set_fixed_row_height(ui->opacitySlider, kRowH);
-
-    // NEW: make dropdown popups "normal" sized
     tune_combo_popup(ui->baseMapCombo, 12);
     tune_combo_popup(ui->normalMapCombo, 12);
     tune_combo_popup(ui->metallicMapCombo, 12);
     tune_combo_popup(ui->roughnessMapCombo, 12);
     tune_combo_popup(ui->aoMapCombo, 12);
     tune_combo_popup(ui->emissiveMapCombo, 12);
+    tune_combo_popup(ui->mraoMapCombo, 12);
 
     if (ui->materialList)
     {
@@ -293,8 +337,9 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     if (ui->rightPanel)
     {
-        ui->rightPanel->setMinimumWidth(300);
-        ui->rightPanel->setMaximumWidth(300);
+        // Keep it stable: fixed 420 like your original.
+        ui->rightPanel->setMinimumWidth(420);
+        ui->rightPanel->setMaximumWidth(420);
 
         m_rightPanelMinW = ui->rightPanel->minimumWidth();
         m_rightPanelMaxW = ui->rightPanel->maximumWidth();
@@ -302,11 +347,13 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     if (ui->propsGrid)
     {
-        ui->propsGrid->setColumnMinimumWidth(110, 0);
+        // 3 columns: label | slider | spin
+        ui->propsGrid->setColumnMinimumWidth(0, 110);
         ui->propsGrid->setColumnStretch(0, 0);
         ui->propsGrid->setColumnStretch(1, 1);
+        ui->propsGrid->setColumnStretch(2, 0);
 
-        for (int r = 0; r <= 12; ++r)
+        for (int r = 0; r <= 14; ++r)
             ui->propsGrid->setRowMinimumHeight(r, 25);
     }
 }
@@ -315,8 +362,6 @@ MaterialEditorDialog::~MaterialEditorDialog() noexcept
 {
     delete ui;
 }
-
-// ------------------------------------------------------------
 
 void MaterialEditorDialog::idleEvent(Core* core)
 {
@@ -357,6 +402,15 @@ void MaterialEditorDialog::idleEvent(Core* core)
     }
 }
 
+void MaterialEditorDialog::setSpinSilently(QDoubleSpinBox* sp, double v) noexcept
+{
+    if (!sp)
+        return;
+
+    QSignalBlocker b(*sp);
+    sp->setValue(v);
+}
+
 // ------------------------------------------------------------
 // Combo helpers
 // ------------------------------------------------------------
@@ -369,8 +423,7 @@ void MaterialEditorDialog::initMapCombos()
 
         QSignalBlocker block(*cb);
         cb->clear();
-
-        cb->addItem("None", QVariant::fromValue<int>(-1));
+        cb->addItem("None", QVariant::fromValue<int>(kInvalidImageId));
 
         if (!m_core)
             return;
@@ -380,8 +433,8 @@ void MaterialEditorDialog::initMapCombos()
             return;
 
         const auto& imgs = ih->images();
-        for (int32_t i = 0; i < static_cast<int32_t>(imgs.size()); ++i)
-            cb->addItem(QString::fromStdString(imgs[(size_t)i].name()), QVariant::fromValue<int>(i));
+        for (int32_t i = 0; i < int32_t(imgs.size()); ++i)
+            cb->addItem(QString::fromStdString(imgs[size_t(i)].name()), QVariant::fromValue<int>(i));
     };
 
     initCombo(ui->baseMapCombo);
@@ -389,6 +442,7 @@ void MaterialEditorDialog::initMapCombos()
     initCombo(ui->metallicMapCombo);
     initCombo(ui->roughnessMapCombo);
     initCombo(ui->aoMapCombo);
+    initCombo(ui->mraoMapCombo);
     initCombo(ui->emissiveMapCombo);
 }
 
@@ -409,10 +463,8 @@ void MaterialEditorDialog::rebuildMapCombosIfNeeded()
 
     m_lastImagesCounter = v;
 
-    // Rebuild all combos in one place.
     initMapCombos();
 
-    // Re-apply current material selections after repopulating combos.
     const int32_t mid = currentMaterialId();
     if (mid >= 0)
         loadMaterialToUi(mid);
@@ -423,7 +475,7 @@ ImageId MaterialEditorDialog::comboImageId(QComboBox* cb) const noexcept
     if (!cb)
         return kInvalidImageId;
 
-    return static_cast<ImageId>(cb->currentData().toInt());
+    return ImageId(cb->currentData().toInt());
 }
 
 void MaterialEditorDialog::setComboToImageId(QComboBox* cb, ImageId imageId) noexcept
@@ -431,11 +483,11 @@ void MaterialEditorDialog::setComboToImageId(QComboBox* cb, ImageId imageId) noe
     if (!cb)
         return;
 
-    const int index = cb->findData(QVariant::fromValue<int>(static_cast<int>(imageId)));
+    const int index = cb->findData(QVariant::fromValue<int>(int(imageId)));
     if (index >= 0)
         cb->setCurrentIndex(index);
     else
-        cb->setCurrentIndex(0); // fallback to "None"
+        cb->setCurrentIndex(0);
 }
 
 // ------------------------------------------------------------
@@ -464,6 +516,22 @@ int32_t MaterialEditorDialog::currentMaterialId() const noexcept
         return -1;
 
     return it->data(kRoleMaterialId).toInt();
+}
+
+Material* MaterialEditorDialog::currentMaterialMutable() noexcept
+{
+    if (!m_core)
+        return nullptr;
+
+    MaterialEditor* ed = m_core->materialEditor();
+    if (!ed)
+        return nullptr;
+
+    const int32_t id = currentMaterialId();
+    if (id < 0)
+        return nullptr;
+
+    return ed->material(id);
 }
 
 void MaterialEditorDialog::refreshMaterialList()
@@ -539,92 +607,95 @@ void MaterialEditorDialog::loadMaterialToUi(int32_t id)
     const QSignalBlocker b2(ui->roughnessSlider);
     const QSignalBlocker b3(ui->iorSlider);
     const QSignalBlocker b4(ui->opacitySlider);
-    const QSignalBlocker b5(ui->baseMapCombo);
-    const QSignalBlocker b6(ui->normalMapCombo);
-    const QSignalBlocker b7(ui->metallicMapCombo);
-    const QSignalBlocker b8(ui->roughnessMapCombo);
-    const QSignalBlocker b9(ui->aoMapCombo);
-    const QSignalBlocker b10(ui->emissiveMapCombo);
+    const QSignalBlocker b5(ui->emissiveIntensitySlider);
+
+    const QSignalBlocker c0(ui->baseMapCombo);
+    const QSignalBlocker c1(ui->normalMapCombo);
+    const QSignalBlocker c2(ui->metallicMapCombo);
+    const QSignalBlocker c3(ui->roughnessMapCombo);
+    const QSignalBlocker c4(ui->aoMapCombo);
+    const QSignalBlocker c5(ui->mraoMapCombo);
+    const QSignalBlocker c6(ui->emissiveMapCombo);
 
     if (ui->nameEdit)
         ui->nameEdit->setText(QString::fromStdString(m->name()));
 
+    // Metallic
     if (ui->metallicSlider)
     {
-        const int sv = slider_from_float(m->metallic(),
-                                         kMetallicRange.fmin,
-                                         kMetallicRange.fmax,
-                                         kMetallicRange.smin,
-                                         kMetallicRange.smax);
+        const int sv = slider_from_float(m->metallic(), kMetallicRange.fmin, kMetallicRange.fmax, kMetallicRange.smin, kMetallicRange.smax);
         ui->metallicSlider->setValue(sv);
     }
+    setSpinSilently(ui->metallicSpin, double(m->metallic()));
 
+    // Roughness (perceptual)
     if (ui->roughnessSlider)
     {
         const float t  = roughness_to_perceptual(m->roughness());
         const int   sv = slider_from_01(t, kRoughnessUiRange.smin, kRoughnessUiRange.smax);
         ui->roughnessSlider->setValue(sv);
     }
+    setSpinSilently(ui->roughnessSpin, double(m->roughness()));
 
+    // IOR
     if (ui->iorSlider)
     {
-        const int sv = slider_from_float(m->ior(),
-                                         kIorRange.fmin,
-                                         kIorRange.fmax,
-                                         kIorRange.smin,
-                                         kIorRange.smax);
+        const int sv = slider_from_float(m->ior(), kIorRange.fmin, kIorRange.fmax, kIorRange.smin, kIorRange.smax);
         ui->iorSlider->setValue(sv);
     }
+    setSpinSilently(ui->iorSpin, double(m->ior()));
 
+    // Opacity
     if (ui->opacitySlider)
     {
-        const int sv = slider_from_float(m->opacity(),
-                                         kOpacityRange.fmin,
-                                         kOpacityRange.fmax,
-                                         kOpacityRange.smin,
-                                         kOpacityRange.smax);
+        const int sv = slider_from_float(m->opacity(), kOpacityRange.fmin, kOpacityRange.fmax, kOpacityRange.smin, kOpacityRange.smax);
         ui->opacitySlider->setValue(sv);
     }
+    setSpinSilently(ui->opacitySpin, double(m->opacity()));
 
+    // Emissive intensity (if your Material doesn’t have this yet, keep at 0)
+    // If you already have emissiveIntensity() add it here.
+    float emissiveIntensity = 0.0f;
+    if constexpr (requires { m->emissiveIntensity(); })
+        emissiveIntensity = m->emissiveIntensity();
+
+    if (ui->emissiveIntensitySlider)
+    {
+        const int sv = slider_from_float(emissiveIntensity, kEmissiveIntRange.fmin, kEmissiveIntRange.fmax, kEmissiveIntRange.smin, kEmissiveIntRange.smax);
+        ui->emissiveIntensitySlider->setValue(sv);
+    }
+    setSpinSilently(ui->emissiveIntensitySpin, double(emissiveIntensity));
+
+    // Swatches
     if (ui->baseColorPreviewButton)
         set_button_swatch(ui->baseColorPreviewButton, to_qcolor(m->baseColor()));
-
     if (ui->emissivePreviewButton)
         set_button_swatch(ui->emissivePreviewButton, to_qcolor(m->emissiveColor()));
 
     // Textures (None = -1)
     setComboToImageId(ui->baseMapCombo, m->baseColorTexture());
     setComboToImageId(ui->normalMapCombo, m->normalTexture());
-    setComboToImageId(ui->metallicMapCombo, m->mraoTexture());
-    setComboToImageId(ui->roughnessMapCombo, m->mraoTexture());
-    setComboToImageId(ui->aoMapCombo, m->mraoTexture());
+    setComboToImageId(ui->metallicMapCombo, m->metallicTexture());
+    setComboToImageId(ui->roughnessMapCombo, m->roughnessTexture());
+    setComboToImageId(ui->aoMapCombo, m->aoTexture());
     setComboToImageId(ui->emissiveMapCombo, m->emissiveTexture());
+
+    // MRAO display-only (use if exists; otherwise keep None)
+    // If you have mraoTexture(), show it; otherwise leave None.
+    ImageId mraoId = kInvalidImageId;
+    if constexpr (requires { m->mraoTexture(); })
+        mraoId = m->mraoTexture();
+    setComboToImageId(ui->mraoMapCombo, mraoId);
 
     const SysCounterPtr mctr = m->changeCounter();
     m_lastMaterialCounter    = mctr ? mctr->value() : 0;
-}
-
-Material* MaterialEditorDialog::currentMaterialMutable() noexcept
-{
-    if (!m_core)
-        return nullptr;
-
-    MaterialEditor* ed = m_core->materialEditor();
-    if (!ed)
-        return nullptr;
-
-    const int32_t id = currentMaterialId();
-    if (id < 0)
-        return nullptr;
-
-    return ed->material(id);
 }
 
 // ------------------------------------------------------------
 // Signals
 // ------------------------------------------------------------
 
-void MaterialEditorDialog::onMaterialSelectionChanged(QListWidgetItem* current, QListWidgetItem* /*previous*/)
+void MaterialEditorDialog::onMaterialSelectionChanged(QListWidgetItem* current, QListWidgetItem*)
 {
     if (!current)
     {
@@ -656,59 +727,194 @@ void MaterialEditorDialog::onNameEdited()
     m->name(qs.toStdString());
 }
 
+// Slider -> material + spin sync
 void MaterialEditorDialog::onMetallicChanged(int v)
 {
+    if (m_blockSpinSignals)
+        return;
+
     Material* m = currentMaterialMutable();
     if (!m)
         return;
 
-    const float x = slider_to_float(v,
-                                    kMetallicRange.smin,
-                                    kMetallicRange.smax,
-                                    kMetallicRange.fmin,
-                                    kMetallicRange.fmax);
+    const float x = slider_to_float(v, kMetallicRange.smin, kMetallicRange.smax, kMetallicRange.fmin, kMetallicRange.fmax);
     m->metallic(x);
+
+    m_blockSpinSignals = true;
+    setSpinSilently(ui->metallicSpin, double(x));
+    m_blockSpinSignals = false;
 }
 
 void MaterialEditorDialog::onRoughnessChanged(int v)
 {
+    if (m_blockSpinSignals)
+        return;
+
     Material* m = currentMaterialMutable();
     if (!m)
         return;
 
     const float t = slider_to_01(v, kRoughnessUiRange.smin, kRoughnessUiRange.smax);
     const float r = perceptual_to_roughness(t);
-
     m->roughness(r);
+
+    m_blockSpinSignals = true;
+    setSpinSilently(ui->roughnessSpin, double(r));
+    m_blockSpinSignals = false;
 }
 
 void MaterialEditorDialog::onIorChanged(int v)
 {
+    if (m_blockSpinSignals)
+        return;
+
     Material* m = currentMaterialMutable();
     if (!m)
         return;
 
-    const float ior = slider_to_float(v,
-                                      kIorRange.smin,
-                                      kIorRange.smax,
-                                      kIorRange.fmin,
-                                      kIorRange.fmax);
+    const float ior = slider_to_float(v, kIorRange.smin, kIorRange.smax, kIorRange.fmin, kIorRange.fmax);
     m->ior(ior);
+
+    m_blockSpinSignals = true;
+    setSpinSilently(ui->iorSpin, double(ior));
+    m_blockSpinSignals = false;
 }
 
 void MaterialEditorDialog::onOpacityChanged(int v)
 {
+    if (m_blockSpinSignals)
+        return;
+
     Material* m = currentMaterialMutable();
     if (!m)
         return;
 
-    const float x = slider_to_float(v,
-                                    kOpacityRange.smin,
-                                    kOpacityRange.smax,
-                                    kOpacityRange.fmin,
-                                    kOpacityRange.fmax);
+    const float x = slider_to_float(v, kOpacityRange.smin, kOpacityRange.smax, kOpacityRange.fmin, kOpacityRange.fmax);
     m->opacity(x);
+
+    m_blockSpinSignals = true;
+    setSpinSilently(ui->opacitySpin, double(x));
+    m_blockSpinSignals = false;
 }
+
+void MaterialEditorDialog::onEmissiveIntensityChanged(int v)
+{
+    if (m_blockSpinSignals)
+        return;
+
+    Material* m = currentMaterialMutable();
+    if (!m)
+        return;
+
+    const float x = slider_to_float(v, kEmissiveIntRange.smin, kEmissiveIntRange.smax, kEmissiveIntRange.fmin, kEmissiveIntRange.fmax);
+
+    if constexpr (requires { m->emissiveIntensity(x); })
+        m->emissiveIntensity(x);
+
+    m_blockSpinSignals = true;
+    setSpinSilently(ui->emissiveIntensitySpin, double(x));
+    m_blockSpinSignals = false;
+}
+
+// Spin -> material + slider sync
+void MaterialEditorDialog::onMetallicSpinChanged(double v)
+{
+    if (m_blockSpinSignals)
+        return;
+
+    Material* m = currentMaterialMutable();
+    if (!m)
+        return;
+
+    const float x = clamp_float(float(v), 0.0f, 1.0f);
+    m->metallic(x);
+
+    m_blockSpinSignals = true;
+    if (ui->metallicSlider)
+        ui->metallicSlider->setValue(slider_from_float(x, kMetallicRange.fmin, kMetallicRange.fmax, kMetallicRange.smin, kMetallicRange.smax));
+    m_blockSpinSignals = false;
+}
+
+void MaterialEditorDialog::onRoughnessSpinChanged(double v)
+{
+    if (m_blockSpinSignals)
+        return;
+
+    Material* m = currentMaterialMutable();
+    if (!m)
+        return;
+
+    const float r = clamp_float(float(v), 0.0f, 1.0f);
+    m->roughness(r);
+
+    m_blockSpinSignals = true;
+    if (ui->roughnessSlider)
+    {
+        const float t = roughness_to_perceptual(r);
+        ui->roughnessSlider->setValue(slider_from_01(t, kRoughnessUiRange.smin, kRoughnessUiRange.smax));
+    }
+    m_blockSpinSignals = false;
+}
+
+void MaterialEditorDialog::onIorSpinChanged(double v)
+{
+    if (m_blockSpinSignals)
+        return;
+
+    Material* m = currentMaterialMutable();
+    if (!m)
+        return;
+
+    const float x = clamp_float(float(v), 1.0f, 3.0f);
+    m->ior(x);
+
+    m_blockSpinSignals = true;
+    if (ui->iorSlider)
+        ui->iorSlider->setValue(slider_from_float(x, kIorRange.fmin, kIorRange.fmax, kIorRange.smin, kIorRange.smax));
+    m_blockSpinSignals = false;
+}
+
+void MaterialEditorDialog::onOpacitySpinChanged(double v)
+{
+    if (m_blockSpinSignals)
+        return;
+
+    Material* m = currentMaterialMutable();
+    if (!m)
+        return;
+
+    const float x = clamp_float(float(v), 0.0f, 1.0f);
+    m->opacity(x);
+
+    m_blockSpinSignals = true;
+    if (ui->opacitySlider)
+        ui->opacitySlider->setValue(slider_from_float(x, kOpacityRange.fmin, kOpacityRange.fmax, kOpacityRange.smin, kOpacityRange.smax));
+    m_blockSpinSignals = false;
+}
+
+void MaterialEditorDialog::onEmissiveIntensitySpinChanged(double v)
+{
+    if (m_blockSpinSignals)
+        return;
+
+    Material* m = currentMaterialMutable();
+    if (!m)
+        return;
+
+    const float x = clamp_float(float(v), 0.0f, 2.0f);
+
+    if constexpr (requires { m->emissiveIntensity(x); })
+        m->emissiveIntensity(x);
+
+    m_blockSpinSignals = true;
+    if (ui->emissiveIntensitySlider)
+        ui->emissiveIntensitySlider->setValue(slider_from_float(x, kEmissiveIntRange.fmin, kEmissiveIntRange.fmax, kEmissiveIntRange.smin, kEmissiveIntRange.smax));
+    m_blockSpinSignals = false;
+}
+
+// ------------------------------------------------------------
+// Color pickers
+// ------------------------------------------------------------
 
 void MaterialEditorDialog::onPickBaseColor()
 {
@@ -737,6 +943,8 @@ void MaterialEditorDialog::onPickEmissive()
         return;
 
     m->emissiveColor(from_qcolor(c));
+
+    // This is the part you were missing behavior-wise: force the swatch update.
     set_button_swatch(ui->emissivePreviewButton, c);
 }
 
@@ -762,34 +970,31 @@ void MaterialEditorDialog::onNormalMapChanged(int)
     m->normalTexture(comboImageId(ui->normalMapCombo));
 }
 
-void MaterialEditorDialog::onMraoMapChanged(int)
+void MaterialEditorDialog::onMetallicMapChanged(int)
 {
     Material* m = currentMaterialMutable();
     if (!m || !ui)
         return;
 
-    // All three UI combos represent the single Material::mraoTexture() slot.
-    // Use whichever combo currently isn't "None", otherwise keep "None".
-    const ImageId idM = comboImageId(ui->metallicMapCombo);
-    const ImageId idR = comboImageId(ui->roughnessMapCombo);
-    const ImageId idA = comboImageId(ui->aoMapCombo);
+    m->metallicTexture(comboImageId(ui->metallicMapCombo));
+}
 
-    ImageId chosen = idM;
-    if (chosen == kInvalidImageId)
-        chosen = idR;
-    if (chosen == kInvalidImageId)
-        chosen = idA;
+void MaterialEditorDialog::onRoughnessMapChanged(int)
+{
+    Material* m = currentMaterialMutable();
+    if (!m || !ui)
+        return;
 
-    m->mraoTexture(chosen);
+    m->roughnessTexture(comboImageId(ui->roughnessMapCombo));
+}
 
-    // Keep the UI consistent.
-    const QSignalBlocker b0(ui->metallicMapCombo);
-    const QSignalBlocker b1(ui->roughnessMapCombo);
-    const QSignalBlocker b2(ui->aoMapCombo);
+void MaterialEditorDialog::onAoMapChanged(int)
+{
+    Material* m = currentMaterialMutable();
+    if (!m || !ui)
+        return;
 
-    setComboToImageId(ui->metallicMapCombo, chosen);
-    setComboToImageId(ui->roughnessMapCombo, chosen);
-    setComboToImageId(ui->aoMapCombo, chosen);
+    m->aoTexture(comboImageId(ui->aoMapCombo));
 }
 
 void MaterialEditorDialog::onEmissiveMapChanged(int)
@@ -837,13 +1042,14 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
             sizes.push_back((i == m_rightIndex) ? 1 : 0);
         ui->splitterMain->setSizes(sizes);
 
+        // Allow smaller collapsed width.
         const int marginW =
             (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) +
             (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
 
         const int newW = ui->rightPanel->sizeHint().width() + marginW + 2;
-        setFixedWidth(std::max(newW, minimumSizeHint().width()));
-        resize(width(), height());
+        setMinimumWidth(newW);
+        resize(std::max(newW, minimumSizeHint().width()), height());
     }
     else
     {
@@ -853,13 +1059,14 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
         ui->rightPanel->setMaximumWidth(m_rightPanelMaxW);
         ui->rightPanel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
 
+        // Restore expanded minimum so we don't get "pic1".
         setMinimumSize(m_expandedMinSize);
         setMaximumSize(m_expandedMaxSize);
 
         const int rightW = ui->rightPanel->maximumWidth();
 
-        if (m_lastExpandedSize.width() < rightW + 100)
-            m_lastExpandedSize.setWidth(rightW + 180);
+        if (m_lastExpandedSize.width() < rightW + 220)
+            m_lastExpandedSize.setWidth(rightW + 340);
         if (m_lastExpandedSize.height() < minimumHeight())
             m_lastExpandedSize.setHeight(minimumHeight());
 
