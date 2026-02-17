@@ -88,13 +88,13 @@ namespace
         return glm::vec3(float(c.red()) / 255.0f, float(c.green()) / 255.0f, float(c.blue()) / 255.0f);
     }
 
-    static void set_button_swatch(QWidget* w, const QColor& c)
+    static void set_swatch(QWidget* w, const QColor& c)
     {
         if (!w)
             return;
 
-        // Force the button background even if other styles apply.
-        w->setAutoFillBackground(true);
+        // For QFrame/QWidget swatches: stylesheet is deterministic.
+        // Avoid setAutoFillBackground() / palettes; they interact poorly with QSS.
         const QString css =
             QString("background-color: %1; border: 1px solid rgba(255,255,255,40);").arg(c.name(QColor::HexRgb));
         w->setStyleSheet(css);
@@ -150,7 +150,7 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     // Prevent "pic1" shrink: keep a sane minimum when expanded.
     // Collapsed mode is handled in applyCollapsedState().
-    setMinimumSize(760, 300);
+    setMinimumSize(760, 480);
     setMaximumSize(900, 900);
 
     m_expandedMinSize = minimumSize();
@@ -270,9 +270,9 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
     // Fixed row heights
     set_fixed_row_height(ui->nameEdit, kRowH);
     set_fixed_row_height(ui->baseColorPickButton, kRowH);
-    set_fixed_row_height(ui->baseColorPreviewButton, kRowH);
+    set_fixed_row_height(ui->baseColorSwatch, kRowH);
     set_fixed_row_height(ui->emissivePickButton, kRowH);
-    set_fixed_row_height(ui->emissivePreviewButton, kRowH);
+    set_fixed_row_height(ui->emissiveSwatch, kRowH);
 
     set_fixed_row_height(ui->metallicSlider, kRowH);
     set_fixed_row_height(ui->roughnessSlider, kRowH);
@@ -667,10 +667,10 @@ void MaterialEditorDialog::loadMaterialToUi(int32_t id)
     setSpinSilently(ui->emissiveIntensitySpin, double(emissiveIntensity));
 
     // Swatches
-    if (ui->baseColorPreviewButton)
-        set_button_swatch(ui->baseColorPreviewButton, to_qcolor(m->baseColor()));
-    if (ui->emissivePreviewButton)
-        set_button_swatch(ui->emissivePreviewButton, to_qcolor(m->emissiveColor()));
+    if (ui->baseColorSwatch)
+        set_swatch(ui->baseColorSwatch, to_qcolor(m->baseColor()));
+    if (ui->emissiveSwatch)
+        set_swatch(ui->emissiveSwatch, to_qcolor(m->emissiveColor()));
 
     // Textures (None = -1)
     setComboToImageId(ui->baseMapCombo, m->baseColorTexture());
@@ -919,7 +919,7 @@ void MaterialEditorDialog::onEmissiveIntensitySpinChanged(double v)
 void MaterialEditorDialog::onPickBaseColor()
 {
     Material* m = currentMaterialMutable();
-    if (!m || !ui || !ui->baseColorPreviewButton)
+    if (!m || !ui || !ui->baseColorSwatch)
         return;
 
     const QColor start = to_qcolor(m->baseColor());
@@ -928,13 +928,13 @@ void MaterialEditorDialog::onPickBaseColor()
         return;
 
     m->baseColor(from_qcolor(c));
-    set_button_swatch(ui->baseColorPreviewButton, c);
+    set_swatch(ui->baseColorSwatch, c);
 }
 
 void MaterialEditorDialog::onPickEmissive()
 {
     Material* m = currentMaterialMutable();
-    if (!m || !ui || !ui->emissivePreviewButton)
+    if (!m || !ui || !ui->emissiveSwatch)
         return;
 
     const QColor start = to_qcolor(m->emissiveColor());
@@ -944,8 +944,7 @@ void MaterialEditorDialog::onPickEmissive()
 
     m->emissiveColor(from_qcolor(c));
 
-    // This is the part you were missing behavior-wise: force the swatch update.
-    set_button_swatch(ui->emissivePreviewButton, c);
+    set_swatch(ui->emissiveSwatch, c);
 }
 
 // ------------------------------------------------------------
@@ -1032,24 +1031,37 @@ void MaterialEditorDialog::applyCollapsedState(bool collapsed, bool force)
     {
         ui->leftPanel->setVisible(false);
 
-        ui->rightPanel->setMinimumWidth(0);
-        ui->rightPanel->setMaximumWidth(QWIDGETSIZE_MAX);
-        ui->rightPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        // Keep right panel fixed-width even when left is hidden (old behavior).
+        ui->rightPanel->setMinimumWidth(m_rightPanelMinW);
+        ui->rightPanel->setMaximumWidth(m_rightPanelMaxW);
+        ui->rightPanel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+
+        // Force splitter to give everything to the right panel.
+        const int rightFixedW = ui->rightPanel->maximumWidth();
 
         QList<int> sizes;
         sizes.reserve(ui->splitterMain->count());
         for (int i = 0; i < ui->splitterMain->count(); ++i)
-            sizes.push_back((i == m_rightIndex) ? 1 : 0);
+        {
+            if (i == m_leftIndex)
+                sizes.push_back(0);
+            else if (i == m_rightIndex)
+                sizes.push_back(rightFixedW);
+            else
+                sizes.push_back(0);
+        }
         ui->splitterMain->setSizes(sizes);
 
-        // Allow smaller collapsed width.
+        // Snap dialog width to exactly the right panel width (+ margins).
         const int marginW =
             (layout() ? (layout()->contentsMargins().left() + layout()->contentsMargins().right()) : 0) +
             (ui->splitterMain ? (ui->splitterMain->contentsMargins().left() + ui->splitterMain->contentsMargins().right()) : 0);
 
-        const int newW = ui->rightPanel->sizeHint().width() + marginW + 2;
+        const int newW = rightFixedW + marginW + 2;
+
         setMinimumWidth(newW);
-        resize(std::max(newW, minimumSizeHint().width()), height());
+        setMaximumWidth(newW);
+        resize(newW, height());
     }
     else
     {
