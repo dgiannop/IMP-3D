@@ -55,6 +55,9 @@ private:
     std::vector<TextureEntry> m_entries;
     Core*                     m_core            = nullptr;
     int32_t                   m_selectedImageId = -1;
+
+    uint64_t m_lastSceneStamp    = ~0ull;
+    uint64_t m_lastImagesCounter = ~0ull;
 };
 
 #endif // TEXTUREEDITORDIALOG_HPP

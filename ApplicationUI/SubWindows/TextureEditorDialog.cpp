@@ -100,15 +100,28 @@ void TextureEditorDialog::idleEvent(Core* core)
     if (!core)
         return;
 
-    if (!m_core)
-        m_core = core;
+    m_core = core;
 
-    static uint64_t s_lastStamp = 0;
-    const uint64_t  stamp       = core->sceneContentChangeStamp();
-
-    if (stamp != s_lastStamp)
+    // 1) Rebuild when ImageHandler content changes (load/clear/etc).
+    if (ImageHandler* ih = core->imageHandler())
     {
-        s_lastStamp = stamp;
+        const SysCounterPtr ctr = ih->changeCounter();
+        const uint64_t      v   = ctr ? ctr->value() : 0ull;
+
+        if (v != m_lastImagesCounter)
+        {
+            m_lastImagesCounter = v;
+            rebuildTextureList(core);
+            refreshTextureDetails(core);
+            return; // avoid double work this frame
+        }
+    }
+
+    // 2) Keep your scene-stamp path for scene-driven stuff (e.g. future “Used By”)
+    const uint64_t stamp = core->sceneContentChangeStamp();
+    if (stamp != m_lastSceneStamp)
+    {
+        m_lastSceneStamp = stamp;
         rebuildTextureList(core);
         refreshTextureDetails(core);
     }

@@ -1,16 +1,17 @@
-#ifndef LOADTEXTUREDIALOG_HPP
-#define LOADTEXTUREDIALOG_HPP
+#pragma once
 
 #include <QString>
 
 #include "SubWindowBase.hpp"
+
+class Core;
 
 namespace Ui
 {
     class LoadTextureDialog;
 } // namespace Ui
 
-class LoadTextureDialog final : public SubWindowBase
+class LoadTextureDialog : public SubWindowBase
 {
     Q_OBJECT
 
@@ -18,10 +19,13 @@ public:
     explicit LoadTextureDialog(QWidget* parent = nullptr);
     ~LoadTextureDialog() noexcept override;
 
-    void idleEvent(class Core* core) override;
+    void idleEvent(Core* core) override;
 
     QString filePath() const;
     QString displayName() const;
+
+    // New: what got loaded (valid after accept()).
+    ImageId loadedImageId() const noexcept { return m_loadedId; }
 
 private slots:
     void onBrowse();
@@ -30,9 +34,8 @@ private slots:
     void onFileEdited(const QString& text);
 
 private:
-    Ui::LoadTextureDialog* ui = nullptr;
+    Ui::LoadTextureDialog* ui     = nullptr;
+    Core*                  m_core = nullptr;
 
-    Core* m_core = nullptr;
+    ImageId m_loadedId = kInvalidImageId;
 };
-
-#endif // LOADTEXTUREDIALOG_HPP

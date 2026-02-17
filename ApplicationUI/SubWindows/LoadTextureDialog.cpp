@@ -1,11 +1,11 @@
-//============================================================
-// LoadTextureDialog.cpp  (STUB - OPENS WINDOW)
-//============================================================
+// LoadTextureDialog.cpp
 #include "LoadTextureDialog.hpp"
 
 #include <QFileDialog>
 #include <QFileInfo>
 
+#include "Core.hpp"
+#include "ImageHandler.hpp"
 #include "SubWindows/ui_LoadTextureDialog.h"
 
 LoadTextureDialog::LoadTextureDialog(QWidget* parent) : SubWindowBase(parent)
@@ -27,11 +27,7 @@ LoadTextureDialog::~LoadTextureDialog() noexcept
 
 void LoadTextureDialog::idleEvent(Core* core)
 {
-    // STUB: keep pointer for later use (loading via core)
-    if (!m_core)
-    {
-        m_core = core;
-    }
+    m_core = core;
 }
 
 QString LoadTextureDialog::filePath() const
@@ -53,9 +49,7 @@ void LoadTextureDialog::onBrowse()
         "Images (*.png *.jpg *.jpeg *.tga *.bmp *.hdr *.exr);;All Files (*.*)");
 
     if (file.isEmpty())
-    {
         return;
-    }
 
     ui->fileLineEdit->setText(file);
 
@@ -68,10 +62,42 @@ void LoadTextureDialog::onBrowse()
 
 void LoadTextureDialog::onLoad()
 {
-    // STUB: accept if file path exists (non-empty)
-    if (ui->fileLineEdit->text().isEmpty())
-    {
+    if (!m_core)
         return;
+
+    ImageHandler* ih = m_core->imageHandler();
+    if (!ih)
+        return;
+
+    const QString qpath = ui->fileLineEdit->text().trimmed();
+    if (qpath.isEmpty())
+        return;
+
+    const QFileInfo fi(qpath);
+    if (!fi.exists() || !fi.isFile())
+        return;
+
+    const std::filesystem::path path = fi.absoluteFilePath().toStdString();
+
+    // Load (reuses if already loaded).
+    const ImageId id = ih->loadFromFile(path, /*flipY=*/true);
+    if (id == kInvalidImageId)
+        return;
+
+    m_loadedId = id;
+
+    // Optional: apply user display name if your Image supports renaming.
+    const QString qname = ui->nameLineEdit->text().trimmed();
+    if (!qname.isEmpty())
+    {
+        if (Image* img = ih->get(id))
+        {
+            // If Image has a setter like: void name(const std::string&)
+            if constexpr (requires(Image* i) { i->setName(std::string{}); })
+            {
+                img->setName(qname.toStdString());
+            }
+        }
     }
 
     accept();
@@ -84,15 +110,10 @@ void LoadTextureDialog::onCancel()
 
 void LoadTextureDialog::onFileEdited(const QString& text)
 {
-    // STUB: auto-fill name if empty
     if (!ui->nameLineEdit->text().isEmpty())
-    {
         return;
-    }
 
     QFileInfo fi(text);
     if (fi.exists())
-    {
         ui->nameLineEdit->setText(fi.completeBaseName());
-    }
 }

@@ -90,14 +90,26 @@ namespace
 
     static void set_swatch(QWidget* w, const QColor& c)
     {
+        // if (!w)
+        //     return;
+
+        // // For QFrame/QWidget swatches: stylesheet is deterministic.
+        // // Avoid setAutoFillBackground() / palettes; they interact poorly with QSS.
+        // const QString css =
+        //     QString("background-color: %1; border: 1px solid rgba(255,255,255,40);").arg(c.name(QColor::HexRgb));
+        // w->setStyleSheet(css);
         if (!w)
             return;
 
-        // For QFrame/QWidget swatches: stylesheet is deterministic.
-        // Avoid setAutoFillBackground() / palettes; they interact poorly with QSS.
-        const QString css =
-            QString("background-color: %1; border: 1px solid rgba(255,255,255,40);").arg(c.name(QColor::HexRgb));
-        w->setStyleSheet(css);
+        w->setAutoFillBackground(true);
+
+        QPalette pal = w->palette();
+        pal.setColor(QPalette::Button, c);
+        pal.setColor(QPalette::Window, c);
+        w->setPalette(pal);
+
+        // Important: stop injecting per-widget border lines.
+        w->setStyleSheet(QString("background-color: %1; border: none;").arg(c.name(QColor::HexRgb)));
     }
 
     static void set_fixed_row_height(QWidget* w, int h)
@@ -653,17 +665,18 @@ void MaterialEditorDialog::loadMaterialToUi(int32_t id)
     }
     setSpinSilently(ui->opacitySpin, double(m->opacity()));
 
-    // Emissive intensity (if your Material doesn’t have this yet, keep at 0)
-    // If you already have emissiveIntensity() add it here.
-    float emissiveIntensity = 0.0f;
-    if constexpr (requires { m->emissiveIntensity(); })
-        emissiveIntensity = m->emissiveIntensity();
+    const float emissiveIntensity = m->emissiveIntensity();
 
     if (ui->emissiveIntensitySlider)
     {
-        const int sv = slider_from_float(emissiveIntensity, kEmissiveIntRange.fmin, kEmissiveIntRange.fmax, kEmissiveIntRange.smin, kEmissiveIntRange.smax);
+        const int sv = slider_from_float(emissiveIntensity,
+                                         kEmissiveIntRange.fmin,
+                                         kEmissiveIntRange.fmax,
+                                         kEmissiveIntRange.smin,
+                                         kEmissiveIntRange.smax);
         ui->emissiveIntensitySlider->setValue(sv);
     }
+
     setSpinSilently(ui->emissiveIntensitySpin, double(emissiveIntensity));
 
     // Swatches
@@ -808,8 +821,7 @@ void MaterialEditorDialog::onEmissiveIntensityChanged(int v)
 
     const float x = slider_to_float(v, kEmissiveIntRange.smin, kEmissiveIntRange.smax, kEmissiveIntRange.fmin, kEmissiveIntRange.fmax);
 
-    if constexpr (requires { m->emissiveIntensity(x); })
-        m->emissiveIntensity(x);
+    m->emissiveIntensity(x);
 
     m_blockSpinSignals = true;
     setSpinSilently(ui->emissiveIntensitySpin, double(x));
@@ -903,8 +915,7 @@ void MaterialEditorDialog::onEmissiveIntensitySpinChanged(double v)
 
     const float x = clamp_float(float(v), 0.0f, 2.0f);
 
-    if constexpr (requires { m->emissiveIntensity(x); })
-        m->emissiveIntensity(x);
+    m->emissiveIntensity(x);
 
     m_blockSpinSignals = true;
     if (ui->emissiveIntensitySlider)

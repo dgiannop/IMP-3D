@@ -26,12 +26,10 @@ Scene::Scene() :
     m_contentChangeCounter{std::make_shared<SysCounter>()},
     m_lightHandler{std::make_unique<LightHandler>()}
 {
-    m_materialHandler->changeCounter()->addParent(m_sceneChangeCounter);
-    m_imageHandler->changeCounter()->addParent(m_sceneChangeCounter);
     m_contentChangeCounter->addParent(m_sceneChangeCounter);
-
-    if (m_lightHandler)
-        m_lightHandler->changeCounter()->addParent(m_sceneChangeCounter);
+    m_materialHandler->changeCounter()->addParent(m_contentChangeCounter);
+    m_imageHandler->changeCounter()->addParent(m_contentChangeCounter);
+    m_lightHandler->changeCounter()->addParent(m_contentChangeCounter);
 
     // Ensure default material at index 0.
     m_materialHandler->createMaterial("Default");
@@ -80,11 +78,10 @@ void Scene::clear()
     history().clear();
 
     m_sceneObjects.clear();
-
     m_materialHandler->clear();
-
-    if (m_lightHandler)
-        m_lightHandler->clear();
+    m_lightHandler->clear();
+    m_imageHandler->clear();
+    m_textureHandler->destroyAll();
 
     // Ensure default material at index 0.
     m_materialHandler->createMaterial("Default");
