@@ -21,6 +21,7 @@
    <string notr="true">/*background-color: rgb(25, 25, 26);*/
 background-color: rgb(24, 24, 25);</string>
   </property>
+
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
     <string notr="true">QPushButton {
@@ -57,11 +58,9 @@ QLabel {
 	color: rgb(92, 102, 113); /*#57616c;*/
 	font-weight: 550;
 	padding: 5px 0px;
-}
-
-
-</string>
+}</string>
    </property>
+
    <layout class="QGridLayout" name="gridLayout">
     <property name="leftMargin">
      <number>0</number>
@@ -78,16 +77,19 @@ QLabel {
     <property name="spacing">
      <number>0</number>
     </property>
+
     <item row="0" column="0">
      <layout class="QHBoxLayout" name="horizontalLayout">
       <property name="spacing">
        <number>1</number>
       </property>
+
       <item>
        <layout class="QVBoxLayout" name="leftVerticalLayout">
         <property name="spacing">
          <number>1</number>
         </property>
+
         <item>
          <spacer name="leftHorizontalSpacer">
           <property name="orientation">
@@ -104,6 +106,7 @@ QLabel {
           </property>
          </spacer>
         </item>
+
         <item>
          <widget class="QLabel" name="LogoLabel">
           <property name="sizePolicy">
@@ -147,6 +150,7 @@ margin: 0px;</string>
           </property>
          </widget>
         </item>
+
         <item>
          <widget class="QLabel" name="lblSelection">
           <property name="maximumSize">
@@ -160,6 +164,7 @@ margin: 0px;</string>
           </property>
          </widget>
         </item>
+
         <item>
          <widget class="QPushButton" name="btnSelPoints">
           <property name="minimumSize">
@@ -181,8 +186,7 @@ margin: 0px;</string>
     padding-left: 5px;
     font-size: 9pt; 
     margin: 0px 0px;
-}
-</string>
+}</string>
           </property>
           <property name="text">
            <string>Points</string>
@@ -195,6 +199,7 @@ margin: 0px;</string>
           </attribute>
          </widget>
         </item>
+
         <item>
          <widget class="QPushButton" name="btnSelEdges">
           <property name="minimumSize">
@@ -216,8 +221,7 @@ margin: 0px;</string>
     padding-left: 5px;
     font-size: 9pt; 
     margin: 0px 0px;
-}
-</string>
+}</string>
           </property>
           <property name="text">
            <string>Edges</string>
@@ -230,6 +234,7 @@ margin: 0px;</string>
           </attribute>
          </widget>
         </item>
+
         <item>
          <widget class="QPushButton" name="btnSelPolys">
           <property name="minimumSize">
@@ -251,8 +256,7 @@ margin: 0px;</string>
     padding-left: 5px;
     font-size: 9pt; 
     margin: 0px 0px;
-}
-</string>
+}</string>
           </property>
           <property name="text">
            <string>Polygons</string>
@@ -265,6 +269,7 @@ margin: 0px;</string>
           </attribute>
          </widget>
         </item>
+
         <item>
          <widget class="QPushButton" name="btnSelObjects">
           <property name="minimumSize">
@@ -286,8 +291,7 @@ margin: 0px;</string>
     padding-left: 5px;
     font-size: 9pt; 
     margin: 0px 0px;
-}
-</string>
+}</string>
           </property>
           <property name="text">
            <string>Objects</string>
@@ -300,6 +304,7 @@ margin: 0px;</string>
           </attribute>
          </widget>
         </item>
+
         <item>
          <widget class="MenuStackedWidget" name="stackedWidget">
           <property name="sizePolicy">
@@ -345,6 +350,7 @@ QPushButton:pressed {
           </property>
          </widget>
         </item>
+
         <item>
          <widget class="QWidget" name="widget" native="true">
           <property name="sizePolicy">
@@ -358,6 +364,7 @@ QPushButton:pressed {
           </property>
          </widget>
         </item>
+
         <item>
          <layout class="QHBoxLayout" name="layoutMatEditorRow">
           <property name="spacing">
@@ -450,6 +457,7 @@ QPushButton:hover {
           </item>
          </layout>
         </item>
+
         <item>
          <layout class="QHBoxLayout" name="layoutTexEditorRow">
           <property name="spacing">
@@ -542,6 +550,7 @@ QPushButton:hover {
           </item>
          </layout>
         </item>
+
         <item>
          <layout class="QHBoxLayout" name="layoutLightEditorRow">
           <property name="spacing">
@@ -634,6 +643,10 @@ background-color: rgb(35, 35, 36);
           </item>
          </layout>
         </item>
+
+        <!-- =========================================================
+             BottomLeftWidget FIX: use layout instead of absolute geometry
+             ========================================================= -->
         <item>
          <widget class="QWidget" name="BottomLeftWidget" native="true">
           <property name="sizePolicy">
@@ -651,36 +664,64 @@ background-color: rgb(35, 35, 36);
           <property name="maximumSize">
            <size>
             <width>120</width>
-            <height>24</height>
+            <height>25</height>
            </size>
           </property>
           <property name="styleSheet">
            <string notr="true">background-color: rgb(38, 38, 40);
 </string>
           </property>
-          <widget class="QPushButton" name="btnShowGrid">
-           <property name="geometry">
-            <rect>
-             <x>90</x>
-             <y>1</y>
-             <width>26</width>
-             <height>24</height>
-            </rect>
+
+          <layout class="QHBoxLayout" name="bottomLeftLayout">
+           <property name="spacing">
+            <number>0</number>
            </property>
-           <property name="minimumSize">
-            <size>
-             <width>26</width>
-             <height>24</height>
-            </size>
+           <property name="leftMargin">
+            <number>0</number>
            </property>
-           <property name="maximumSize">
-            <size>
-             <width>26</width>
-             <height>24</height>
-            </size>
+           <property name="topMargin">
+            <number>1</number>
            </property>
-           <property name="styleSheet">
-            <string notr="true">QPushButton {
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+
+           <item>
+            <spacer name="bottomLeftStretch">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+             <property name="sizeType">
+              <enum>QSizePolicy::Policy::Expanding</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>1</width>
+               <height>1</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+
+           <item>
+            <widget class="QPushButton" name="btnShowGrid">
+             <property name="minimumSize">
+              <size>
+               <width>26</width>
+               <height>24</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>26</width>
+               <height>24</height>
+              </size>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QPushButton {
     background-color: rgb(35, 35, 37);
     border: none; 
     color: rgb(117, 127, 138); /*#57616c;*/ 
@@ -704,30 +745,37 @@ QPushButton:checked {
     background-color: rgba(68, 93, 132, 110);
     color: white; /* #a4b0bd;*/
 }</string>
-           </property>
-           <property name="text">
-            <string/>
-           </property>
-           <property name="icon">
-            <iconset resource="Resources.qrc">
-             <normaloff>:/images/grid64.png</normaloff>:/images/grid64.png</iconset>
-           </property>
-           <property name="checkable">
-            <bool>true</bool>
-           </property>
-           <property name="checked">
-            <bool>false</bool>
-           </property>
-          </widget>
+             </property>
+             <property name="text">
+              <string/>
+             </property>
+             <property name="icon">
+              <iconset resource="Resources.qrc">
+               <normaloff>:/images/grid64.png</normaloff>:/images/grid64.png</iconset>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+             <property name="checked">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+
+          </layout>
          </widget>
         </item>
+        <!-- ========================================================= -->
+
        </layout>
       </item>
+
       <item>
        <layout class="QVBoxLayout" name="mainVerticalLayout">
         <property name="spacing">
          <number>1</number>
         </property>
+
         <item>
          <layout class="QHBoxLayout" name="topMenuLayout">
           <property name="spacing">
@@ -912,6 +960,7 @@ QPushButton:checked {
           </item>
          </layout>
         </item>
+
         <item>
          <widget class="QWidget" name="mainWidget" native="true">
           <property name="sizePolicy">
@@ -922,6 +971,7 @@ QPushButton:checked {
           </property>
          </widget>
         </item>
+
         <item>
          <layout class="QHBoxLayout" name="bottomMenuLayout">
           <property name="spacing">
@@ -1121,6 +1171,7 @@ QPushButton:checked {
           </item>
          </layout>
         </item>
+
         <item>
          <spacer name="mainHorizontalSpacer">
           <property name="orientation">
@@ -1134,12 +1185,16 @@ QPushButton:checked {
           </property>
          </spacer>
         </item>
+
        </layout>
       </item>
+
      </layout>
     </item>
+
    </layout>
   </widget>
+
   <widget class="QMenuBar" name="menubar">
    <property name="geometry">
     <rect>
@@ -1245,6 +1300,7 @@ QPushButton:checked {
    <addaction name="menuView"/>
    <addaction name="menuTools"/>
   </widget>
+
   <action name="actionNew">
    <property name="text">
     <string>New</string>
@@ -1473,7 +1529,9 @@ QPushButton:checked {
     <string>Lighting Settings</string>
    </property>
   </action>
+
  </widget>
+
  <customwidgets>
   <customwidget>
    <class>MenuStackedWidget</class>
@@ -1482,9 +1540,11 @@ QPushButton:checked {
    <container>1</container>
   </customwidget>
  </customwidgets>
+
  <resources>
   <include location="Resources.qrc"/>
  </resources>
+
  <connections/>
  <buttongroups>
   <buttongroup name="topMenuButtonGroup"/>
