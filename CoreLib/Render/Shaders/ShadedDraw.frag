@@ -1,14 +1,21 @@
 //==============================================================
-// ShadedDraw.frag  (WORLD-space shading to match SOLID world mode)
+// ShadedDraw.frag  (WORLD-space shading; WORLD-space lights)
 // - Assumes swapchain/target is SRGB: DO NOT gamma-encode here.
-// - Uses a modest "studio" environment + conservative IBL energy.
-// - Directional lights are WORLD-space (dir_range.xyz = forward world).
-// - Point/spot lights are TEMPORARILY treated as VIEW-space (from your current C++ builder),
-//   and converted to WORLD for BRDF evaluation.
+// - Lights UBO conventions MATCH RT:
+//
+//   Directional:
+//     * dir_range.xyz = forward direction the light points toward (WORLD)
+//     * surface->light (WORLD) = -forward
+//
+//   Point/Spot:
+//     * pos_type.xyz  = position in WORLD space
+//     * dir_range.xyz = forward direction in WORLD space (spot)
+//     * dir_range.w   = range
+//     * spot_params.x = innerCos
+//     * spot_params.y = outerCos
 //==============================================================
 #version 450
 
-// Match ShadedDraw.vert (WORLD outputs)
 layout(location = 0) in vec3 posW;             // world-space position
 layout(location = 1) in vec3 nrmW;             // world-space normal
 layout(location = 2) in vec2 vUv;
@@ -17,7 +24,7 @@ layout(location = 3) flat in int vMaterialId;
 layout(location = 0) out vec4 fragColor;
 
 // ============================================================
-// Camera UBO (needed for camPos + view/invView conversions)
+// Camera UBO (world camPos)
 // ============================================================
 layout(set = 0, binding = 0, std140) uniform CameraUBO
 {
@@ -39,7 +46,7 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 // ============================================================
 struct GpuMaterial
 {
-    vec3  baseColor;           // EXPECTED LINEAR. If authored sRGB, convert on CPU.
+    vec3  baseColor;           // linear
     float opacity;
 
     vec3  emissiveColor;       // linear
@@ -53,7 +60,7 @@ struct GpuMaterial
     int baseColorTexture;      // sRGB texture recommended
     int normalTexture;         // linear
     int mraoTexture;           // linear (R=AO, G=rough, B=metal)
-    int emissiveTexture;       // sRGB if you want artist-friendly emissive colors
+    int emissiveTexture;       // sRGB if desired
 };
 
 layout(std430, set = 1, binding = 0) readonly buffer MaterialBuffer
@@ -65,21 +72,12 @@ const int kMaxTextureCount = 512;
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ============================================================
-// Lights (MIGRATION STATE)
+// Lights (WORLD space; matches RT)
 // ============================================================
-// Directional:
-//   - dir_range.xyz = light forward direction in WORLD space
-//   - L_world = -dir_range.xyz
-//
-// Point/Spot (TEMP, from current C++ builder):
-//   - pos_type.xyz  = position in VIEW space
-//   - dir_range.xyz = spot forward direction in VIEW space
-//   - dir_range.w   = range
-//   - pos_type.w    = type
 struct GpuLight
 {
-    vec4 pos_type;        // xyz = position (view) for point/spot, w = type
-    vec4 dir_range;       // xyz = forward dir (world for directional, view for spot), w = range
+    vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
+    vec4 dir_range;       // xyz = forward dir (WORLD), w = range
     vec4 color_intensity; // rgb = color (linear), a = intensity
     vec4 spot_params;     // x = innerCos, y = outerCos
 };
@@ -87,7 +85,7 @@ struct GpuLight
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
     uvec4    info;        // x = lightCount
-    vec4     ambient;     // a = exposure if USE_UBO_EXPOSURE
+    vec4     ambient;     // rgb ambient, a exposure (optional)
     GpuLight lights[64];
 } uLights;
 
@@ -127,8 +125,7 @@ float G_Smith(float NdotV, float NdotL, float k)
 }
 
 // ------------------------------------------------------------
-// Modest studio environment (viewport IBL) - LOWER ENERGY
-// NOTE: now interpreted in WORLD space; +Y is WORLD up.
+// Modest studio environment (WORLD +Y up)
 // ------------------------------------------------------------
 vec3 studioEnv(vec3 dir)
 {
@@ -176,9 +173,10 @@ mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
 }
 
 // ------------------------------------------------------------
-// Light evaluation
-//   - Directional: WORLD
-//   - Point/Spot: VIEW -> converted to WORLD direction for BRDF
+// Light evaluation (WORLD)
+// Outputs:
+//   Lworld = surface->light direction in WORLD
+//   atten  = distance * cone attenuation
 // ------------------------------------------------------------
 const uint GPU_LIGHT_DIRECTIONAL = 0u;
 const uint GPU_LIGHT_POINT       = 1u;
@@ -191,23 +189,22 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
-        // WORLD: dir_range.xyz is forward direction the light points toward.
-        Lworld = normalize(-Ld.dir_range.xyz); // surface->light in WORLD
+        // dir_range.xyz = forward direction the light points toward (WORLD)
+        Lworld = normalize(-Ld.dir_range.xyz); // surface->light
         return;
     }
 
-    // TEMP: point/spot are provided in VIEW space by current C++ builder
-    vec3 Pview = (uCamera.view * vec4(Pworld, 1.0)).xyz;
-
-    vec3  toLight = Ld.pos_type.xyz - Pview;
+    // Point/Spot: position is WORLD
+    vec3  toLight = Ld.pos_type.xyz - Pworld; // surface->light vector
     float dist2   = max(dot(toLight, toLight), 1e-6);
     float dist    = sqrt(dist2);
 
-    vec3 Lview = toLight / dist;
+    Lworld = toLight / dist;
 
     // Inverse-square attenuation
     atten = 1.0 / dist2;
 
+    // Optional range window (matches your RT/raster convention)
     float range = Ld.dir_range.w;
     if (range > 0.0)
     {
@@ -217,21 +214,25 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 
     if (lt == GPU_LIGHT_SPOT)
     {
-        vec3  spotDirV = normalize(Ld.dir_range.xyz);     // view-space forward
-        float cd       = dot(normalize(-spotDirV), Lview);
+        // dir_range.xyz = forward direction (WORLD) the spot points toward
+        vec3 spotFwdW = normalize(Ld.dir_range.xyz);
 
-        float innerC = Ld.spot_params.x;
-        float outerC = Ld.spot_params.y;
+        // RT uses:
+        //   cosAn = dot(normalize(-Lw), spotF)
+        // where Lw is surface->light, so -Lw is light->surface.
+        vec3 lightToSurfaceW = normalize(Pworld - Ld.pos_type.xyz);
+        float cosAn = dot(spotFwdW, lightToSurfaceW);
 
-        float s = (innerC > outerC)
-                ? saturate((cd - outerC) / (innerC - outerC))
-                : step(outerC, cd);
+        float innerC = Ld.spot_params.x; // cos(inner)
+        float outerC = Ld.spot_params.y; // cos(outer)
 
-        atten *= s;
+        float coneV = (innerC > outerC)
+                    ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
+                    : step(outerC, cosAn);
+
+        // Match RT feel: squared cone
+        atten *= coneV * coneV;
     }
-
-    // Convert L to WORLD so BRDF stays world-space
-    Lworld = normalize((uCamera.invView * vec4(Lview, 0.0)).xyz);
 }
 
 // ------------------------------------------------------------
@@ -333,6 +334,7 @@ void main()
         vec3 radiance = uLights.lights[i].color_intensity.rgb *
                         (uLights.lights[i].color_intensity.a * atten);
 
+        // Keep your safety clamp
         radiance = min(radiance, vec3(25.0));
 
         direct += (diff + spec) * radiance * NdotL;

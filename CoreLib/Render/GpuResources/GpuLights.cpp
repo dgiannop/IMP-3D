@@ -2,18 +2,17 @@
 // GpuLights.cpp  (WORLD-space LightsUBO: directional/point/spot)
 // ============================================================
 //
-// Conventions after this change:
+// Conventions:
 //   - All lights in GpuLightsUBO are expressed in WORLD space.
 //     * Directional: lights[i].dir_range.xyz = forward (WORLD)
 //     * Point:       lights[i].pos_type.xyz  = position (WORLD)
 //     * Spot:        lights[i].pos_type.xyz  = position (WORLD)
 //                  lights[i].dir_range.xyz  = forward (WORLD)
 //   - lights[i].dir_range.w:
-//     * Directional: angular radius (radians) for soft shadows (optional)
+//     * Directional: angular radius (radians) for soft shadows (optional; 0 = hard)
 //     * Point/Spot:  range (world units), 0 = inverse-square only
 //
-// Shaders must now treat point/spot as world-space too.
-// (Migrated SOLID + SHADED directional; this completes the UBO side.)
+// Shaders must treat point/spot as world-space.
 // ============================================================
 
 #include "GpuLights.hpp"
@@ -33,26 +32,23 @@ namespace
     // ------------------------------------------------------------------------
     // Headlight test switches
     // ------------------------------------------------------------------------
-    // If true, use a fixed world-space sun direction (useful for debugging).
     constexpr bool kUseFixedSunForHeadlight = false;
 
     // If true, inject the headlight as a WORLD-SPACE spotlight at the camera
-    // (a "flashlight" that always follows the view).
     constexpr bool kHeadlightAsFlashlightSpot = false;
 
-    // Headlight bias (camera-locked directional):
-    // Keep this subtle for SOLID.
+    // Headlight bias (camera-locked directional)
     constexpr bool  kUseHeadlightBias   = true;
-    constexpr float kHeadlightSideBias  = +0.10f; // negative = left
-    constexpr float kHeadlightUpBias    = 0.00f;  // positive = up (try -0.05f if top still darkens)
-    constexpr float kHeadlightBiasScale = 1.0f;   // global scaler for quick tuning
+    constexpr float kHeadlightSideBias  = +0.10f;
+    constexpr float kHeadlightUpBias    = 0.00f;
+    constexpr float kHeadlightBiasScale = 1.0f;
 
-    // Flashlight tuning (only used when kHeadlightAsFlashlightSpot == true).
+    // Flashlight tuning
     constexpr float kHeadlightRange    = 80.0f;
     constexpr float kHeadlightInnerRad = 10.0f * 3.14159265f / 180.0f;
     constexpr float kHeadlightOuterRad = 18.0f * 3.14159265f / 180.0f;
 
-    // Directional softness (only used when injecting as directional).
+    // Directional softness for headlight (angular radius in radians)
     constexpr float kHeadlightSoftnessRadians = 0.05f; // ~3 degrees
 
     static glm::vec3 clamp01(const glm::vec3& c) noexcept
@@ -74,7 +70,7 @@ namespace
 
     static void pushLight(GpuLightsUBO& out, const GpuLight& l) noexcept
     {
-        uint32_t count = lightCount(out);
+        const uint32_t count = lightCount(out);
         if (count >= kMaxGpuLights)
             return;
 
@@ -82,16 +78,18 @@ namespace
         setLightCount(out, count + 1u);
     }
 
-    static GpuLight makeDirectionalWorld(const glm::vec3& dirWorld, const glm::vec3& color, float intensity) noexcept
+    static GpuLight makeDirectionalWorld(const glm::vec3& dirWorld,
+                                         const glm::vec3& color,
+                                         float            intensity,
+                                         float            softnessRadians) noexcept
     {
         GpuLight gl = {};
         gl.pos_type = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(GpuLightType::Directional));
 
         const glm::vec3 fwdWorld = un::safe_normalize(dirWorld, glm::vec3(0, 0, -1));
 
-        // xyz = forward (WORLD space), w = softness (angular radius in radians)
-        gl.dir_range = glm::vec4(fwdWorld, kHeadlightSoftnessRadians);
-
+        // xyz = forward (WORLD), w = angular radius (radians) for soft shadows
+        gl.dir_range       = glm::vec4(fwdWorld, std::max(0.0f, softnessRadians));
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
         gl.spot_params     = glm::vec4(0.0f);
 
@@ -122,12 +120,17 @@ namespace
         const float inner = std::max(0.0f, innerConeRad);
         const float outer = std::max(inner, outerConeRad);
 
-        const float innerCos = std::cos(inner);
-        const float outerCos = std::cos(outer);
+        float innerCos = std::cos(inner);
+        float outerCos = std::cos(outer);
+
+        // Ensure expected ordering for shader logic (innerCos >= outerCos)
+        if (innerCos < outerCos)
+            std::swap(innerCos, outerCos);
 
         GpuLight gl        = {};
         gl.pos_type        = glm::vec4(posWorld, static_cast<float>(GpuLightType::Spot));
-        gl.dir_range       = glm::vec4(un::safe_normalize(dirWorld, glm::vec3(0, 0, -1)), std::max(0.0f, range)); // w = range
+        gl.dir_range       = glm::vec4(un::safe_normalize(dirWorld, glm::vec3(0, 0, -1)),
+                                 std::max(0.0f, range)); // w = range
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
         gl.spot_params     = glm::vec4(innerCos, outerCos, 0.0f, 0.0f);
         return gl;
@@ -135,7 +138,6 @@ namespace
 
     static glm::vec3 viewportForwardWorld(const Viewport& vp) noexcept
     {
-        // Assumes vp.view() is WORLD->VIEW
         const glm::mat4 invV = glm::inverse(vp.view());
         const glm::vec3 fwd  = glm::vec3(invV * glm::vec4(0, 0, -1, 0));
         return un::safe_normalize(fwd, glm::vec3(0, 0, -1));
@@ -157,7 +159,6 @@ namespace
 
     static glm::vec3 viewportPosWorld(const Viewport& vp) noexcept
     {
-        // Camera origin in VIEW space is (0,0,0); transform to world.
         const glm::mat4 invV = glm::inverse(vp.view());
         const glm::vec3 p    = glm::vec3(invV * glm::vec4(0, 0, 0, 1));
         return p;
@@ -206,27 +207,23 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
 {
     out         = {};
     out.info    = glm::uvec4(0u);
-    out.ambient = glm::vec4(0.f);
+    out.ambient = glm::vec4(0.0f);
 
     const DrawMode dm = vp.drawMode();
 
     // ------------------------------------------------------------
-    // 1) Modeling headlight (optional)
+    // 1) Modeling headlight (optional) (WORLD)
     // ------------------------------------------------------------
-    // Render-time "modeling light" expressed in WORLD space. This is not a SceneLight.
     if (allowHeadlight(settings, dm) && headlight.enabled && headlight.intensity > 0.0f)
     {
         if (kHeadlightAsFlashlightSpot)
         {
-            // "Flashlight" headlight:
-            // - Positioned at the camera origin in WORLD space.
-            // - Points forward along the camera forward vector in WORLD space.
-            const glm::vec3 posWorld       = viewportPosWorld(vp);
-            const glm::vec3 dirTowardWorld = viewportForwardWorld(vp);
+            const glm::vec3 posWorld = viewportPosWorld(vp);
+            const glm::vec3 dirWorld = viewportForwardWorld(vp);
 
             pushLight(out,
                       makeSpotWorld(posWorld,
-                                    dirTowardWorld,
+                                    dirWorld,
                                     headlight.color,
                                     headlight.intensity,
                                     kHeadlightRange,
@@ -235,7 +232,6 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
         }
         else
         {
-            // Directional camera-locked headlight (WORLD):
             glm::vec3 dirWorld = {};
 
             if (kUseFixedSunForHeadlight)
@@ -246,7 +242,8 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
             {
                 const glm::vec3 forward = viewportForwardWorld(vp);
 
-                if (kUseHeadlightBias && (std::abs(kHeadlightSideBias) > 0.0f || std::abs(kHeadlightUpBias) > 0.0f))
+                if (kUseHeadlightBias &&
+                    (std::abs(kHeadlightSideBias) > 0.0f || std::abs(kHeadlightUpBias) > 0.0f))
                 {
                     const glm::vec3 right = viewportRightWorld(vp);
                     const glm::vec3 up    = viewportUpWorld(vp);
@@ -262,7 +259,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                 }
             }
 
-            pushLight(out, makeDirectionalWorld(dirWorld, headlight.color, headlight.intensity));
+            pushLight(out, makeDirectionalWorld(dirWorld, headlight.color, headlight.intensity, kHeadlightSoftnessRadians));
         }
     }
 
@@ -291,7 +288,8 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                 switch (l->type)
                 {
                     case LightType::Directional:
-                        pushLight(out, makeDirectionalWorld(l->direction, l->color, l->intensity));
+                        // No per-light softness field yet: default to hard.
+                        pushLight(out, makeDirectionalWorld(l->direction, l->color, l->intensity, 0.0f));
                         break;
 
                     case LightType::Point:
