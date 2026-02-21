@@ -91,11 +91,27 @@ namespace
         setLightCount(out, count + 1u);
     }
 
+    // Positive-only clamp that FALLS BACK to a default on 0/negative/NaN.
+    // Use this for things where 0 is not meaningful (e.g., range multipliers).
     static float clampPos(float v, float def = 1.0f) noexcept
     {
+        if (!std::isfinite(v))
+            return def;
+
         if (!(v > 0.0f))
             return def;
+
         return v;
+    }
+
+    // Non-negative clamp that ALLOWS 0.
+    // Use this for intensity multipliers so 0% actually disables lights.
+    static float clampNonNeg(float v, float def = 1.0f) noexcept
+    {
+        if (!std::isfinite(v))
+            return def;
+
+        return std::max(0.0f, v);
     }
 
     static void scaleSpotCones(float& innerRad, float& outerRad, float mul) noexcept
@@ -340,9 +356,13 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     uint32_t sceneLightCount = 0u;
     float    maxSceneLight   = 0.0f;
 
-    const float ptIntMul  = clampPos(settings.scenePointIntensityMul, 1.0f);
+    // NOTE:
+    // - Intensity multipliers must allow 0 so 0% actually disables lights.
+    // - Range multipliers should remain positive-only (0 range means "inverse-square only" in shader),
+    //   so keep them using clampPos().
+    const float ptIntMul  = clampNonNeg(settings.scenePointIntensityMul, 1.0f);
     const float ptRngMul  = clampPos(settings.scenePointRangeMul, 1.0f);
-    const float spIntMul  = clampPos(settings.sceneSpotIntensityMul, 1.0f);
+    const float spIntMul  = clampNonNeg(settings.sceneSpotIntensityMul, 1.0f);
     const float spRngMul  = clampPos(settings.sceneSpotRangeMul, 1.0f);
     const float spConeMul = clampPos(settings.sceneSpotConeMul, 1.0f);
 

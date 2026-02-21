@@ -1,17 +1,16 @@
 //==============================================================
-// RtScene.rchit  (Primary shading + optional headlight shadows)
+// RtScene.rchit  (Primary shading + optional directional shadows)
 //==============================================================
-// WORLD-space lighting conventions (post-refactor):
+// WORLD-space lighting conventions:
 // - Directional:
-//   * lights[i].dir_range.xyz = light forward direction in WORLD space
+//   * lights[i].dir_range.xyz = forward direction in WORLD space
 //   * surface->light (WORLD)  = -forward
 //   * lights[i].dir_range.w   = angular radius (radians) for soft shadows (optional)
 // - Point/Spot:
 //   * lights[i].pos_type.xyz  = position in WORLD space
 //   * lights[i].dir_range.xyz = forward direction in WORLD space (spot only)
-//   * lights[i].dir_range.w   = range
+//   * lights[i].dir_range.w   = range (0 = inverse-square only)
 //==============================================================
-
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
@@ -81,7 +80,7 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 struct GpuLight
 {
     vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
-    vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius
+    vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius (dir)
     vec4 color_intensity; // rgb = color, a = intensity
     vec4 spot_params;     // x = innerCos, y = outerCos
 };
@@ -89,7 +88,7 @@ struct GpuLight
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
     uvec4    info;    // x = lightCount
-    vec4     ambient; // rgb = ambient fill, a = exposure (optional)
+    vec4     ambient; // rgb = ambient fill (already scaled), a = exposure scalar
     GpuLight lights[64];
 } uLights;
 
@@ -126,7 +125,7 @@ layout(set = 1, binding = 1) uniform sampler2D tex2d[kMaxTex];
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
-float satVal(float val) { return clamp(val, 0.0, 1.0); }
+float satVal(float v) { return clamp(v, 0.0, 1.0); }
 
 vec3 fresShk(float cosVh, vec3 f0Col)
 {
@@ -154,7 +153,7 @@ float gSmt(float ndvVal, float ndlVal, float kVal)
 }
 
 // ------------------------------------------------------------
-// Soft shadow helpers (WORLD)
+// Soft shadow helpers (WORLD) - directional only
 // ------------------------------------------------------------
 float hash13(uvec3 key3)
 {
@@ -185,7 +184,9 @@ vec3 coneSmpl(vec3 dirIn, float angRad, vec2 rnd2)
 
 float shadDir(vec3 hitPosW, vec3 hitNrmW, vec3 dirToLightW, float angRad)
 {
-    const int   sampCt = 4;
+    const int sampCt = 4;
+
+    // NOTE: gl_HitTEXT is distance in WORLD units.
     float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);
 
     vec3  rayOrg = hitPosW + hitNrmW * epsVal;
@@ -330,9 +331,12 @@ void main()
     vec3  f0Die  = vec3(clamp(f0Sca, 0.02, 0.08));
     vec3  f0Col  = mix(f0Die, albCol, metVal);
 
-    // Ambient + exposure from LightsUBO (same convention you had)
-    float ambStr = (uLights.ambient.a > 0.0) ? uLights.ambient.a : 0.05;
-    vec3  ambCol = uLights.ambient.rgb * ambStr * albCol * aoVal;
+    // --------------------------------------------------------
+    // Ambient (IMPORTANT):
+    //   uLights.ambient.rgb = ambient fill (already scaled on CPU)
+    //   uLights.ambient.a   = exposure scalar (NOT ambient strength)
+    // --------------------------------------------------------
+    vec3 ambCol = uLights.ambient.rgb * albCol * aoVal;
 
     vec3 lgtSum = vec3(0.0);
 
@@ -345,10 +349,10 @@ void main()
 
     for (uint litIdx = 0u; litIdx < litCnt; ++litIdx)
     {
-        GpuLight Ld    = uLights.lights[litIdx];
+        GpuLight Ld     = uLights.lights[litIdx];
         uint     litTyp = uint(Ld.pos_type.w + 0.5);
 
-        vec3  Lw    = vec3(0.0); // surface->light in WORLD
+        vec3  Lw     = vec3(0.0); // surface->light in WORLD
         float attVal = 1.0;
 
         if (litTyp == 0u) // Directional
@@ -367,7 +371,6 @@ void main()
             float dstV  = sqrt(dst2);
             Lw          = toLgt / dstV;
 
-            // Match raster: inverse-square * optional range window
             attVal = 1.0 / dst2;
 
             float rngV = Ld.dir_range.w;
@@ -393,8 +396,8 @@ void main()
                 attVal *= facV * facV;
             }
 
-            vec3  spotF = normalize(Ld.dir_range.xyz);     // forward (WORLD)
-            float cosAn = dot(normalize(-Lw), spotF);       // compare light->surface vs forward
+            vec3  spotF = normalize(Ld.dir_range.xyz); // forward (WORLD)
+            float cosAn = dot(normalize(-Lw), spotF);   // light->surface vs forward
 
             float innCs = Ld.spot_params.x;
             float outCs = Ld.spot_params.y;
