@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--===========================================================
+    SubWindows/LightingSettingsDialog.ui
+    Adds "Scene Light Tuning" section with global multipliers.
+============================================================-->
 <ui version="4.0">
  <class>LightingSettingsDialog</class>
  <widget class="QDialog" name="LightingSettingsDialog">
@@ -7,7 +11,7 @@
     <x>0</x>
     <y>0</y>
     <width>520</width>
-    <height>520</height>
+    <height>640</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -273,6 +277,214 @@
       </layout>
      </item>
 
+     <!-- Section: Scene Light Tuning -->
+     <item>
+      <widget class="QLabel" name="sceneTuningSectionLabel">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>22</height>
+        </size>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">QLabel {
+    background-color: #303645;
+    color: rgb(92,102,113);
+    font-weight: 600;
+    padding-left: 8px;
+}</string>
+       </property>
+       <property name="text">
+        <string>Scene Light Tuning</string>
+       </property>
+      </widget>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout" name="scenePointIntensityMulRow">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="scenePointIntensityMulLabel">
+         <property name="minimumSize">
+          <size>
+           <width>120</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Point Intensity %</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="scenePointIntensityMulSlider">
+         <property name="minimum">
+          <number>0</number>
+         </property>
+         <property name="maximum">
+          <number>400</number>
+         </property>
+         <property name="value">
+          <number>100</number>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Orientation::Horizontal</enum>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout" name="scenePointRangeMulRow">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="scenePointRangeMulLabel">
+         <property name="minimumSize">
+          <size>
+           <width>120</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Point Range %</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="scenePointRangeMulSlider">
+         <property name="minimum">
+          <number>0</number>
+         </property>
+         <property name="maximum">
+          <number>400</number>
+         </property>
+         <property name="value">
+          <number>100</number>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Orientation::Horizontal</enum>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout" name="sceneSpotIntensityMulRow">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="sceneSpotIntensityMulLabel">
+         <property name="minimumSize">
+          <size>
+           <width>120</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Spot Intensity %</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="sceneSpotIntensityMulSlider">
+         <property name="minimum">
+          <number>0</number>
+         </property>
+         <property name="maximum">
+          <number>400</number>
+         </property>
+         <property name="value">
+          <number>100</number>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Orientation::Horizontal</enum>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout" name="sceneSpotRangeMulRow">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="sceneSpotRangeMulLabel">
+         <property name="minimumSize">
+          <size>
+           <width>120</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Spot Range %</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="sceneSpotRangeMulSlider">
+         <property name="minimum">
+          <number>0</number>
+         </property>
+         <property name="maximum">
+          <number>400</number>
+         </property>
+         <property name="value">
+          <number>100</number>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Orientation::Horizontal</enum>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout" name="sceneSpotConeMulRow">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="sceneSpotConeMulLabel">
+         <property name="minimumSize">
+          <size>
+           <width>120</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Spot Cone %</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="sceneSpotConeMulSlider">
+         <property name="minimum">
+          <number>25</number>
+         </property>
+         <property name="maximum">
+          <number>200</number>
+         </property>
+         <property name="value">
+          <number>100</number>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Orientation::Horizontal</enum>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+
      <!-- Section: Exposure -->
      <item>
       <widget class="QLabel" name="exposureSectionLabel">
@@ -417,21 +629,9 @@
        </item>
        <item>
         <widget class="QComboBox" name="solidModeCombo">
-         <item>
-          <property name="text">
-           <string>Headlight Only</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Scene Only</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Headlight + Scene</string>
-          </property>
-         </item>
+         <item><property name="text"><string>Headlight Only</string></property></item>
+         <item><property name="text"><string>Scene Only</string></property></item>
+         <item><property name="text"><string>Headlight + Scene</string></property></item>
         </widget>
        </item>
       </layout>
@@ -457,21 +657,9 @@
        </item>
        <item>
         <widget class="QComboBox" name="shadedModeCombo">
-         <item>
-          <property name="text">
-           <string>Headlight Only</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Scene Only</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Headlight + Scene</string>
-          </property>
-         </item>
+         <item><property name="text"><string>Headlight Only</string></property></item>
+         <item><property name="text"><string>Scene Only</string></property></item>
+         <item><property name="text"><string>Headlight + Scene</string></property></item>
         </widget>
        </item>
       </layout>
@@ -497,21 +685,9 @@
        </item>
        <item>
         <widget class="QComboBox" name="rtModeCombo">
-         <item>
-          <property name="text">
-           <string>Headlight Only</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Scene Only</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Headlight + Scene</string>
-          </property>
-         </item>
+         <item><property name="text"><string>Headlight Only</string></property></item>
+         <item><property name="text"><string>Scene Only</string></property></item>
+         <item><property name="text"><string>Headlight + Scene</string></property></item>
         </widget>
        </item>
       </layout>

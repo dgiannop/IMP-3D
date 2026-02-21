@@ -1,3 +1,6 @@
+//============================================================
+// LightingSettingsDialog.cpp  (FULL REPLACEMENT)
+//============================================================
 #include "LightingSettingsDialog.hpp"
 
 #include <QAbstractButton>
@@ -75,6 +78,13 @@ LightingSettingsDialog::LightingSettingsDialog(QWidget* parent) :
     connectSlider(ui->headlightIntensitySlider);
     connectSlider(ui->ambientFillSlider);
 
+    // Scene light tuning
+    connectSlider(ui->scenePointIntensityMulSlider);
+    connectSlider(ui->scenePointRangeMulSlider);
+    connectSlider(ui->sceneSpotIntensityMulSlider);
+    connectSlider(ui->sceneSpotRangeMulSlider);
+    connectSlider(ui->sceneSpotConeMulSlider);
+
     // Exposure & tonemap
     connectSlider(ui->exposureSlider);
     connectCheck(ui->tonemapCheck);
@@ -134,6 +144,14 @@ void LightingSettingsDialog::pushToCore()
     s.headlightIntensity = ui->headlightIntensitySlider->value() / 100.0f;
     s.ambientFill        = ui->ambientFillSlider->value() / 100.0f;
 
+    // Scene light tuning
+    s.scenePointIntensityMul = ui->scenePointIntensityMulSlider->value() / 100.0f;
+    s.scenePointRangeMul     = ui->scenePointRangeMulSlider->value() / 100.0f;
+
+    s.sceneSpotIntensityMul = ui->sceneSpotIntensityMulSlider->value() / 100.0f;
+    s.sceneSpotRangeMul     = ui->sceneSpotRangeMulSlider->value() / 100.0f;
+    s.sceneSpotConeMul      = ui->sceneSpotConeMulSlider->value() / 100.0f;
+
     // Exposure & tonemap
     s.exposure = ui->exposureSlider->value() / 100.0f;
     s.tonemap  = ui->tonemapCheck->isChecked();
@@ -170,6 +188,14 @@ void LightingSettingsDialog::pullFromCore()
     ui->useSceneLightsCheck->setChecked(s.useSceneLights);
     ui->headlightIntensitySlider->setValue(int(s.headlightIntensity * 100.0f));
     ui->ambientFillSlider->setValue(int(s.ambientFill * 100.0f));
+
+    // Scene light tuning
+    ui->scenePointIntensityMulSlider->setValue(int(s.scenePointIntensityMul * 100.0f));
+    ui->scenePointRangeMulSlider->setValue(int(s.scenePointRangeMul * 100.0f));
+
+    ui->sceneSpotIntensityMulSlider->setValue(int(s.sceneSpotIntensityMul * 100.0f));
+    ui->sceneSpotRangeMulSlider->setValue(int(s.sceneSpotRangeMul * 100.0f));
+    ui->sceneSpotConeMulSlider->setValue(int(s.sceneSpotConeMul * 100.0f));
 
     // Exposure & tonemap
     ui->exposureSlider->setValue(int(s.exposure * 100.0f));

@@ -1133,9 +1133,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         // Lights UBO (GpuLightsUBO)
         uboBindings[1].binding = 1;
         uboBindings[1].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        uboBindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT |
-                                VK_SHADER_STAGE_GEOMETRY_BIT |
-                                VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        uboBindings[1].stages  = VK_SHADER_STAGE_ALL;
         uboBindings[1].count = 1;
 
         if (!m_descriptorSetLayout.create(device, std::span{uboBindings, 2}))
