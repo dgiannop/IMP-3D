@@ -56,16 +56,16 @@ void main()
     //  - Miss[0] = primary miss
     traceRayEXT(
         u_tlas,
-        gl_RayFlagsOpaqueEXT,
+        gl_RayFlagsCullBackFacingTrianglesEXT,
         0xFF,
-        0, // sbtRecordOffset -> Hit[0]
-        1, // sbtRecordStride
-        0, // missIndex      -> Miss[0]
+        0,
+        1,
+        0,
         ro,
         0.001,
         rd,
         1e30,
-        0   // payload location
+        0
     );
 
     imageStore(u_out, pix, payload);

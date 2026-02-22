@@ -358,24 +358,6 @@ bool VulkanBackend::createDevice()
         }
     };
 
-    auto vendorStr = [](uint32_t vendorId) noexcept -> const char* {
-        switch (vendorId)
-        {
-            case 0x10DE:
-                return "NVIDIA";
-            case 0x1002:
-                return "AMD";
-            case 0x8086:
-                return "Intel";
-            case 0x13B5:
-                return "ARM";
-            case 0x5143:
-                return "Qualcomm";
-            default:
-                return "Unknown";
-        }
-    };
-
     auto queryInstanceVulkanVersion = [&](QVulkanInstance* qvk) noexcept -> uint32_t {
         if (!qvk)
             return VK_API_VERSION_1_0;
@@ -461,11 +443,11 @@ bool VulkanBackend::createDevice()
         if (!findGraphicsFamily(pd, outGraphicsFamily))
             return -1;
 
-        // Hard requirement: swapchain extension (I always enable it)
+        // Hard requirement: swapchain extension
         if (!hasExtInList(outExts, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
             return -1;
 
-        // Hard requirement: we unconditionally enable these features later
+        // Hard requirement: you said you rely on these (and you enable them below)
         if (!outFeats.geometryShader || !outFeats.samplerAnisotropy)
             return -1;
 
@@ -542,8 +524,6 @@ bool VulkanBackend::createDevice()
     std::vector<Candidate> cands;
     cands.reserve(devices.size());
 
-    // std::cerr << "VulkanBackend: Enumerating physical devices (" << devices.size() << "):\n";
-
     Candidate best     = {};
     bool      haveBest = false;
 
@@ -553,29 +533,6 @@ bool VulkanBackend::createDevice()
         c.pd        = pd;
 
         c.score = scoreDevice(pd, c.props, c.feats, c.supportedCore, c.exts, c.graphicsFamily, c.meets);
-
-        // std::cerr
-        //     << "  - " << c.props.deviceName
-        //     << " | " << vendorStr(c.props.vendorID) << " (0x" << std::hex << c.props.vendorID << std::dec << ")"
-        //     << " | " << deviceTypeStr(c.props.deviceType)
-        //     << " | Vulkan " << versionStr(c.props.apiVersion)
-        //     << " | Driver " << versionStr(c.props.driverVersion)
-        //     << "\n";
-
-        // std::cerr
-        //     << "      features: geometryShader=" << (c.feats.geometryShader ? "YES" : "no")
-        //     << " samplerAnisotropy=" << (c.feats.samplerAnisotropy ? "YES" : "no")
-        //     << " shaderInt64=" << (c.supportedCore.features.shaderInt64 ? "YES" : "no")
-        //     << "\n";
-
-        // std::cerr
-        //     << "      ext: VK_KHR_swapchain=" << (hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ? "YES" : "no")
-        //     << "\n";
-
-        // if (c.score >= 0)
-        //     std::cerr << "      score: " << c.score << "\n";
-        // else
-        //     std::cerr << "      score: (rejected)\n";
 
         cands.push_back(c);
 
@@ -591,8 +548,6 @@ bool VulkanBackend::createDevice()
 
     if (!haveBest || !best.pd)
     {
-        // Show a friendly UI error in the UI layer and fail init gracefully.
-        // NOTE: requires #include <QMessageBox> and #include <sstream> at top of VulkanBackend.cpp
         uint32_t maxDevVulkan = VK_API_VERSION_1_0;
 
         std::ostringstream oss;
@@ -669,42 +624,32 @@ bool VulkanBackend::createDevice()
         (apiMajor > 1) || (apiMajor == 1 && apiMinor >= 2);
 
     // ------------------------------------------------------------
-    // Query core features (ALWAYS) - we need shaderInt64 for RT shaders
+    // Query core features (ALWAYS)
     // ------------------------------------------------------------
     VkPhysicalDeviceFeatures2 supportedCore = best.supportedCore;
 
-    // Base extensions (always)
+    // ------------------------------------------------------------
+    // Query Vulkan 1.2 features (single query)
+    // ------------------------------------------------------------
+    VkPhysicalDeviceVulkan12Features supported12 = {};
+    supported12.sType                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+    if (apiAtLeast12)
+    {
+        VkPhysicalDeviceFeatures2 q = {};
+        q.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        q.pNext                     = &supported12;
+        f->vkGetPhysicalDeviceFeatures2(m_physicalDevice, &q);
+    }
+
+    // ------------------------------------------------------------
+    // Enabled extensions (always)
+    // ------------------------------------------------------------
     std::vector<const char*> enabledExts;
     enabledExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
     // ------------------------------------------------------------
-    // Timeline semaphore support (Vulkan 1.2 core OR KHR extension)
-    // ------------------------------------------------------------
-    const bool hasTimelineExt    = hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-    const bool timelineAvailable = apiAtLeast12 || hasTimelineExt;
-
-    // We only need to enable the extension if the device is < 1.2
-    const bool needTimelineExtEnable = (!apiAtLeast12) && hasTimelineExt;
-
-    // Query timeline feature support (via Features2 chain)
-    VkPhysicalDeviceTimelineSemaphoreFeatures supportedTimeline = {};
-    supportedTimeline.sType                                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
-
-    VkPhysicalDeviceFeatures2 supportedTimelineQuery = {};
-    supportedTimelineQuery.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    supportedTimelineQuery.pNext                     = &supportedTimeline;
-
-    if (timelineAvailable)
-        f->vkGetPhysicalDeviceFeatures2(m_physicalDevice, &supportedTimelineQuery);
-
-    const bool timelineOk =
-        timelineAvailable && (supportedTimeline.timelineSemaphore == VK_TRUE);
-
-    if (needTimelineExtEnable)
-        enabledExts.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-
-    // ------------------------------------------------------------
-    // Optional ray tracing extension bundle
+    // Optional ray tracing extension bundle (KHR)
     // ------------------------------------------------------------
     const bool rtExtsOk =
         hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
@@ -716,25 +661,32 @@ bool VulkanBackend::createDevice()
 
     m_supportsRayTracing = rtExtsOk;
 
-    // RT shaders in my pipeline currently use 64-bit addresses => SPIR-V Int64 capability.
-    // If the device doesn't support shaderInt64, disable RT.
-    if (m_supportsRayTracing)
+    // Production-safe simplification: require Vulkan 1.2+ for RT in this backend.
+    if (m_supportsRayTracing && !apiAtLeast12)
     {
-        if (!supportedCore.features.shaderInt64)
-        {
-            std::cerr << "VulkanBackend: shaderInt64 not supported; disabling ray tracing.\n";
-            m_supportsRayTracing = false;
-        }
+        std::cerr << "VulkanBackend: RT requires Vulkan 1.2+ in this backend; disabling RT.\n";
+        m_supportsRayTracing = false;
+    }
+
+    // Your RT shaders require Int64 capability.
+    if (m_supportsRayTracing && !supportedCore.features.shaderInt64)
+    {
+        std::cerr << "VulkanBackend: shaderInt64 not supported; disabling ray tracing.\n";
+        m_supportsRayTracing = false;
+    }
+
+    // Buffer Device Address is required for your RT path (device addresses).
+    if (m_supportsRayTracing && supported12.bufferDeviceAddress != VK_TRUE)
+    {
+        std::cerr << "VulkanBackend: bufferDeviceAddress not supported; disabling ray tracing.\n";
+        m_supportsRayTracing = false;
     }
 
     // ------------------------------------------------------------
-    // Query feature support for RT (only if extensions exist and shaderInt64 is supported)
+    // Query KHR feature support for RT (only if extension bundle exists + basic requirements met)
     // ------------------------------------------------------------
     VkPhysicalDeviceFeatures2 supported = {};
     supported.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-
-    VkPhysicalDeviceBufferDeviceAddressFeatures supportedBda = {};
-    supportedBda.sType                                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 
     VkPhysicalDeviceAccelerationStructureFeaturesKHR supportedAs = {};
     supportedAs.sType                                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
@@ -744,23 +696,19 @@ bool VulkanBackend::createDevice()
 
     if (m_supportsRayTracing)
     {
-        // Chain for query
-        supported.pNext    = &supportedBda;
-        supportedBda.pNext = &supportedAs;
-        supportedAs.pNext  = &supportedRt;
-        supportedRt.pNext  = nullptr;
+        supported.pNext   = &supportedAs;
+        supportedAs.pNext = &supportedRt;
+        supportedRt.pNext = nullptr;
 
         f->vkGetPhysicalDeviceFeatures2(m_physicalDevice, &supported);
 
-        if (!supportedBda.bufferDeviceAddress ||
-            !supportedAs.accelerationStructure ||
-            !supportedRt.rayTracingPipeline)
+        if (!supportedAs.accelerationStructure || !supportedRt.rayTracingPipeline)
         {
+            std::cerr << "VulkanBackend: RT KHR features not supported; disabling RT.\n";
             m_supportsRayTracing = false;
         }
     }
 
-    // If still supported, enable the RT extension set
     if (m_supportsRayTracing)
     {
         enabledExts.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
@@ -776,7 +724,7 @@ bool VulkanBackend::createDevice()
     }
 
     // ------------------------------------------------------------
-    // Features (use Features2 so we can optionally chain RT features)
+    // Build enabled feature chain (Features2 + Vulkan12 + optional KHR RT features)
     // ------------------------------------------------------------
     VkPhysicalDeviceFeatures2 feats2 = {};
     feats2.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -784,12 +732,64 @@ bool VulkanBackend::createDevice()
     feats2.features.geometryShader    = VK_TRUE;
     feats2.features.samplerAnisotropy = VK_TRUE;
 
-    // Enable shaderInt64 if supported (required by RT shaders).
+    // Enable if supported (needed for RT; harmless otherwise).
     feats2.features.shaderInt64 = supportedCore.features.shaderInt64 ? VK_TRUE : VK_FALSE;
 
-    // Optional RT feature chain (only used if m_supportsRayTracing == true)
-    VkPhysicalDeviceBufferDeviceAddressFeatures bda = {};
-    bda.sType                                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    VkPhysicalDeviceVulkan12Features feat12 = {};
+    feat12.sType                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+    // If ever need it later:
+    //   - set this true only if supported12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE
+    //   - and shaders actually use nonuniformEXT() indexing into sampler arrays.
+    constexpr bool kEnableNonUniformSamplerIndexing = true;
+
+    // If your RT shaders use GL_EXT_scalar_block_layout, this should be enabled when supported.
+    const bool scalarBlockLayoutOk = apiAtLeast12 && (supported12.scalarBlockLayout == VK_TRUE);
+    const bool timelineOk          = apiAtLeast12 && (supported12.timelineSemaphore == VK_TRUE);
+
+    if (apiAtLeast12)
+    {
+        if (scalarBlockLayoutOk)
+        {
+            feat12.scalarBlockLayout = VK_TRUE;
+            std::cerr << "VulkanBackend: Enabled Vulkan12 scalarBlockLayout.\n";
+        }
+        else
+        {
+            std::cerr << "VulkanBackend: scalarBlockLayout NOT available; scalar layouts in shaders may fail.\n";
+        }
+
+        if (timelineOk)
+        {
+            feat12.timelineSemaphore = VK_TRUE;
+            std::cerr << "VulkanBackend: Enabled Vulkan12 timelineSemaphore.\n";
+        }
+        else
+        {
+            std::cerr << "VulkanBackend: Timeline semaphores not available (will use fences).\n";
+        }
+
+        if (kEnableNonUniformSamplerIndexing)
+        {
+            if (supported12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE)
+            {
+                feat12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+                std::cerr << "VulkanBackend: Enabled Vulkan12 shaderSampledImageArrayNonUniformIndexing.\n";
+            }
+            else
+            {
+                std::cerr << "VulkanBackend: shaderSampledImageArrayNonUniformIndexing NOT supported; shaders requiring it cannot load.\n";
+                // return false; ?
+            }
+        }
+
+        if (m_supportsRayTracing)
+        {
+            // Required for RT device addresses.
+            feat12.bufferDeviceAddress = VK_TRUE;
+            std::cerr << "VulkanBackend: Enabled Vulkan12 bufferDeviceAddress (for RT).\n";
+        }
+    }
 
     VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat = {};
     asFeat.sType                                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
@@ -797,39 +797,29 @@ bool VulkanBackend::createDevice()
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeat = {};
     rtFeat.sType                                         = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
 
-    // Timeline semaphore feature (enable if supported)
-    VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeat = {};
-    timelineFeat.sType                                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
-
     void* pNextChain = nullptr;
-
-    auto chain = [&](auto& s) {
+    auto  chain      = [&](auto& s) {
         s.pNext    = pNextChain;
         pNextChain = &s;
     };
 
+    // Chain KHR RT features (if enabled)
     if (m_supportsRayTracing)
     {
-        // Enable minimal set for first RT pass
-        bda.bufferDeviceAddress      = VK_TRUE;
         asFeat.accelerationStructure = VK_TRUE;
         rtFeat.rayTracingPipeline    = VK_TRUE;
-
         chain(rtFeat);
         chain(asFeat);
-        chain(bda);
     }
 
-    if (timelineOk)
-    {
-        timelineFeat.timelineSemaphore = VK_TRUE;
-        chain(timelineFeat);
-    }
+    // Always chain Vulkan 1.2 features when we queried them
+    if (apiAtLeast12)
+        chain(feat12);
 
     feats2.pNext = pNextChain;
 
     // ------------------------------------------------------------
-    // Create device (Features2 is passed via pNext)
+    // Create device
     // ------------------------------------------------------------
     VkDeviceCreateInfo dci      = {};
     dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -864,18 +854,12 @@ bool VulkanBackend::createDevice()
         VkPhysicalDeviceProperties2 props2 = {};
         props2.sType                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
 
-        // Chain properties query
         props2.pNext    = &m_rtProps;
         m_rtProps.pNext = &m_asProps;
         m_asProps.pNext = nullptr;
 
         f->vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
     }
-
-    if (timelineOk)
-        std::cerr << "VulkanBackend: Timeline semaphores enabled.\n";
-    else
-        std::cerr << "VulkanBackend: Timeline semaphores not available (will use fences).\n";
 
     if (m_supportsRayTracing)
         std::cerr << "VulkanBackend: Ray tracing enabled.\n";

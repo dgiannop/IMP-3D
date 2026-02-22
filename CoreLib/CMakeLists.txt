@@ -164,22 +164,71 @@ set(SHADERS
     RtPresent.frag
     RtScene.rgen
     RtScene.rmiss
+    RtScene.rahit
     RtScene.rchit
     RtShadow.rmiss
     RtShadow.rchit
+    RtShadow.rahit
 )
 
+# Prefer Vulkan SDK glslangValidator if available, otherwise fail fast.
+if(DEFINED ENV{VULKAN_SDK})
+    set(GLSLANG_VALIDATOR "$ENV{VULKAN_SDK}/Bin/glslangValidator.exe")
+else()
+    message(FATAL_ERROR "VULKAN_SDK is not set. Install Vulkan SDK and reopen Qt Creator.")
+endif()
+
+if(NOT EXISTS "${GLSLANG_VALIDATOR}")
+    message(FATAL_ERROR "glslangValidator not found at: ${GLSLANG_VALIDATOR}")
+endif()
+
 # Compile shaders to SPIR-V using glslangValidator
+function(shader_stage_from_ext out_var shader_file)
+    get_filename_component(ext "${shader_file}" EXT) # includes leading dot
+
+    if(ext STREQUAL ".vert")
+        set(stage "vert")
+    elseif(ext STREQUAL ".frag")
+        set(stage "frag")
+    elseif(ext STREQUAL ".comp")
+        set(stage "comp")
+    elseif(ext STREQUAL ".geom")
+        set(stage "geom")
+    elseif(ext STREQUAL ".tesc")
+        set(stage "tesc")
+    elseif(ext STREQUAL ".tese")
+        set(stage "tese")
+    elseif(ext STREQUAL ".mesh")
+        set(stage "mesh")
+    elseif(ext STREQUAL ".task")
+        set(stage "task")
+    elseif(ext STREQUAL ".rgen")
+        set(stage "rgen")
+    elseif(ext STREQUAL ".rchit")
+        set(stage "rchit")
+    elseif(ext STREQUAL ".rahit")
+        set(stage "rahit")
+    elseif(ext STREQUAL ".rmiss")
+        set(stage "rmiss")
+    else()
+        message(FATAL_ERROR "Unknown shader extension: ${ext} for ${shader_file}")
+    endif()
+
+    set(${out_var} "${stage}" PARENT_SCOPE)
+endfunction()
+
 foreach(SHADER IN LISTS SHADERS)
     set(SHADER_SRC ${SHADER_SRC_DIR}/${SHADER})
     get_filename_component(SHADER_NAME ${SHADER} NAME)
     set(SHADER_SPV ${SHADER_BIN_DIR}/${SHADER_NAME}.spv)
 
+    shader_stage_from_ext(SHADER_STAGE "${SHADER}")
+
     add_custom_command(
         OUTPUT ${SHADER_SPV}
-        COMMAND glslangValidator -V --target-env vulkan1.2 ${SHADER_SRC} -o ${SHADER_SPV}
+        COMMAND "${GLSLANG_VALIDATOR}" -V -S ${SHADER_STAGE} --target-env vulkan1.2 ${SHADER_SRC} -o ${SHADER_SPV}
         DEPENDS ${SHADER_SRC}
-        COMMENT "Compiling ${SHADER} to SPIR-V"
+        COMMENT "Compiling ${SHADER} (${SHADER_STAGE}) to SPIR-V"
         VERBATIM
     )
 

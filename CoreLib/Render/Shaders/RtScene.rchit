@@ -217,21 +217,18 @@ float shadDir(vec3 hitPosW, vec3 hitNrmW, vec3 dirToLightW, float angRad)
 
         occFlag = 0u;
 
-        traceRayEXT(
-            tlasTop,
-            gl_RayFlagsTerminateOnFirstHitEXT |
-            gl_RayFlagsOpaqueEXT |
-            gl_RayFlagsCullBackFacingTrianglesEXT,
-            0xFF,
-            1, // Hit[1]
-            1, // stride
-            1, // Miss[1]
-            rayOrg,
-            0.001,
-            rayDir,
-            1e30,
-            1
-        );
+traceRayEXT(
+    tlasTop,
+    gl_RayFlagsTerminateOnFirstHitEXT |
+    gl_RayFlagsCullBackFacingTrianglesEXT,
+    0xFF,
+    1, 1, 1,
+    rayOrg,
+    0.001,
+    rayDir,
+    1e30,
+    1
+);
 
         visSum += (occFlag == 0u) ? 1.0 : 0.0;
     }

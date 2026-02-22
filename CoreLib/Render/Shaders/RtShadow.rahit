@@ -1,0 +1,153 @@
+//==============================================================
+// RtShadow.rahit  (Shadow any-hit: alpha cutouts)  FULL PRODUCTION
+//==============================================================
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_gpu_shader_int64 : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+hitAttributeEXT vec2 hitAttr;
+
+// ------------------------------------------------------------
+// Buffer references (device address)
+// ------------------------------------------------------------
+layout(buffer_reference, scalar) readonly buffer UvBuf
+{
+    vec4 uvv4[];
+};
+
+layout(buffer_reference, scalar) readonly buffer MatBuf
+{
+    uint mat1[];
+};
+
+// ------------------------------------------------------------
+// Per-instance data
+// ------------------------------------------------------------
+struct InstDat
+{
+    uint64_t posAdr;
+    uint64_t idxAdr;
+    uint64_t nrmAdr;
+    uint64_t uvvAdr;
+    uint64_t matAdr;
+    uint     triCnt;
+    uint     pad0;
+    uint     pad1;
+    uint     pad2;
+};
+
+layout(set = 2, binding = 3, std430) readonly buffer InstBuf
+{
+    InstDat insts[];
+} instBuf;
+
+// ------------------------------------------------------------
+// Materials + textures
+// ------------------------------------------------------------
+struct GpuMat
+{
+    vec3  baseCol;
+    float opacIt;
+
+    vec3  emisCol;
+    float emisIt;
+
+    float roughIt;
+    float metalIt;
+    float iorVal;
+    float padIt;
+
+    int baseTex;
+    int normTex;
+    int mraoTex;
+    int emisTex;
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer MatSSB
+{
+    GpuMat mats[];
+} matSsb;
+
+const int kMaxTex = 512;
+layout(set = 1, binding = 1) uniform sampler2D tex2d[kMaxTex];
+
+void main()
+{
+    uint instId = gl_InstanceCustomIndexEXT;
+
+    // Validate instance index
+    int instLenI = instBuf.insts.length();
+    if (instLenI <= 0)
+        return;
+
+    uint instLen = uint(instLenI);
+    if (instId >= instLen)
+        return;
+
+    InstDat instDat = instBuf.insts[instId];
+
+    // Validate primitive index
+    if (instDat.triCnt == 0u)
+        return;
+
+    uint primId = gl_PrimitiveID;
+    if (primId >= instDat.triCnt)
+        return;
+
+    // Need UVs, material indices
+    if (instDat.uvvAdr == 0ul || instDat.matAdr == 0ul)
+        return;
+
+    // Need at least one material
+    int matLenI = matSsb.mats.length();
+    if (matLenI <= 0)
+        return;
+
+    uint matLen = uint(matLenI);
+
+    MatBuf matRef = MatBuf(instDat.matAdr);
+    uint   matRaw = matRef.mat1[primId];
+
+    uint matId = (matRaw < matLen) ? matRaw : (matLen - 1u);
+    GpuMat matDat = matSsb.mats[matId];
+
+    int baseTex = matDat.baseTex;
+    if (baseTex < 0 || baseTex >= kMaxTex)
+        return;
+
+    // Interpolate UVs
+    UvBuf uvRef = UvBuf(instDat.uvvAdr);
+
+    float barB = hitAttr.x;
+    float barC = hitAttr.y;
+    float barA = 1.0 - barB - barC;
+
+    uint base3 = primId * 3u;
+
+    vec2 uvA = uvRef.uvv4[base3 + 0u].xy;
+    vec2 uvB = uvRef.uvv4[base3 + 1u].xy;
+    vec2 uvC = uvRef.uvv4[base3 + 2u].xy;
+
+    vec2 texUV = uvA * barA + uvB * barB + uvC * barC;
+
+    // Sample alpha
+    float a = texture(tex2d[nonuniformEXT(baseTex)], texUV).a;
+
+    // Apply opacity factor
+    float op = matDat.opacIt;
+    if (op < 0.0) op = 0.0;
+    if (op > 1.0) op = 1.0;
+    a *= op;
+
+    const float cutoff = 0.5;
+
+    // Transparent texels should NOT block shadow rays
+    if (a < cutoff)
+    {
+        ignoreIntersectionEXT;
+        return;
+    }
+}
