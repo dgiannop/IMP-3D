@@ -1,8 +1,6 @@
 //==============================================================
 // RtScene.rchit  (Primary shading + optional directional shadows)
-// FULL REPLACEMENT (includes exposure + ACES tonemap to fix over-lit RT)
 //==============================================================
-//
 // WORLD-space lighting conventions:
 // - Directional:
 //   * lights[i].dir_range.xyz = forward direction in WORLD space
@@ -12,12 +10,7 @@
 //   * lights[i].pos_type.xyz  = position in WORLD space
 //   * lights[i].dir_range.xyz = forward direction in WORLD space (spot only)
 //   * lights[i].dir_range.w   = range (0 = inverse-square only)
-//
-// Notes:
-// - This shader writes LDR into the payload (your RT output is rgba8).
-// - We apply exposure (uLights.ambient.a) and ACES tonemap here so RT matches raster.
-//
-
+//==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
@@ -130,6 +123,16 @@ const int kMaxTex = 512;
 layout(set = 1, binding = 1) uniform sampler2D tex2d[kMaxTex];
 
 // ------------------------------------------------------------
+// Controls (match raster intent)
+// ------------------------------------------------------------
+const bool  USE_UBO_EXPOSURE = true;   // RT should use the same exposure model
+const bool  ENABLE_TONEMAP   = true;   // RT output is LDR in your present pass (rgba8)
+const float FIXED_EXPOSURE   = 1.0;
+
+// Keep light clamp consistent with raster (you used 25.0 there)
+const float MAX_RADIANCE = 25.0;
+
+// ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
 float satVal(float v) { return clamp(v, 0.0, 1.0); }
@@ -160,7 +163,7 @@ float gSmt(float ndvVal, float ndlVal, float kVal)
 }
 
 // ------------------------------------------------------------
-// Tonemap (ACES fitted) - LDR output for rgba8 RT target
+// Tonemap (ACES fitted) - same as raster
 // ------------------------------------------------------------
 vec3 tonemapACES(vec3 x)
 {
@@ -206,7 +209,6 @@ float shadDir(vec3 hitPosW, vec3 hitNrmW, vec3 dirToLightW, float angRad)
 {
     const int sampCt = 4;
 
-    // NOTE: gl_HitTEXT is distance in WORLD units.
     float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);
 
     vec3  rayOrg = hitPosW + hitNrmW * epsVal;
@@ -352,24 +354,24 @@ void main()
     vec3  f0Col  = mix(f0Die, albCol, metVal);
 
     // --------------------------------------------------------
-    // Ambient (IMPORTANT):
+    // Ambient:
     //   uLights.ambient.rgb = ambient fill (already scaled on CPU)
-    //   uLights.ambient.a   = exposure scalar (NOT ambient strength)
     // --------------------------------------------------------
     vec3 ambCol = uLights.ambient.rgb * albCol * aoVal;
 
+    // --------------------------------------------------------
+    // Direct lighting (HDR)
+    // --------------------------------------------------------
     vec3 lgtSum = vec3(0.0);
 
     const uint litCnt = min(uLights.info.x, 64u);
     if (litCnt == 0u)
     {
-        vec3 outCol = ambCol + albCol * 0.02;
-
-        float exposure = max(uLights.ambient.a, 0.0);
-        outCol *= exposure;
-        outCol = tonemapACES(outCol);
-
-        colorOut = vec4(outCol, 1.0);
+        vec3 outLin = ambCol + albCol * 0.02;
+        float exposure0 = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0) : FIXED_EXPOSURE;
+        outLin *= exposure0;
+        vec3 outLdr = ENABLE_TONEMAP ? tonemapACES(outLin) : clamp(outLin, vec3(0.0), vec3(1.0));
+        colorOut = vec4(outLdr, 1.0);
         return;
     }
 
@@ -460,9 +462,8 @@ void main()
         vec3  litCol = Ld.color_intensity.rgb;
         float litInt = Ld.color_intensity.a;
 
-        // Pre-tonemap safety clamp (match raster)
         vec3 radCol = litCol * litInt;
-        radCol = min(radCol, vec3(25.0));
+        radCol = min(radCol, vec3(MAX_RADIANCE)); // keep RT safety clamp consistent
 
         lgtSum += (difBr + specBr) * radCol * (ndlVal * attVal);
     }
@@ -471,16 +472,18 @@ void main()
     if (matDat.emisTex >= 0)
         emiCol *= texture(tex2d[matDat.emisTex], texUV).rgb;
 
-    vec3 outCol = ambCol + lgtSum + emiCol;
-    outCol = max(outCol, vec3(0.0));
+    // HDR linear
+    vec3 outLin = ambCol + lgtSum + emiCol;
+    outLin = max(outLin, vec3(0.0));
 
-    // Apply exposure + tonemap for LDR rgba8 output
-    /*float exposure = max(uLights.ambient.a, 0.0);
-    outCol *= exposure;
-    outCol = tonemapACES(outCol);*/
-float exposure = 1.0; // TEMP
-    outCol *= exposure;
-    outCol = tonemapACES(outCol);
+    // Apply exposure + tonemap to match raster LDR output
+    float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0) : FIXED_EXPOSURE;
+    vec3 outRgb = outLin * exposure;
 
-    colorOut = vec4(outCol, 1.0);
+    if (ENABLE_TONEMAP)
+        outRgb = tonemapACES(outRgb);
+    else
+        outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
+
+    colorOut = vec4(outRgb, 1.0);
 }
