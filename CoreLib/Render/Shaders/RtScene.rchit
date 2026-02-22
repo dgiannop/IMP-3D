@@ -1,15 +1,9 @@
 //==============================================================
-// RtScene.rchit  (Primary shading + optional directional shadows)
-//==============================================================
-// WORLD-space lighting conventions:
-// - Directional:
-//   * lights[i].dir_range.xyz = forward direction in WORLD space
-//   * surface->light (WORLD)  = -forward
-//   * lights[i].dir_range.w   = angular radius (radians) for soft shadows (optional)
-// - Point/Spot:
-//   * lights[i].pos_type.xyz  = position in WORLD space
-//   * lights[i].dir_range.xyz = forward direction in WORLD space (spot only)
-//   * lights[i].dir_range.w   = range (0 = inverse-square only)
+// RtScene.rchit  (FULL REPLACEMENT)
+// Primary shading + optional directional soft shadows
+// - WORLD-space lighting conventions MATCH raster
+// - Adds exposure + ACES tonemap to match raster output behavior
+// - Adds safety radiance clamp like raster (MAX_RADIANCE)
 //==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
@@ -81,7 +75,7 @@ struct GpuLight
 {
     vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
     vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius (dir)
-    vec4 color_intensity; // rgb = color, a = intensity
+    vec4 color_intensity; // rgb = color (linear), a = intensity
     vec4 spot_params;     // x = innerCos, y = outerCos
 };
 
@@ -123,14 +117,12 @@ const int kMaxTex = 512;
 layout(set = 1, binding = 1) uniform sampler2D tex2d[kMaxTex];
 
 // ------------------------------------------------------------
-// Controls (match raster intent)
+// Controls (match raster philosophy)
 // ------------------------------------------------------------
-const bool  USE_UBO_EXPOSURE = true;   // RT should use the same exposure model
-const bool  ENABLE_TONEMAP   = true;   // RT output is LDR in your present pass (rgba8)
-const float FIXED_EXPOSURE   = 1.0;
-
-// Keep light clamp consistent with raster (you used 25.0 there)
-const float MAX_RADIANCE = 25.0;
+const bool  ENABLE_TONEMAP      = true;
+const bool  USE_UBO_EXPOSURE    = true;   // RT should usually use uLights.ambient.a
+const float FIXED_EXPOSURE      = 1.0;
+const float MAX_RADIANCE        = 25.0;   // same clamp as raster
 
 // ------------------------------------------------------------
 // Helpers
@@ -162,9 +154,7 @@ float gSmt(float ndvVal, float ndlVal, float kVal)
     return gSch(ndvVal, kVal) * gSch(ndlVal, kVal);
 }
 
-// ------------------------------------------------------------
-// Tonemap (ACES fitted) - same as raster
-// ------------------------------------------------------------
+// ACES fitted (same as raster)
 vec3 tonemapACES(vec3 x)
 {
     const float a = 2.51;
@@ -209,6 +199,7 @@ float shadDir(vec3 hitPosW, vec3 hitNrmW, vec3 dirToLightW, float angRad)
 {
     const int sampCt = 4;
 
+    // NOTE: gl_HitTEXT is distance in WORLD units.
     float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);
 
     vec3  rayOrg = hitPosW + hitNrmW * epsVal;
@@ -354,26 +345,16 @@ void main()
     vec3  f0Col  = mix(f0Die, albCol, metVal);
 
     // --------------------------------------------------------
-    // Ambient:
-    //   uLights.ambient.rgb = ambient fill (already scaled on CPU)
+    // Ambient (fill only, NOT exposure)
     // --------------------------------------------------------
     vec3 ambCol = uLights.ambient.rgb * albCol * aoVal;
 
     // --------------------------------------------------------
-    // Direct lighting (HDR)
+    // Direct lighting (matches raster math)
     // --------------------------------------------------------
     vec3 lgtSum = vec3(0.0);
 
     const uint litCnt = min(uLights.info.x, 64u);
-    if (litCnt == 0u)
-    {
-        vec3 outLin = ambCol + albCol * 0.02;
-        float exposure0 = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0) : FIXED_EXPOSURE;
-        outLin *= exposure0;
-        vec3 outLdr = ENABLE_TONEMAP ? tonemapACES(outLin) : clamp(outLin, vec3(0.0), vec3(1.0));
-        colorOut = vec4(outLdr, 1.0);
-        return;
-    }
 
     for (uint litIdx = 0u; litIdx < litCnt; ++litIdx)
     {
@@ -386,7 +367,7 @@ void main()
         if (litTyp == 0u) // Directional
         {
             vec3 fwdW = normalize(Ld.dir_range.xyz);
-            Lw        = normalize(-fwdW);
+            Lw        = normalize(-fwdW); // surface->light
 
             float angRad = max(Ld.dir_range.w, 0.0);
             float visVal = shadDir(hitPosW, nrmWld, Lw, angRad);
@@ -459,31 +440,37 @@ void main()
         vec3 kdVal  = (vec3(1.0) - frsCol) * (1.0 - metVal);
         vec3 difBr  = kdVal * albCol / 3.14159265;
 
+        // Radiance (and clamp) matches raster
         vec3  litCol = Ld.color_intensity.rgb;
         float litInt = Ld.color_intensity.a;
 
-        vec3 radCol = litCol * litInt;
-        radCol = min(radCol, vec3(MAX_RADIANCE)); // keep RT safety clamp consistent
+        vec3 radCol = litCol * (litInt * attVal);
+        radCol = min(radCol, vec3(MAX_RADIANCE));
 
-        lgtSum += (difBr + specBr) * radCol * (ndlVal * attVal);
+        lgtSum += (difBr + specBr) * radCol * ndlVal;
     }
 
+    // --------------------------------------------------------
+    // Emissive
+    // --------------------------------------------------------
     vec3 emiCol = matDat.emisCol * matDat.emisIt;
     if (matDat.emisTex >= 0)
         emiCol *= texture(tex2d[matDat.emisTex], texUV).rgb;
 
-    // HDR linear
-    vec3 outLin = ambCol + lgtSum + emiCol;
-    outLin = max(outLin, vec3(0.0));
+    // --------------------------------------------------------
+    // Compose in linear, then exposure+tonemap like raster
+    // --------------------------------------------------------
+    vec3 colorLin = ambCol + lgtSum + emiCol;
+    colorLin = max(colorLin, vec3(0.0));
 
-    // Apply exposure + tonemap to match raster LDR output
     float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0) : FIXED_EXPOSURE;
-    vec3 outRgb = outLin * exposure;
+
+    vec3 outCol = colorLin * exposure;
 
     if (ENABLE_TONEMAP)
-        outRgb = tonemapACES(outRgb);
+        outCol = tonemapACES(outCol);
     else
-        outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
+        outCol = clamp(outCol, vec3(0.0), vec3(1.0));
 
-    colorOut = vec4(outRgb, 1.0);
+    colorOut = vec4(outCol, 1.0);
 }
