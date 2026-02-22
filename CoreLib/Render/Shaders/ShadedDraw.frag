@@ -85,17 +85,23 @@ struct GpuLight
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
     uvec4    info;        // x = lightCount
-    vec4     ambient;     // rgb ambient, a exposure (optional)
+    vec4     ambient;     // rgb ambient fill, a exposure scalar
     GpuLight lights[64];
 } uLights;
 
 // ============================================================
 // Output controls
 // ============================================================
-const bool  ENABLE_GAMMA_ENCODE = false; // keep false for VK_FORMAT_*_SRGB
-const bool  ENABLE_TONEMAP      = true;
-const bool  USE_UBO_EXPOSURE    = false;
-const float FIXED_EXPOSURE      = 1.0;
+// IMPORTANT: swapchain is SRGB, so keep gamma encode OFF.
+const bool ENABLE_GAMMA_ENCODE = false;
+const bool ENABLE_TONEMAP      = true;
+
+// IMPORTANT: turn ON UBO exposure (fixes "overlit" scenes)
+const bool USE_UBO_EXPOSURE    = true;
+const float FIXED_EXPOSURE     = 1.0; // unused when USE_UBO_EXPOSURE=true
+
+// Optional: include ambient fill from uLights.ambient.rgb
+const bool USE_AMBIENT_FILL    = true;
 
 // ============================================================
 // Helpers
@@ -204,7 +210,7 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
     // Inverse-square attenuation
     atten = 1.0 / dist2;
 
-    // Optional range window (matches your RT/raster convention)
+    // Optional range window
     float range = Ld.dir_range.w;
     if (range > 0.0)
     {
@@ -214,13 +220,9 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 
     if (lt == GPU_LIGHT_SPOT)
     {
-        // dir_range.xyz = forward direction (WORLD) the spot points toward
         vec3 spotFwdW = normalize(Ld.dir_range.xyz);
 
-        // RT uses:
-        //   cosAn = dot(normalize(-Lw), spotF)
-        // where Lw is surface->light, so -Lw is light->surface.
-        vec3 lightToSurfaceW = normalize(Pworld - Ld.pos_type.xyz);
+        vec3  lightToSurfaceW = normalize(Pworld - Ld.pos_type.xyz);
         float cosAn = dot(spotFwdW, lightToSurfaceW);
 
         float innerC = Ld.spot_params.x; // cos(inner)
@@ -230,7 +232,6 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
                     ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
                     : step(outerC, cosAn);
 
-        // Match RT feel: squared cone
         atten *= coneV * coneV;
     }
 }
@@ -266,7 +267,7 @@ void main()
 
     if (mat.baseColorTexture >= 0)
     {
-        // If the texture image was created as *_SRGB, sampling returns linear automatically.
+        // If the image was created as *_SRGB, sampling returns linear automatically.
         albedo *= texture(uTextures[mat.baseColorTexture], vUv).rgb;
     }
 
@@ -334,7 +335,7 @@ void main()
         vec3 radiance = uLights.lights[i].color_intensity.rgb *
                         (uLights.lights[i].color_intensity.a * atten);
 
-        // Keep your safety clamp
+        // Safety clamp (keep for now, but it hides real exposure/tonemap issues)
         radiance = min(radiance, vec3(25.0));
 
         direct += (diff + spec) * radiance * NdotL;
@@ -363,13 +364,18 @@ void main()
     if (mat.emissiveTexture >= 0)
         emissive *= texture(uTextures[mat.emissiveTexture], vUv).rgb;
 
-    vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive;
+    // Optional ambient fill from UBO
+    vec3 ambientFill = vec3(0.0);
+    if (USE_AMBIENT_FILL)
+        ambientFill = uLights.ambient.rgb * albedo * ao;
 
+    vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive + ambientFill;
+
+    // --------------------------------------------------------
+    // Exposure + tonemap
+    // --------------------------------------------------------
     float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0)
                                       : FIXED_EXPOSURE;
-
-    if (USE_UBO_EXPOSURE == false && uLights.info.x <= 1u)
-        exposure *= 1.10;
 
     vec3 outRgb = colorLinear * exposure;
 
@@ -378,6 +384,7 @@ void main()
     else
         outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
 
+    // IMPORTANT: swapchain is SRGB, so do NOT gamma encode here.
     if (ENABLE_GAMMA_ENCODE)
         outRgb = gammaEncode(outRgb);
 
