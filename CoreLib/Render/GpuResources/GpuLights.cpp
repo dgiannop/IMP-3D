@@ -17,13 +17,20 @@
 //
 // IMPORTANT:
 //   - out.ambient.rgb = ambient fill color (already scaled by ambientFill)
-//   - out.ambient.a   = exposure scalar (NOT ambient strength)
+//   - out.ambient.a   = exposure scalar used by shaders
+//
+// Production/editor behavior (this file):
+//   - NO auto-exposure derived from max light intensity.
+//     (That cancels user light tuning and makes lights feel "dim".)
+//   - out.ambient.a = baseExposureScalar * settings.exposure
+//     where baseExposureScalar is a calibrated constant (defaults ~0.02).
 // ============================================================
 
 #include "GpuLights.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "CoreUtilities.hpp"
 #include "Light.hpp"
@@ -58,11 +65,17 @@ namespace
     constexpr float kMinSpotOuterRad = 0.5f * 3.14159265f / 180.0f;  // 0.5°
     constexpr float kMaxSpotOuterRad = 89.0f * 3.14159265f / 180.0f; // 89°
 
-    // Practical exposure clamp:
-    // Your imported intensities can be 50k-100k, so 1e-3 is too dark.
-    // 0.02 is a reasonable "editor minimum" so content stays visible.
-    constexpr float kMinExposure = 0.02f;
-    constexpr float kMaxExposure = 2.0f;
+    // ------------------------------------------------------------
+    // Exposure calibration
+    // ------------------------------------------------------------
+    // This is the key to "production looking" editor lighting without auto-exposure.
+    // Your previous code clamped auto exposure to ~0.02 minimum, so 0.02 is a good
+    // baseline to preserve your current look (and avoid instant blowout).
+    constexpr float kBaseExposureScalar = 0.02f;
+
+    // Safety clamp for the final exposure scalar (prevents NaNs / accidental huge values).
+    constexpr float kMinFinalExposure = 0.0f;
+    constexpr float kMaxFinalExposure = 8.0f;
 
     static glm::vec3 clamp01(const glm::vec3& c) noexcept
     {
@@ -283,7 +296,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
         }
 
         printf("\n=== buildGpuLightsUBO() drawMode=%s ===\n", dmStr);
-        printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposure=%.3f tonemap=%d\n",
+        printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposureUI=%.3f tonemap=%d\n",
                settings.useHeadlight ? 1 : 0,
                settings.useSceneLights ? 1 : 0,
                settings.ambientFill,
@@ -304,9 +317,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
             pushLight(out, makeSpotWorld(posWorld, dirWorld, headlight.color, headlight.intensity, kHeadlightRange, kHeadlightInnerRad, kHeadlightOuterRad));
 
             if constexpr (kLogSceneLights)
-            {
                 printf("Headlight: FLASHLIGHT SPOT  I=%.3f\n", headlight.intensity);
-            }
         }
         else
         {
@@ -354,12 +365,8 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     // 2) Scene lights (optional)
     // ------------------------------------------------------------
     uint32_t sceneLightCount = 0u;
-    float    maxSceneLight   = 0.0f;
+    float    maxSceneLight   = 0.0f; // kept for logging only
 
-    // NOTE:
-    // - Intensity multipliers must allow 0 so 0% actually disables lights.
-    // - Range multipliers should remain positive-only (0 range means "inverse-square only" in shader),
-    //   so keep them using clampPos().
     const float ptIntMul  = clampNonNeg(settings.scenePointIntensityMul, 1.0f);
     const float ptRngMul  = clampPos(settings.scenePointRangeMul, 1.0f);
     const float spIntMul  = clampNonNeg(settings.sceneSpotIntensityMul, 1.0f);
@@ -374,9 +381,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
             const auto ids = lh->allLights();
 
             if constexpr (kLogSceneLights)
-            {
                 printf("Scene lights: enabled count=%zu\n", ids.size());
-            }
 
             for (LightId id : ids)
             {
@@ -398,17 +403,17 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                     range *= spRngMul;
                 }
 
-                // Use the SAME clamped color that goes to the GPU for exposure metric.
+                // Logging metric only (NOT used for exposure anymore)
                 const glm::vec3 c01  = clamp01(l->color);
                 const float     cmax = std::max(c01.x, std::max(c01.y, c01.z));
-
-                maxSceneLight = std::max(maxSceneLight, intensity * cmax);
+                maxSceneLight        = std::max(maxSceneLight, intensity * cmax);
                 ++sceneLightCount;
 
                 if constexpr (kLogSceneLights)
                 {
-                    const char* typeStr = (l->type == LightType::Directional) ? "Directional" : (l->type == LightType::Point) ? "Point"
-                                                                                                                              : "Spot";
+                    const char* typeStr = (l->type == LightType::Directional) ? "Directional"
+                                          : (l->type == LightType::Point)     ? "Point"
+                                                                              : "Spot";
                     printf("  Light %-11s  I=%.3f  range=%.3f  color=(%.3f %.3f %.3f)\n",
                            typeStr,
                            intensity,
@@ -450,29 +455,29 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     }
 
     // ------------------------------------------------------------
-    // 3) Ambient.rgb (fill) and Ambient.a (exposure)
+    // 3) Ambient.rgb (fill) and Ambient.a (exposure scalar)
     // ------------------------------------------------------------
     const float fill = std::max(0.0f, settings.ambientFill);
     out.ambient      = glm::vec4(fill, fill, fill, 0.0f);
 
-    float exposure = 1.0f;
+    // IMPORTANT:
+    // settings.exposure is treated as a user multiplier (NOT a scalar exposure itself).
+    // This keeps your UI semantics: slider at 1.0 == neutral.
+    const float exposureMul = std::max(0.0f, settings.exposure);
 
-    if (sceneLightCount > 0u && maxSceneLight > 0.0f)
-    {
-        constexpr float kKey = 0.18f;
-        exposure             = kKey / maxSceneLight;
-        exposure             = std::clamp(exposure, kMinExposure, kMaxExposure);
-    }
+    float exposureScalar = kBaseExposureScalar * exposureMul;
+    exposureScalar       = std::clamp(exposureScalar, kMinFinalExposure, kMaxFinalExposure);
 
-    exposure *= std::max(0.0f, settings.exposure);
-    out.ambient.a = exposure;
+    out.ambient.a = exposureScalar;
 
     if constexpr (kLogSceneLights)
     {
-        printf("Exposure: sceneLightCount=%u maxSceneLight=%.6f => exposure=%.6f\n",
+        printf("Exposure: base=%.6f mul=%.6f => exposureScalar=%.6f (sceneLightCount=%u maxSceneLight=%.6f)\n",
+               kBaseExposureScalar,
+               exposureMul,
+               out.ambient.a,
                sceneLightCount,
-               maxSceneLight,
-               out.ambient.a);
+               maxSceneLight);
         printf("GPU lightCount=%u\n", out.info.x);
         printf("=== end buildGpuLightsUBO() ===\n");
     }

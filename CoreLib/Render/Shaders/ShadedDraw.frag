@@ -1,7 +1,10 @@
 //==============================================================
 // ShadedDraw.frag  (WORLD-space shading; WORLD-space lights)
-// - Assumes swapchain/target is SRGB: DO NOT gamma-encode here.
-// - Lights UBO conventions MATCH RT:
+// Production-ready defaults:
+// - Swapchain/target is SRGB: DO NOT gamma-encode here.
+// - Camera-like exposure control (EV -> exp2) using uLights.ambient.a as UI 0..1.
+// - No per-light radiance clamp (keeps highlight structure; ACES handles rolloff).
+// - WORLD-space light conventions match RT:
 //
 //   Directional:
 //     * dir_range.xyz = forward direction the light points toward (WORLD)
@@ -85,23 +88,27 @@ struct GpuLight
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
     uvec4    info;        // x = lightCount
-    vec4     ambient;     // rgb ambient fill, a exposure scalar
+    vec4     ambient;     // rgb ambient fill, a exposure UI scalar (0..1)
     GpuLight lights[64];
 } uLights;
 
 // ============================================================
 // Output controls
 // ============================================================
-// IMPORTANT: swapchain is SRGB, so keep gamma encode OFF.
+// Swapchain is SRGB: keep gamma encode OFF.
 const bool ENABLE_GAMMA_ENCODE = false;
 const bool ENABLE_TONEMAP      = true;
 
-// IMPORTANT: turn ON UBO exposure (fixes "overlit" scenes)
+// Use uLights.ambient.a as UI slider 0..1 mapped to EV range.
 const bool USE_UBO_EXPOSURE    = true;
-const float FIXED_EXPOSURE     = 1.0; // unused when USE_UBO_EXPOSURE=true
+const float FIXED_EXPOSURE     = 1.0;
 
-// Optional: include ambient fill from uLights.ambient.rgb
+// Optional ambient fill from uLights.ambient.rgb
 const bool USE_AMBIENT_FILL    = true;
+
+// Exposure mapping (UI 0..1 -> EV)
+const float EXPOSURE_EV_MIN    = -6.0;
+const float EXPOSURE_EV_MAX    =  6.0;
 
 // ============================================================
 // Helpers
@@ -131,7 +138,7 @@ float G_Smith(float NdotV, float NdotL, float k)
 }
 
 // ------------------------------------------------------------
-// Modest studio environment (WORLD +Y up)
+// Modest studio environment (WORLD +Y up) for viewport IBL
 // ------------------------------------------------------------
 vec3 studioEnv(vec3 dir)
 {
@@ -183,10 +190,21 @@ mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
 // Outputs:
 //   Lworld = surface->light direction in WORLD
 //   atten  = distance * cone attenuation
+// Notes:
+//   - Inverse-square is physically plausible.
+//   - Range uses a smooth window (gentle, avoids killing lights early).
 // ------------------------------------------------------------
 const uint GPU_LIGHT_DIRECTIONAL = 0u;
 const uint GPU_LIGHT_POINT       = 1u;
 const uint GPU_LIGHT_SPOT        = 2u;
+
+float smoothRangeWindow(float dist, float range)
+{
+    if (range <= 0.0) return 1.0;
+    float x = saturate(1.0 - dist / range);
+    // Smoothstep-like window to zero at range, less aggressive than x*x.
+    return x * x * (3.0 - 2.0 * x);
+}
 
 void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 {
@@ -195,12 +213,10 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
-        // dir_range.xyz = forward direction the light points toward (WORLD)
         Lworld = normalize(-Ld.dir_range.xyz); // surface->light
         return;
     }
 
-    // Point/Spot: position is WORLD
     vec3  toLight = Ld.pos_type.xyz - Pworld; // surface->light vector
     float dist2   = max(dot(toLight, toLight), 1e-6);
     float dist    = sqrt(dist2);
@@ -210,14 +226,10 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
     // Inverse-square attenuation
     atten = 1.0 / dist2;
 
-    // Optional range window
-    float range = Ld.dir_range.w;
-    if (range > 0.0)
-    {
-        float x = saturate(1.0 - dist / range);
-        atten *= x * x;
-    }
+    // Gentle range window
+    atten *= smoothRangeWindow(dist, Ld.dir_range.w);
 
+    // Spotlight cone
     if (lt == GPU_LIGHT_SPOT)
     {
         vec3 spotFwdW = normalize(Ld.dir_range.xyz);
@@ -232,7 +244,8 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
                     ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
                     : step(outerC, cosAn);
 
-        atten *= coneV * coneV;
+        // No extra squaring: keeps spots punchy while still smooth.
+        atten *= coneV;
     }
 }
 
@@ -332,11 +345,10 @@ void main()
         vec3 kd   = (vec3(1.0) - F) * (1.0 - metallic);
         vec3 diff = kd * albedo / 3.14159265;
 
-        vec3 radiance = uLights.lights[i].color_intensity.rgb *
-                        (uLights.lights[i].color_intensity.a * atten);
+        const float LIGHT_INTENSITY_SCALE = 5.0; // 2..10
 
-        // Safety clamp (keep for now, but it hides real exposure/tonemap issues)
-        radiance = min(radiance, vec3(25.0));
+        vec3 radiance = uLights.lights[i].color_intensity.rgb *
+                        (uLights.lights[i].color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
 
         direct += (diff + spec) * radiance * NdotL;
     }
@@ -364,7 +376,6 @@ void main()
     if (mat.emissiveTexture >= 0)
         emissive *= texture(uTextures[mat.emissiveTexture], vUv).rgb;
 
-    // Optional ambient fill from UBO
     vec3 ambientFill = vec3(0.0);
     if (USE_AMBIENT_FILL)
         ambientFill = uLights.ambient.rgb * albedo * ao;
@@ -372,10 +383,16 @@ void main()
     vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive + ambientFill;
 
     // --------------------------------------------------------
-    // Exposure + tonemap
+    // Exposure + tonemap (camera-like)
     // --------------------------------------------------------
-    float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0)
-                                      : FIXED_EXPOSURE;
+    float exposure = FIXED_EXPOSURE;
+
+    if (USE_UBO_EXPOSURE)
+    {
+        float t = saturate(uLights.ambient.a);               // UI 0..1
+        float exposureEV = mix(EXPOSURE_EV_MIN, EXPOSURE_EV_MAX, t);
+        exposure = exp2(exposureEV);
+    }
 
     vec3 outRgb = colorLinear * exposure;
 
@@ -384,7 +401,7 @@ void main()
     else
         outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
 
-    // IMPORTANT: swapchain is SRGB, so do NOT gamma encode here.
+    // Swapchain is SRGB: do NOT gamma encode here.
     if (ENABLE_GAMMA_ENCODE)
         outRgb = gammaEncode(outRgb);
 
