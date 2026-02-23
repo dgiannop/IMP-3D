@@ -403,7 +403,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                     range *= spRngMul;
                 }
 
-                // Logging metric only (NOT used for exposure anymore)
+                // Logging metric only (NOT used for exposure)
                 const glm::vec3 c01  = clamp01(l->color);
                 const float     cmax = std::max(c01.x, std::max(c01.y, c01.z));
                 maxSceneLight        = std::max(maxSceneLight, intensity * cmax);
@@ -460,10 +460,15 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     const float fill = std::max(0.0f, settings.ambientFill);
     out.ambient      = glm::vec4(fill, fill, fill, 0.0f);
 
-    // IMPORTANT:
-    // settings.exposure is treated as a user multiplier (NOT a scalar exposure itself).
-    // This keeps your UI semantics: slider at 1.0 == neutral.
+    // settings.exposure is a UI multiplier (1.0 = neutral)
     const float exposureMul = std::max(0.0f, settings.exposure);
+
+    // Calibrated baseline (the value that keeps raster from blowing out)
+    constexpr float kBaseExposureScalar = 0.02f;
+
+    // Safety clamp (optional but recommended)
+    constexpr float kMinFinalExposure = 0.0f;
+    constexpr float kMaxFinalExposure = 8.0f;
 
     float exposureScalar = kBaseExposureScalar * exposureMul;
     exposureScalar       = std::clamp(exposureScalar, kMinFinalExposure, kMaxFinalExposure);
@@ -472,13 +477,9 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
 
     if constexpr (kLogSceneLights)
     {
-        printf("Exposure: base=%.6f mul=%.6f => exposureScalar=%.6f (sceneLightCount=%u maxSceneLight=%.6f)\n",
+        printf("Exposure: base=%.6f mul=%.6f => exposureScalar=%.6f\n",
                kBaseExposureScalar,
                exposureMul,
-               out.ambient.a,
-               sceneLightCount,
-               maxSceneLight);
-        printf("GPU lightCount=%u\n", out.info.x);
-        printf("=== end buildGpuLightsUBO() ===\n");
+               out.ambient.a);
     }
 }

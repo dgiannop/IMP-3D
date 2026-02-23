@@ -56,7 +56,7 @@ void main()
     //  - Miss[0] = primary miss
     traceRayEXT(
         u_tlas,
-        gl_RayFlagsCullBackFacingTrianglesEXT,
+        gl_RayFlagsCullBackFacingTrianglesEXT | gl_RayFlagsOpaqueEXT,
         0xFF,
         0,
         1,

@@ -107,8 +107,8 @@ const float FIXED_EXPOSURE     = 1.0;
 const bool USE_AMBIENT_FILL    = true;
 
 // Exposure mapping (UI 0..1 -> EV)
-const float EXPOSURE_EV_MIN    = -6.0;
-const float EXPOSURE_EV_MAX    =  6.0;
+const float EXPOSURE_EV_MIN    = -3.0;
+const float EXPOSURE_EV_MAX    =  3.0;
 
 // ============================================================
 // Helpers
