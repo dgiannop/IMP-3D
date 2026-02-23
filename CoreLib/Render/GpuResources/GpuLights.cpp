@@ -10,10 +10,14 @@
 //     * Directional: lights[i].dir_range.xyz = forward (WORLD)
 //     * Point:       lights[i].pos_type.xyz  = position (WORLD)
 //     * Spot:        lights[i].pos_type.xyz  = position (WORLD)
-//                  lights[i].dir_range.xyz  = forward (WORLD)
+//                   lights[i].dir_range.xyz  = forward (WORLD)
 //   - lights[i].dir_range.w:
 //     * Directional: angular radius (radians) for soft shadows (optional; 0 = hard)
 //     * Point/Spot:  range (world units), 0 = inverse-square only
+//
+// RT-only soft shadows for point/spot:
+//   - lights[i].spot_params.z stores angular radius (radians) for soft shadows.
+//     (Directional softness stays in dir_range.w.)
 //
 // IMPORTANT:
 //   - out.ambient.rgb = ambient fill color (already scaled by ambientFill)
@@ -21,9 +25,7 @@
 //
 // Production/editor behavior (this file):
 //   - NO auto-exposure derived from max light intensity.
-//     (That cancels user light tuning and makes lights feel "dim".)
-//   - out.ambient.a = baseExposureScalar * settings.exposure
-//     where baseExposureScalar is a calibrated constant (defaults ~0.02).
+//   - out.ambient.a = kBaseExposureScalar * settings.exposure
 // ============================================================
 
 #include "GpuLights.hpp"
@@ -66,14 +68,19 @@ namespace
     constexpr float kMaxSpotOuterRad = 89.0f * 3.14159265f / 180.0f; // 89°
 
     // ------------------------------------------------------------
+    // RT soft shadows: point/spot angular radii (radians)
+    // ------------------------------------------------------------
+    // 0 = hard. These are "area light" approximations. Tune as needed.
+    constexpr float kScenePointSoftnessRadians = 0.01f; // ~0.57°
+    constexpr float kSceneSpotSoftnessRadians  = 0.01f; // ~0.57°
+
+    // ------------------------------------------------------------
     // Exposure calibration
     // ------------------------------------------------------------
-    // This is the key to "production looking" editor lighting without auto-exposure.
-    // Your previous code clamped auto exposure to ~0.02 minimum, so 0.02 is a good
-    // baseline to preserve your current look (and avoid instant blowout).
+    // Baseline exposure scalar; settings.exposure is a UI multiplier.
     constexpr float kBaseExposureScalar = 0.02f;
 
-    // Safety clamp for the final exposure scalar (prevents NaNs / accidental huge values).
+    // Safety clamp for the final exposure scalar.
     constexpr float kMinFinalExposure = 0.0f;
     constexpr float kMaxFinalExposure = 8.0f;
 
@@ -105,7 +112,6 @@ namespace
     }
 
     // Positive-only clamp that FALLS BACK to a default on 0/negative/NaN.
-    // Use this for things where 0 is not meaningful (e.g., range multipliers).
     static float clampPos(float v, float def = 1.0f) noexcept
     {
         if (!std::isfinite(v))
@@ -118,7 +124,6 @@ namespace
     }
 
     // Non-negative clamp that ALLOWS 0.
-    // Use this for intensity multipliers so 0% actually disables lights.
     static float clampNonNeg(float v, float def = 1.0f) noexcept
     {
         if (!std::isfinite(v))
@@ -149,7 +154,7 @@ namespace
         GpuLight gl = {};
         gl.pos_type = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(GpuLightType::Directional));
 
-        const glm::vec3 fwdWorld = un::safe_normalize(dirWorld, glm::vec3(0, 0, -1));
+        const glm::vec3 fwdWorld = un::safe_normalize(dirWorld, glm::vec3(0.0f, 0.0f, -1.0f));
 
         gl.dir_range       = glm::vec4(fwdWorld, std::max(0.0f, softnessRadians));
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
@@ -161,13 +166,16 @@ namespace
     static GpuLight makePointWorld(const glm::vec3& posWorld,
                                    const glm::vec3& color,
                                    float            intensity,
-                                   float            range) noexcept
+                                   float            range,
+                                   float            softnessRadians) noexcept
     {
         GpuLight gl        = {};
         gl.pos_type        = glm::vec4(posWorld, static_cast<float>(GpuLightType::Point));
         gl.dir_range       = glm::vec4(0.0f, 0.0f, 0.0f, std::max(0.0f, range));
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
-        gl.spot_params     = glm::vec4(0.0f);
+
+        // x/y unused for point. z = RT soft-shadow angular radius.
+        gl.spot_params = glm::vec4(0.0f, 0.0f, std::max(0.0f, softnessRadians), 0.0f);
         return gl;
     }
 
@@ -177,7 +185,8 @@ namespace
                                   float            intensity,
                                   float            range,
                                   float            innerConeRad,
-                                  float            outerConeRad) noexcept
+                                  float            outerConeRad,
+                                  float            softnessRadians) noexcept
     {
         const float inner = std::max(0.0f, innerConeRad);
         const float outer = std::max(inner, outerConeRad);
@@ -190,38 +199,40 @@ namespace
 
         GpuLight gl        = {};
         gl.pos_type        = glm::vec4(posWorld, static_cast<float>(GpuLightType::Spot));
-        gl.dir_range       = glm::vec4(un::safe_normalize(dirWorld, glm::vec3(0, 0, -1)),
+        gl.dir_range       = glm::vec4(un::safe_normalize(dirWorld, glm::vec3(0.0f, 0.0f, -1.0f)),
                                  std::max(0.0f, range));
         gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
-        gl.spot_params     = glm::vec4(innerCos, outerCos, 0.0f, 0.0f);
+
+        // x=innerCos, y=outerCos, z=RT soft-shadow angular radius, w unused
+        gl.spot_params = glm::vec4(innerCos, outerCos, std::max(0.0f, softnessRadians), 0.0f);
         return gl;
     }
 
     static glm::vec3 viewportForwardWorld(const Viewport& vp) noexcept
     {
         const glm::mat4 invV = glm::inverse(vp.view());
-        const glm::vec3 fwd  = glm::vec3(invV * glm::vec4(0, 0, -1, 0));
-        return un::safe_normalize(fwd, glm::vec3(0, 0, -1));
+        const glm::vec3 fwd  = glm::vec3(invV * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+        return un::safe_normalize(fwd, glm::vec3(0.0f, 0.0f, -1.0f));
     }
 
     static glm::vec3 viewportRightWorld(const Viewport& vp) noexcept
     {
         const glm::mat4 invV = glm::inverse(vp.view());
-        const glm::vec3 rgt  = glm::vec3(invV * glm::vec4(1, 0, 0, 0));
-        return un::safe_normalize(rgt, glm::vec3(1, 0, 0));
+        const glm::vec3 rgt  = glm::vec3(invV * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+        return un::safe_normalize(rgt, glm::vec3(1.0f, 0.0f, 0.0f));
     }
 
     static glm::vec3 viewportUpWorld(const Viewport& vp) noexcept
     {
         const glm::mat4 invV = glm::inverse(vp.view());
-        const glm::vec3 up   = glm::vec3(invV * glm::vec4(0, 1, 0, 0));
-        return un::safe_normalize(up, glm::vec3(0, 1, 0));
+        const glm::vec3 up   = glm::vec3(invV * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+        return un::safe_normalize(up, glm::vec3(0.0f, 1.0f, 0.0f));
     }
 
     static glm::vec3 viewportPosWorld(const Viewport& vp) noexcept
     {
         const glm::mat4 invV = glm::inverse(vp.view());
-        const glm::vec3 p    = glm::vec3(invV * glm::vec4(0, 0, 0, 1));
+        const glm::vec3 p    = glm::vec3(invV * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
         return p;
     }
 
@@ -236,8 +247,9 @@ namespace
             case DrawMode::RAY_TRACE:
                 return s.rtPolicy;
             default:
-                return LightingSettings::ModePolicy::Both;
+                break;
         }
+        return LightingSettings::ModePolicy::Both;
     }
 
     static bool allowHeadlight(const LightingSettings& s, DrawMode mode) noexcept
@@ -245,7 +257,7 @@ namespace
         if (!s.useHeadlight)
             return false;
 
-        const auto p = policyForDrawMode(s, mode);
+        const LightingSettings::ModePolicy p = policyForDrawMode(s, mode);
         return (p == LightingSettings::ModePolicy::HeadlightOnly || p == LightingSettings::ModePolicy::Both);
     }
 
@@ -254,7 +266,7 @@ namespace
         if (!s.useSceneLights)
             return false;
 
-        const auto p = policyForDrawMode(s, mode);
+        const LightingSettings::ModePolicy p = policyForDrawMode(s, mode);
         return (p == LightingSettings::ModePolicy::SceneOnly || p == LightingSettings::ModePolicy::Both);
     }
 
@@ -295,13 +307,13 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                 break;
         }
 
-        printf("\n=== buildGpuLightsUBO() drawMode=%s ===\n", dmStr);
-        printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposureUI=%.3f tonemap=%d\n",
-               settings.useHeadlight ? 1 : 0,
-               settings.useSceneLights ? 1 : 0,
-               settings.ambientFill,
-               settings.exposure,
-               settings.tonemap ? 1 : 0);
+        std::printf("\n=== buildGpuLightsUBO() drawMode=%s ===\n", dmStr);
+        std::printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposureUI=%.3f tonemap=%d\n",
+                    settings.useHeadlight ? 1 : 0,
+                    settings.useSceneLights ? 1 : 0,
+                    settings.ambientFill,
+                    settings.exposure,
+                    settings.tonemap ? 1 : 0);
     }
 
     // ------------------------------------------------------------
@@ -314,10 +326,11 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
             const glm::vec3 posWorld = viewportPosWorld(vp);
             const glm::vec3 dirWorld = viewportForwardWorld(vp);
 
-            pushLight(out, makeSpotWorld(posWorld, dirWorld, headlight.color, headlight.intensity, kHeadlightRange, kHeadlightInnerRad, kHeadlightOuterRad));
+            // NOTE: spot_params.z used by RT for soft shadows (optional)
+            pushLight(out, makeSpotWorld(posWorld, dirWorld, headlight.color, headlight.intensity, kHeadlightRange, kHeadlightInnerRad, kHeadlightOuterRad, kSceneSpotSoftnessRadians));
 
             if constexpr (kLogSceneLights)
-                printf("Headlight: FLASHLIGHT SPOT  I=%.3f\n", headlight.intensity);
+                std::printf("Headlight: FLASHLIGHT SPOT  I=%.3f\n", headlight.intensity);
         }
         else
         {
@@ -352,11 +365,11 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
 
             if constexpr (kLogSceneLights)
             {
-                printf("Headlight: DIRECTIONAL  I=%.3f dirW=(%.3f %.3f %.3f)\n",
-                       headlight.intensity,
-                       dirWorld.x,
-                       dirWorld.y,
-                       dirWorld.z);
+                std::printf("Headlight: DIRECTIONAL  I=%.3f dirW=(%.3f %.3f %.3f)\n",
+                            headlight.intensity,
+                            dirWorld.x,
+                            dirWorld.y,
+                            dirWorld.z);
             }
         }
     }
@@ -365,7 +378,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     // 2) Scene lights (optional)
     // ------------------------------------------------------------
     uint32_t sceneLightCount = 0u;
-    float    maxSceneLight   = 0.0f; // kept for logging only
+    float    maxSceneLight   = 0.0f; // logging only
 
     const float ptIntMul  = clampNonNeg(settings.scenePointIntensityMul, 1.0f);
     const float ptRngMul  = clampPos(settings.scenePointRangeMul, 1.0f);
@@ -381,7 +394,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
             const auto ids = lh->allLights();
 
             if constexpr (kLogSceneLights)
-                printf("Scene lights: enabled count=%zu\n", ids.size());
+                std::printf("Scene lights: enabled count=%zu\n", ids.size());
 
             for (LightId id : ids)
             {
@@ -414,13 +427,13 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                     const char* typeStr = (l->type == LightType::Directional) ? "Directional"
                                           : (l->type == LightType::Point)     ? "Point"
                                                                               : "Spot";
-                    printf("  Light %-11s  I=%.3f  range=%.3f  color=(%.3f %.3f %.3f)\n",
-                           typeStr,
-                           intensity,
-                           range,
-                           c01.x,
-                           c01.y,
-                           c01.z);
+                    std::printf("  Light %-11s  I=%.3f  range=%.3f  color=(%.3f %.3f %.3f)\n",
+                                typeStr,
+                                intensity,
+                                range,
+                                c01.x,
+                                c01.y,
+                                c01.z);
                 }
 
                 switch (l->type)
@@ -430,7 +443,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                         break;
 
                     case LightType::Point:
-                        pushLight(out, makePointWorld(l->position, l->color, intensity, range));
+                        pushLight(out, makePointWorld(l->position, l->color, intensity, range, kScenePointSoftnessRadians));
                         break;
 
                     case LightType::Spot: {
@@ -438,7 +451,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                         float outerRad = l->spotOuterConeRad;
                         scaleSpotCones(innerRad, outerRad, spConeMul);
 
-                        pushLight(out, makeSpotWorld(l->position, l->direction, l->color, intensity, range, innerRad, outerRad));
+                        pushLight(out, makeSpotWorld(l->position, l->direction, l->color, intensity, range, innerRad, outerRad, kSceneSpotSoftnessRadians));
                         break;
                     }
                 }
@@ -451,7 +464,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     else
     {
         if constexpr (kLogSceneLights)
-            printf("Scene lights: skipped (policy or no scene)\n");
+            std::printf("Scene lights: skipped (policy or no scene)\n");
     }
 
     // ------------------------------------------------------------
@@ -460,15 +473,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     const float fill = std::max(0.0f, settings.ambientFill);
     out.ambient      = glm::vec4(fill, fill, fill, 0.0f);
 
-    // settings.exposure is a UI multiplier (1.0 = neutral)
     const float exposureMul = std::max(0.0f, settings.exposure);
-
-    // Calibrated baseline (the value that keeps raster from blowing out)
-    constexpr float kBaseExposureScalar = 0.02f;
-
-    // Safety clamp (optional but recommended)
-    constexpr float kMinFinalExposure = 0.0f;
-    constexpr float kMaxFinalExposure = 8.0f;
 
     float exposureScalar = kBaseExposureScalar * exposureMul;
     exposureScalar       = std::clamp(exposureScalar, kMinFinalExposure, kMaxFinalExposure);
@@ -477,9 +482,14 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
 
     if constexpr (kLogSceneLights)
     {
-        printf("Exposure: base=%.6f mul=%.6f => exposureScalar=%.6f\n",
-               kBaseExposureScalar,
-               exposureMul,
-               out.ambient.a);
+        std::printf("Exposure: base=%.6f mul=%.6f => exposureScalar=%.6f\n",
+                    kBaseExposureScalar,
+                    exposureMul,
+                    out.ambient.a);
+
+        std::printf("Scene lights: pushed=%u (seen=%u) maxSceneLight(log)=%.3f\n",
+                    out.info.x,
+                    sceneLightCount,
+                    maxSceneLight);
     }
 }

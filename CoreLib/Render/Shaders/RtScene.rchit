@@ -339,7 +339,7 @@ float shadowDirectional(vec3 P, vec3 N, vec3 Ldir, float angRad)
     return sum / float(DIR_SHADOW_SAMPLES);
 }
 
-float shadowPointOrSpot(vec3 P, vec3 N, vec3 Ldir, float distToLight)
+float shadowPointOrSpotSoft(vec3 P, vec3 N, vec3 Ldir, float distToLight, float angRad)
 {
     if (!ENABLE_SHADOWS)
         return 1.0;
@@ -347,9 +347,28 @@ float shadowPointOrSpot(vec3 P, vec3 N, vec3 Ldir, float distToLight)
     float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
     vec3  org = P + N * eps;
 
-    // IMPORTANT: tMax should stop at the light (minus a tiny epsilon)
     float tMax = max(distToLight - 0.01, 0.01);
-    return traceShadow(org, normalize(Ldir), tMax);
+
+    // Hard shadow if no angular radius
+    if (angRad <= 0.0)
+        return traceShadow(org, normalize(Ldir), tMax);
+
+    // Soft shadow: sample a cone around the light direction.
+    // This approximates a finite emitter with angular radius angRad.
+    const int sampCt = 4; // tune: 4/8/16
+    float sum = 0.0;
+
+    for (int s = 0; s < sampCt; ++s)
+    {
+        uvec3 key3 = uvec3(gl_LaunchIDEXT.xy, uint(s));
+        float r0 = hash13(key3);
+        float r1 = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
+
+        vec3 d = coneSample(normalize(Ldir), angRad, vec2(r0, r1));
+        sum += traceShadow(org, d, tMax);
+    }
+
+    return sum / float(sampCt);
 }
 
 // ------------------------------------------------------------
@@ -493,14 +512,15 @@ void main()
 
             if (lt == GPU_LIGHT_DIRECTIONAL)
             {
-                float angRad = max(Ld.dir_range.w, 0.0); // directional softness (radians)
+                float angRad = max(Ld.dir_range.w, 0.0);
                 float vis    = shadowDirectional(posW, N, L, angRad);
                 atten *= vis;
             }
             else
             {
                 float distToLight = length(Ld.pos_type.xyz - posW);
-                float vis         = shadowPointOrSpot(posW, N, L, distToLight);
+                float angRad = max(Ld.spot_params.z, 0.0); // NEW: point/spot angular radius in radians
+                float vis = shadowPointOrSpotSoft(posW, N, L, distToLight, angRad);
                 atten *= vis;
             }
         }
