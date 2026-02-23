@@ -4,9 +4,8 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
-layout(location = 0) rayPayloadInEXT vec4 colorOut;
+layout(location = 0) rayPayloadInEXT vec4 payload;
 
-// Unified camera UBO: set=0, binding=0 (for clearColor)
 layout(set = 0, binding = 0, std140) uniform CameraUBO
 {
     mat4 proj;
@@ -24,5 +23,5 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 
 void main()
 {
-    colorOut = uCamera.clearColor;
+    payload = uCamera.clearColor;
 }

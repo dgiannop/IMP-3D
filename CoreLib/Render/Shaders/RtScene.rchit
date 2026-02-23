@@ -1,16 +1,16 @@
 //==============================================================
 // RtScene.rchit  (FULL REPLACEMENT)
-// Primary shading + optional directional soft shadows
-// WORLD-space lighting conventions (match raster):
-//   - Directional: lights[i].dir_range.xyz = forward (WORLD)
-//                 surface->light Lw = -forward
-//   - Point/Spot : lights[i].pos_type.xyz  = position (WORLD)
-//                 lights[i].dir_range.xyz = forward (WORLD) for spot
-//                 range in dir_range.w (0 = inverse-square only)
+// PBR + studio IBL + exposure EV mapping + WORLD-space lights
+// + Shadows (dir soft, point/spot hard by default)
 //
-// IMPORTANT DEBUG SWITCHES BELOW:
-//   - FORCE_GEO_NORMAL: if this fixes RT, your normals are not WORLD (instance transform issue)
-//   - DISABLE_SPOT_CONE: if this fixes RT, your spot forward/cone convention is mismatched
+// SBT ASSUMPTIONS (you must match your C++ SBT records):
+//   HitGroup[0] = Primary shading (this shader)
+//   HitGroup[1] = Shadow occlusion hit (RtShadow.rchit OR RtShadow.rahit)
+//   Miss[0]     = Primary miss (RtScene.rmiss)
+//   Miss[1]     = Shadow miss (RtShadow.rmiss)  -> leaves occFlag = 0
+//
+// If you don’t have alpha cutouts in RT yet, use RtShadow.rchit (closest-hit).
+// If you DO have alpha cutouts, use RtShadow.rahit (any-hit) + closest-hit optional.
 //==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
@@ -18,21 +18,30 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-layout(location = 0) rayPayloadInEXT vec4 colorOut;
-layout(location = 1) rayPayloadEXT uint occFlag;
+layout(location = 0) rayPayloadInEXT vec4 payload;
+layout(location = 1) rayPayloadEXT   uint occFlag; // used only when tracing shadow rays from here
 
 hitAttributeEXT vec2 hitAttr;
 
 // ------------------------------------------------------------
-// DEBUG SWITCHES (set to true/false to isolate the break)
+// Controls
 // ------------------------------------------------------------
-const bool  FORCE_GEO_NORMAL    = false; // diagnostic: ignores nrmBuf normals
-const bool  DISABLE_SPOT_CONE   = false; // diagnostic: disables spot cone attenuation
-const bool  ENABLE_DIR_SHADOWS  = true;  // disable if you suspect shadow path
+const bool  ENABLE_SHADOWS      = true;
+const bool  ENABLE_DIR_SOFT     = true;
+const int   DIR_SHADOW_SAMPLES  = 4;      // 1,2,4,8...
+const float SHADOW_BIAS_MIN     = 1e-3;   // world
+const float SHADOW_BIAS_SLOPE   = 1e-4;   // world * tHit
+
 const bool  ENABLE_TONEMAP      = true;
 const bool  USE_UBO_EXPOSURE    = true;
 const float FIXED_EXPOSURE      = 1.0;
-const float MAX_RADIANCE        = 25.0;  // clamp like raster
+
+// Exposure mapping (UI 0..1 -> EV), MUST match raster
+const float EXPOSURE_EV_MIN     = -3.0;
+const float EXPOSURE_EV_MAX     =  3.0;
+
+// Studio IBL scale, MUST match raster if you want identical look
+const bool  USE_AMBIENT_FILL    = true;
 
 // ------------------------------------------------------------
 // Buffer references (device address)
@@ -67,8 +76,7 @@ layout(set = 2, binding = 3, std430) readonly buffer InstBuf
 } instBuf;
 
 // ------------------------------------------------------------
-// Camera UBO (frame set, unified with raster/RT)
-// set = 0, binding = 0
+// Camera UBO (WORLD camPos)
 // ------------------------------------------------------------
 layout(set = 0, binding = 0, std140) uniform CameraUBO
 {
@@ -81,13 +89,12 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
     mat4 invViewProj;
 
     vec4 camPos;     // WORLD
-    vec4 viewport;   // (w, h, 1/w, 1/h)
-    vec4 clearColor; // RT clear color
+    vec4 viewport;
+    vec4 clearColor;
 } uCamera;
 
 // ------------------------------------------------------------
-// Lights UBO (WORLD space; shared with raster)
-// set = 0, binding = 1
+// Lights UBO (WORLD space; matches raster)
 // ------------------------------------------------------------
 struct GpuLight
 {
@@ -100,7 +107,7 @@ struct GpuLight
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
     uvec4    info;    // x = lightCount
-    vec4     ambient; // rgb = ambient fill (already scaled), a = exposure scalar
+    vec4     ambient; // rgb ambient fill, a exposure UI scalar (0..1)
     GpuLight lights[64];
 } uLights;
 
@@ -137,31 +144,28 @@ layout(set = 1, binding = 1) uniform sampler2D tex2d[kMaxTex];
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
-float satVal(float v) { return clamp(v, 0.0, 1.0); }
+float saturate(float x) { return clamp(x, 0.0, 1.0); }
 
-vec3 fresShk(float cosVh, vec3 f0Col)
+vec3 fresnelSchlick(float cosTheta, vec3 F0)
 {
-    float oneMh = 1.0 - satVal(cosVh);
-    float pow5  = oneMh * oneMh;
-    pow5        = pow5 * pow5 * oneMh;
-    return f0Col + (vec3(1.0) - f0Col) * pow5;
+    return F0 + (vec3(1.0) - F0) * pow(1.0 - saturate(cosTheta), 5.0);
 }
 
-float dGgx(float ndhVal, float alpVal)
+float D_GGX(float NdotH, float alpha)
 {
-    float a2Val = alpVal * alpVal;
-    float denV  = (ndhVal * ndhVal) * (a2Val - 1.0) + 1.0;
-    return a2Val / max(3.14159265 * denV * denV, 1e-7);
+    float a2 = alpha * alpha;
+    float d  = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    return a2 / max(3.14159265 * d * d, 1e-7);
 }
 
-float gSch(float ndxVal, float kVal)
+float G_SchlickGGX(float NdotX, float k)
 {
-    return ndxVal / max(ndxVal * (1.0 - kVal) + kVal, 1e-7);
+    return NdotX / max(NdotX * (1.0 - k) + k, 1e-7);
 }
 
-float gSmt(float ndvVal, float ndlVal, float kVal)
+float G_Smith(float NdotV, float NdotL, float k)
 {
-    return gSch(ndvVal, kVal) * gSch(ndlVal, kVal);
+    return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
 }
 
 vec3 tonemapACES(vec3 x)
@@ -174,8 +178,90 @@ vec3 tonemapACES(vec3 x)
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// Modest studio env (same as raster ShadedDraw.frag)
+vec3 studioEnv(vec3 dir)
+{
+    dir = normalize(dir);
+
+    float t = saturate(dir.y * 0.5 + 0.5);
+
+    vec3 top    = vec3(1.0, 1.0, 1.05) * 0.75;
+    vec3 bottom = vec3(0.03, 0.03, 0.035) * 0.55;
+
+    vec3 col = mix(bottom, top, pow(t, 0.65));
+
+    vec3 box0 = normalize(vec3(0.15, 0.85, 0.35));
+    col += vec3(1.0, 0.98, 0.95) * pow(saturate(dot(dir, box0)), 25.0) * 1.5;
+
+    vec3 box1 = normalize(vec3(-0.55, 0.65, 0.50));
+    col += vec3(0.95, 0.98, 1.0) * pow(saturate(dot(dir, box1)), 35.0) * 1.1;
+
+    col += vec3(0.20, 0.25, 0.30) * (1.0 - abs(dir.y)) * 0.15;
+    return col;
+}
+
+// Normal from object->world (buffers usually object space; required if instances move)
+vec3 toWorldNormal(vec3 nObj)
+{
+    mat3 objToWorld3 = mat3(gl_ObjectToWorldEXT);
+    mat3 nrmMat      = transpose(inverse(objToWorld3));
+    return normalize(nrmMat * nObj);
+}
+
 // ------------------------------------------------------------
-// Random + cone sample (directional soft shadows)
+// Light evaluation (MATCH raster ShadedDraw.frag)
+// ------------------------------------------------------------
+const uint GPU_LIGHT_DIRECTIONAL = 0u;
+const uint GPU_LIGHT_POINT       = 1u;
+const uint GPU_LIGHT_SPOT        = 2u;
+
+float smoothRangeWindow(float dist, float range)
+{
+    if (range <= 0.0) return 1.0;
+    float x = saturate(1.0 - dist / range);
+    return x * x * (3.0 - 2.0 * x);
+}
+
+void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
+{
+    uint lt = uint(Ld.pos_type.w + 0.5);
+    atten   = 1.0;
+
+    if (lt == GPU_LIGHT_DIRECTIONAL)
+    {
+        Lworld = normalize(-Ld.dir_range.xyz); // surface->light
+        return;
+    }
+
+    vec3  toLight = Ld.pos_type.xyz - Pworld;
+    float dist2   = max(dot(toLight, toLight), 1e-6);
+    float dist    = sqrt(dist2);
+
+    Lworld = toLight / dist;
+
+    atten = 1.0 / dist2;
+    atten *= smoothRangeWindow(dist, Ld.dir_range.w);
+
+    if (lt == GPU_LIGHT_SPOT)
+    {
+        vec3 spotFwdW = normalize(Ld.dir_range.xyz);
+
+        vec3  lightToSurfaceW = normalize(Pworld - Ld.pos_type.xyz);
+        float cosAn           = dot(spotFwdW, lightToSurfaceW);
+
+        float innerC = Ld.spot_params.x; // cos(inner)
+        float outerC = Ld.spot_params.y; // cos(outer)
+
+        float coneV = (innerC > outerC)
+                    ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
+                    : step(outerC, cosAn);
+
+        atten *= coneV; // NOTE: no extra squaring (matches your raster)
+    }
+}
+
+// ------------------------------------------------------------
+// Shadows
 // ------------------------------------------------------------
 float hash13(uvec3 key3)
 {
@@ -186,7 +272,7 @@ float hash13(uvec3 key3)
     return float(mixV) / 4294967295.0;
 }
 
-vec3 coneSmpl(vec3 dirIn, float angRad, vec2 rnd2)
+vec3 coneSample(vec3 dirIn, float angRad, vec2 rnd2)
 {
     float cosA  = cos(angRad);
     float cosT  = mix(1.0, cosA, rnd2.x);
@@ -204,61 +290,66 @@ vec3 coneSmpl(vec3 dirIn, float angRad, vec2 rnd2)
     return normalize(dirOut);
 }
 
-float shadDir(vec3 hitPosW, vec3 hitNrmW, vec3 dirToLightW, float angRad)
+// Shadow visibility for a ray: returns 1 if unoccluded else 0
+float traceShadow(vec3 orgW, vec3 dirW, float tMax)
 {
-    if (!ENABLE_DIR_SHADOWS)
+    if (!ENABLE_SHADOWS)
         return 1.0;
 
-    const int sampCt = 4;
+    occFlag = 0u;
 
-    float epsVal = max(1e-3, 1e-4 * gl_HitTEXT);
-    vec3  rayOrg = hitPosW + hitNrmW * epsVal;
+    traceRayEXT(
+        tlasTop,
+        gl_RayFlagsTerminateOnFirstHitEXT |
+        gl_RayFlagsCullBackFacingTrianglesEXT, // keep consistent with your scene (adjust if needed)
+        0xFF,
+        1, 1, 1,          // missIndex=1 (shadow miss), sbtRecordOffset=1 (shadow hit group)
+        orgW,
+        0.001,
+        dirW,
+        tMax,
+        1
+    );
 
-    float visSum = 0.0;
-
-    for (int sampIx = 0; sampIx < sampCt; ++sampIx)
-    {
-        uvec3 key3 = uvec3(gl_LaunchIDEXT.xy, uint(sampIx));
-        float rndA = hash13(key3);
-        float rndB = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
-
-        vec3 rayDir = (angRad > 0.0)
-                    ? coneSmpl(dirToLightW, angRad, vec2(rndA, rndB))
-                    : normalize(dirToLightW);
-
-        occFlag = 0u;
-
-        traceRayEXT(
-            tlasTop,
-            gl_RayFlagsTerminateOnFirstHitEXT |
-            gl_RayFlagsCullBackFacingTrianglesEXT,
-            0xFF,
-            1, 1, 1,      // SBT: missIndex=1 (shadow miss), sbtRecordOffset=1 (shadow hit group)
-            rayOrg,
-            0.001,
-            rayDir,
-            1e30,
-            1
-        );
-
-        visSum += (occFlag == 0u) ? 1.0 : 0.0;
-    }
-
-    return visSum / float(sampCt);
+    return (occFlag == 0u) ? 1.0 : 0.0;
 }
 
-// ------------------------------------------------------------
-// Optional instance-space -> world-space normal transform
-// If your normal/pos buffers are OBJECT space, this is REQUIRED.
-// Many toolchains expose gl_ObjectToWorldEXT in ray tracing.
-// ------------------------------------------------------------
-vec3 toWorldNormal(vec3 nObj)
+float shadowDirectional(vec3 P, vec3 N, vec3 Ldir, float angRad)
 {
-    // If the builtin exists, use it. If your compiler errors here,
-    // comment this out and fix by adding an instance matrix to InstDat.
-    mat3 objToWorld3 = mat3(gl_ObjectToWorldEXT);
-    mat3 nrmMat      = transpose(inverse(objToWorld3));
-    return normalize(nrmMat * nObj);
+    if (!ENABLE_SHADOWS)
+        return 1.0;
+
+    float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
+    vec3  org = P + N * eps;
+
+    if (!ENABLE_DIR_SOFT || angRad <= 0.0 || DIR_SHADOW_SAMPLES <= 1)
+        return traceShadow(org, normalize(Ldir), 1e30);
+
+    float sum = 0.0;
+    for (int s = 0; s < DIR_SHADOW_SAMPLES; ++s)
+    {
+        uvec3 key3 = uvec3(gl_LaunchIDEXT.xy, uint(s));
+        float r0 = hash13(key3);
+        float r1 = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
+
+        vec3 d = coneSample(Ldir, angRad, vec2(r0, r1));
+        sum += traceShadow(org, d, 1e30);
+    }
+
+    return sum / float(DIR_SHADOW_SAMPLES);
+}
+
+float shadowPointOrSpot(vec3 P, vec3 N, vec3 Ldir, float distToLight)
+{
+    if (!ENABLE_SHADOWS)
+        return 1.0;
+
+    float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
+    vec3  org = P + N * eps;
+
+    // IMPORTANT: tMax should stop at the light (minus a tiny epsilon)
+    float tMax = max(distToLight - 0.01, 0.01);
+    return traceShadow(org, normalize(Ldir), tMax);
 }
 
 // ------------------------------------------------------------
@@ -270,7 +361,7 @@ void main()
 
     if (instId >= uint(instBuf.insts.length()))
     {
-        colorOut = vec4(1.0, 0.0, 1.0, 1.0);
+        payload = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
@@ -283,14 +374,14 @@ void main()
         instDat.matAdr == 0ul ||
         instDat.triCnt == 0u)
     {
-        colorOut = vec4(1.0, 0.0, 1.0, 1.0);
+        payload = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
     const uint primId = gl_PrimitiveID;
     if (primId >= instDat.triCnt)
     {
-        colorOut = vec4(1.0, 0.0, 1.0, 1.0);
+        payload = vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
 
@@ -300,8 +391,8 @@ void main()
     UvBuf  uvvBuf = UvBuf(instDat.uvvAdr);
     MatBuf matBuf = MatBuf(instDat.matAdr);
 
-    // WORLD hit position from ray state
-    vec3 hitPosW = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    // WORLD hit position
+    vec3 posW = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
     // Triangle indices
     const uint base4 = primId * 4u;
@@ -318,208 +409,176 @@ void main()
     const float barC = hitAttr.y;
     const float barA = 1.0 - barB - barC;
 
-    // Per-tri normals/uvs are stored sequentially (triCnt*3)
+    // Per-tri normals/uvs (triCnt*3)
     const uint base3 = primId * 3u;
 
-    vec3 nrmA = nrmBuf.nrm4[base3 + 0u].xyz;
-    vec3 nrmB = nrmBuf.nrm4[base3 + 1u].xyz;
-    vec3 nrmC = nrmBuf.nrm4[base3 + 2u].xyz;
+    vec3 nA = nrmBuf.nrm4[base3 + 0u].xyz;
+    vec3 nB = nrmBuf.nrm4[base3 + 1u].xyz;
+    vec3 nC = nrmBuf.nrm4[base3 + 2u].xyz;
 
-    // Interpolated normal (likely OBJECT space depending on your builder)
-    vec3 nrmInterp = normalize(nrmA * barA + nrmB * barB + nrmC * barC);
+    vec3 nObj = normalize(nA * barA + nB * barB + nC * barC);
 
-    // Geometric normal (same space as posBuf)
-    vec3 geoN = normalize(cross(posB - posA, posC - posA));
+    vec3 geoNObj = normalize(cross(posB - posA, posC - posA));
+    if (dot(nObj, nObj) < 1e-20) nObj = geoNObj;
 
-    vec3 nrmWld;
+    vec3 N = toWorldNormal(nObj);
 
-    if (FORCE_GEO_NORMAL)
-    {
-        // Diagnostic: if this makes RT sane, your normal buffer space is wrong.
-        nrmWld = geoN;
-    }
-    else
-    {
-        // Use interpolated, fallback to geo if degenerate
-        vec3 nUse = (dot(nrmInterp, nrmInterp) > 1e-20) ? nrmInterp : geoN;
-
-        // If your buffers are OBJECT space, convert normal to WORLD.
-        // If your buffers are already WORLD space, this still "mostly works"
-        // only if objectToWorld is identity. If not identity, you MUST know
-        // which space your buffers are in.
-        //
-        // If this transform is wrong for your data, set FORCE_GEO_NORMAL=true
-        // and/or remove toWorldNormal() and fix on CPU/InstDat.
-        nrmWld = toWorldNormal(nUse);
-    }
+    // Backface handling (raster did gl_FrontFacing flip)
+    const bool isBackface = (gl_HitKindEXT == gl_HitKindBackFacingTriangleEXT);
+    if (isBackface)
+        N = -N;
 
     // UVs
-    vec2 uvA  = uvvBuf.uvv4[base3 + 0u].xy;
-    vec2 uvB  = uvvBuf.uvv4[base3 + 1u].xy;
-    vec2 uvC  = uvvBuf.uvv4[base3 + 2u].xy;
-    vec2 texUV = uvA * barA + uvB * barB + uvC * barC;
+    vec2 uvA = uvvBuf.uvv4[base3 + 0u].xy;
+    vec2 uvB = uvvBuf.uvv4[base3 + 1u].xy;
+    vec2 uvC = uvvBuf.uvv4[base3 + 2u].xy;
+    vec2 vUv = uvA * barA + uvB * barB + uvC * barC;
 
-    // View vector in WORLD space
-    vec3 Vw = normalize(uCamera.camPos.xyz - hitPosW);
+    // View vector (WORLD)
+    vec3 V = normalize(uCamera.camPos.xyz - posW);
 
     // Material fetch
     const uint matRaw = matBuf.mat1[primId];
     const uint matCnt = uint(matSsb.mats.length());
     const uint matId  = (matCnt > 0u) ? min(matRaw, matCnt - 1u) : 0u;
 
-    GpuMat matDat = (matCnt > 0u) ? matSsb.mats[matId] : GpuMat(
+    GpuMat mat = (matCnt > 0u) ? matSsb.mats[matId] : GpuMat(
         vec3(1, 0, 1), 1.0,
         vec3(0),       0.0,
         0.5, 0.0, 1.5, 0.0,
         -1, -1, -1, -1);
 
-    vec3 albCol = matDat.baseCol;
-    if (matDat.baseTex >= 0)
-        albCol *= texture(tex2d[matDat.baseTex], texUV).rgb;
+    vec3 albedo = mat.baseCol;
+    if (mat.baseTex >= 0)
+        albedo *= texture(tex2d[mat.baseTex], vUv).rgb;
 
-    float rouVal = clamp(matDat.roughIt, 0.04, 1.0);
-    float metVal = clamp(matDat.metalIt, 0.0, 1.0);
-    float aoVal  = 1.0;
+    float roughness = clamp(mat.roughIt, 0.04, 1.0);
+    float metallic  = clamp(mat.metalIt,  0.0,  1.0);
+    float ao        = 1.0;
 
-    if (matDat.mraoTex >= 0)
+    if (mat.mraoTex >= 0)
     {
-        vec3 mraCol = texture(tex2d[matDat.mraoTex], texUV).rgb;
-        aoVal       = clamp(mraCol.r, 0.0, 1.0);
-        rouVal      = clamp(rouVal * mraCol.g, 0.04, 1.0);
-        metVal      = clamp(metVal * mraCol.b, 0.0, 1.0);
+        vec3 mrao = texture(tex2d[mat.mraoTex], vUv).rgb;
+        ao        = clamp(mrao.r, 0.0, 1.0);
+        roughness = clamp(roughness * mrao.g, 0.04, 1.0);
+        metallic  = clamp(metallic  * mrao.b, 0.0,  1.0);
     }
 
-    float alpVal = rouVal * rouVal;
+    float alpha = roughness * roughness;
 
-    float iorVal = max(matDat.iorVal, 1.0);
-    float f0Sca  = pow((iorVal - 1.0) / (iorVal + 1.0), 2.0);
-    vec3  f0Die  = vec3(clamp(f0Sca, 0.02, 0.08));
-    vec3  f0Col  = mix(f0Die, albCol, metVal);
+    float ior = max(mat.iorVal, 1.0);
+    float f0s = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    vec3  F0d = vec3(clamp(f0s, 0.02, 0.08));
+    vec3  F0  = mix(F0d, albedo, metallic);
 
-    // Ambient fill only (NOT exposure)
-    vec3 ambCol = uLights.ambient.rgb * albCol * aoVal;
+    // --------------------------------------------------------
+    // Direct lighting (+ shadows)
+    // --------------------------------------------------------
+    vec3 direct = vec3(0.0);
 
-    // Direct lighting
-    vec3 lgtSum = vec3(0.0);
+    uint lightCount = min(uLights.info.x, 64u);
 
-    const uint litCnt = min(uLights.info.x, 64u);
-
-    for (uint litIdx = 0u; litIdx < litCnt; ++litIdx)
+    for (uint i = 0u; i < lightCount; ++i)
     {
-        GpuLight Ld     = uLights.lights[litIdx];
-        uint     litTyp = uint(Ld.pos_type.w + 0.5);
+        GpuLight Ld = uLights.lights[i];
 
-        vec3  Lw     = vec3(0.0); // surface->light (WORLD)
-        float attVal = 1.0;
+        vec3  L;
+        float atten;
+        evalLight(Ld, posW, L, atten);
 
-        if (litTyp == 0u) // Directional
+        // Shadows
+        if (ENABLE_SHADOWS)
         {
-            // UBO stores forward (WORLD) => surface->light = -forward
-            vec3 fwdW = normalize(Ld.dir_range.xyz);
-            Lw        = normalize(-fwdW);
+            uint lt = uint(Ld.pos_type.w + 0.5);
 
-            float angRad = max(Ld.dir_range.w, 0.0);
-            float visVal = shadDir(hitPosW, nrmWld, Lw, angRad);
-            attVal *= visVal;
-        }
-        else if (litTyp == 1u) // Point
-        {
-            vec3  toLgt = Ld.pos_type.xyz - hitPosW;
-            float dst2  = max(dot(toLgt, toLgt), 1e-8);
-            float dstV  = sqrt(dst2);
-            Lw          = toLgt / dstV;
-
-            attVal = 1.0 / dst2;
-
-            float rngV = Ld.dir_range.w;
-            if (rngV > 0.0)
+            if (lt == GPU_LIGHT_DIRECTIONAL)
             {
-                float facV = satVal(1.0 - (dstV / rngV));
-                attVal *= facV * facV;
+                float angRad = max(Ld.dir_range.w, 0.0); // directional softness (radians)
+                float vis    = shadowDirectional(posW, N, L, angRad);
+                atten *= vis;
+            }
+            else
+            {
+                float distToLight = length(Ld.pos_type.xyz - posW);
+                float vis         = shadowPointOrSpot(posW, N, L, distToLight);
+                atten *= vis;
             }
         }
-        else if (litTyp == 2u) // Spot
-        {
-            vec3  toLgt = Ld.pos_type.xyz - hitPosW;
-            float dst2  = max(dot(toLgt, toLgt), 1e-8);
-            float dstV  = sqrt(dst2);
-            Lw          = toLgt / dstV;
 
-            attVal = 1.0 / dst2;
-
-            float rngV = Ld.dir_range.w;
-            if (rngV > 0.0)
-            {
-                float facV = satVal(1.0 - (dstV / rngV));
-                attVal *= facV * facV;
-            }
-
-            if (!DISABLE_SPOT_CONE)
-            {
-                // UBO stores forward (WORLD). We want light->surface direction:
-                // light->surface = normalize(hitPosW - lightPosW) = normalize(-Lw)
-                vec3  spotF = normalize(Ld.dir_range.xyz);
-                float cosAn = dot(normalize(-Lw), spotF);
-
-                float innCs = Ld.spot_params.x;
-                float outCs = Ld.spot_params.y;
-
-                float coneV = satVal((cosAn - outCs) / max(innCs - outCs, 1e-5));
-                attVal *= coneV * coneV;
-            }
-        }
-        else
-        {
-            continue;
-        }
-
-        float ndlVal = satVal(dot(nrmWld, Lw));
-        float ndvVal = satVal(dot(nrmWld, Vw));
-        if (ndlVal <= 0.0 || ndvVal <= 0.0)
+        float NdotL = saturate(dot(N, L));
+        float NdotV = saturate(dot(N, V));
+        if (NdotL <= 0.0 || NdotV <= 0.0)
             continue;
 
-        vec3 halfV = normalize(Vw + Lw);
+        vec3  H     = normalize(V + L);
+        float NdotH = saturate(dot(N, H));
+        float VdotH = saturate(dot(V, H));
 
-        float ndhVal = satVal(dot(nrmWld, halfV));
-        float vdhVal = satVal(dot(Vw, halfV));
+        vec3  F = fresnelSchlick(VdotH, F0);
+        float D = D_GGX(NdotH, alpha);
 
-        vec3  frsCol = fresShk(vdhVal, f0Col);
-        float dVal   = dGgx(ndhVal, alpVal);
+        float r = roughness + 1.0;
+        float k = (r * r) / 8.0;
+        float G = G_Smith(NdotV, NdotL, k);
 
-        float rou1 = rouVal + 1.0;
-        float kVal = (rou1 * rou1) / 8.0;
-        float gVal = gSmt(ndvVal, ndlVal, kVal);
+        vec3 spec = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
+        vec3 kd   = (vec3(1.0) - F) * (1.0 - metallic);
+        vec3 diff = kd * albedo / 3.14159265;
 
-        vec3 specBr = (dVal * gVal * frsCol) / max(4.0 * ndvVal * ndlVal, 1e-7);
-        vec3 kdVal  = (vec3(1.0) - frsCol) * (1.0 - metVal);
-        vec3 difBr  = kdVal * albCol / 3.14159265;
+        // Match your raster scale
+        const float LIGHT_INTENSITY_SCALE = 5.0;
 
-        vec3  litCol = Ld.color_intensity.rgb;
-        float litInt = Ld.color_intensity.a;
+        vec3 radiance = Ld.color_intensity.rgb *
+                        (Ld.color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
 
-        vec3 radCol = litCol * (litInt * attVal);
-        radCol = min(radCol, vec3(MAX_RADIANCE));
-
-        lgtSum += (difBr + specBr) * radCol * ndlVal;
+        direct += (diff + spec) * radiance * NdotL;
     }
 
-    // Emissive
-    vec3 emiCol = matDat.emisCol * matDat.emisIt;
-    if (matDat.emisTex >= 0)
-        emiCol *= texture(tex2d[matDat.emisTex], texUV).rgb;
+    // --------------------------------------------------------
+    // Indirect (studio IBL) + ambient fill (match raster)
+    // --------------------------------------------------------
+    float hasSceneLights = (uLights.info.x > 1u) ? 1.0 : 0.0;
+    float iblScale = mix(1.0, 0.20, hasSceneLights);
 
-    // Compose in linear, then exposure+tonemap like raster
-    vec3 colorLin = ambCol + lgtSum + emiCol;
-    colorLin = max(colorLin, vec3(0.0));
+    vec3  Fv   = fresnelSchlick(saturate(dot(N, V)), F0);
+    vec3  kdI  = (vec3(1.0) - Fv) * (1.0 - metallic);
 
-    float exposure = USE_UBO_EXPOSURE ? max(uLights.ambient.a, 0.0) : FIXED_EXPOSURE;
+    vec3 diffIBL = kdI * albedo * studioEnv(N) * 0.10 * ao * iblScale;
 
-    vec3 outCol = colorLin * exposure;
+    vec3 R = reflect(-V, N);
+    vec3 specIBL = studioEnv(R) * Fv * (0.05 + 0.25 * (1.0 - roughness)) * iblScale;
+
+    vec3 floorFill = albedo * 0.004;
+
+    vec3 emissive = mat.emisCol * mat.emisIt;
+    if (mat.emisTex >= 0)
+        emissive *= texture(tex2d[mat.emisTex], vUv).rgb;
+
+    vec3 ambientFill = vec3(0.0);
+    if (USE_AMBIENT_FILL)
+        ambientFill = uLights.ambient.rgb * albedo * ao;
+
+    vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive + ambientFill;
+    colorLinear = max(colorLinear, vec3(0.0));
+
+    // --------------------------------------------------------
+    // Exposure + tonemap (MUST match raster)
+    // --------------------------------------------------------
+    float exposure = FIXED_EXPOSURE;
+
+    if (USE_UBO_EXPOSURE)
+    {
+        float t = saturate(uLights.ambient.a); // UI 0..1
+        float exposureEV = mix(EXPOSURE_EV_MIN, EXPOSURE_EV_MAX, t);
+        exposure = exp2(exposureEV);
+    }
+
+    vec3 outRgb = colorLinear * exposure;
 
     if (ENABLE_TONEMAP)
-        outCol = tonemapACES(outCol);
+        outRgb = tonemapACES(outRgb);
     else
-        outCol = clamp(outCol, vec3(0.0), vec3(1.0));
+        outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
 
-    colorOut = vec4(outCol, 1.0);
+    payload = vec4(outRgb, 1.0);
 }
