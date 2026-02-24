@@ -899,8 +899,8 @@ namespace
             {
                 if (mrId == kInvalidImageId)
                 {
-                    dst.mraoTexture(aoId);
-                    report.warning("glTF: material '" + dst.name() + "' has occlusionTexture but no metallicRoughnessTexture; using AO texture in MRAO slot.");
+                    // dst.mraoTexture(aoId);
+                    // report.warning("glTF: material '" + dst.name() + "' has occlusionTexture but no metallicRoughnessTexture; using AO texture in MRAO slot.");
                 }
                 else if (gm.occlusionTexture.index != pbr.metallicRoughnessTexture.index)
                 {
@@ -1078,7 +1078,7 @@ bool GltfSceneFormat::load(Scene*                       scene,
 
     // If you flip images at load time (we do: flipY=true), usually you do NOT flip UVs.
     // If textures are upside-down, set this to true.
-    const bool flipUvY = true;
+    const bool flipUvY = false;
 
     for (size_t nodeIdx = 0; nodeIdx < model.nodes.size(); ++nodeIdx)
     {
