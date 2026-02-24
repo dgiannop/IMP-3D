@@ -1,7 +1,8 @@
 //==============================================================
-// RtScene.rchit  (FULL REPLACEMENT)
+// RtScene.rchit
 // PBR + studio IBL + exposure EV mapping + WORLD-space lights
-// + Shadows (dir soft, point/spot hard by default)
+// + Shadows (dir soft, point/spot soft via spot_params.z)
+// + OPTIONAL: single-bounce perfect reflections (compile flag)
 //
 // SBT ASSUMPTIONS (you must match your C++ SBT records):
 //   HitGroup[0] = Primary shading (this shader)
@@ -9,8 +10,13 @@
 //   Miss[0]     = Primary miss (RtScene.rmiss)
 //   Miss[1]     = Shadow miss (RtShadow.rmiss)  -> leaves occFlag = 0
 //
-// If you don’t have alpha cutouts in RT yet, use RtShadow.rchit (closest-hit).
-// If you DO have alpha cutouts, use RtShadow.rahit (any-hit) + closest-hit optional.
+// NOTE ABOUT PAYLOAD:
+//   We keep your existing payload = vec4 at location=0.
+//   To support 1-bounce reflections without adding a new payload struct,
+//   payload.w is used as a recursion depth counter *during RT*.
+//   - RayGen should initialize payload = vec4(0,0,0, 0) (w = depth 0).
+//   - For depth==0 we output alpha=1 in payload.w.
+//   - For depth>0 we preserve payload.w = depth so nested rays can propagate depth.
 //==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
@@ -24,24 +30,35 @@ layout(location = 1) rayPayloadEXT   uint occFlag; // used only when tracing sha
 hitAttributeEXT vec2 hitAttr;
 
 // ------------------------------------------------------------
-// Controls
+// Controls (compile-time switches)
 // ------------------------------------------------------------
-const bool  ENABLE_SHADOWS      = true;
-const bool  ENABLE_DIR_SOFT     = true;
-const int   DIR_SHADOW_SAMPLES  = 4;      // 1,2,4,8...
-const float SHADOW_BIAS_MIN     = 1e-3;   // world
-const float SHADOW_BIAS_SLOPE   = 1e-4;   // world * tHit
 
-const bool  ENABLE_TONEMAP      = true;
-const bool  USE_UBO_EXPOSURE    = true;
-const float FIXED_EXPOSURE      = 1.0;
+// Shadows
+#define ENABLE_SHADOWS        1
+#define ENABLE_DIR_SOFT       1
+#define DIR_SHADOW_SAMPLES    4       // 1,2,4,8...
+#define SHADOW_BIAS_MIN       1e-3    // world
+#define SHADOW_BIAS_SLOPE     1e-4    // world * tHit
+
+// Tonemap / exposure
+#define ENABLE_TONEMAP        1
+#define USE_UBO_EXPOSURE      1
+#define FIXED_EXPOSURE        1.0
 
 // Exposure mapping (UI 0..1 -> EV), MUST match raster
-const float EXPOSURE_EV_MIN     = -3.0;
-const float EXPOSURE_EV_MAX     =  3.0;
+#define EXPOSURE_EV_MIN      (-3.0)
+#define EXPOSURE_EV_MAX       (3.0)
 
-// Studio IBL scale, MUST match raster if you want identical look
-const bool  USE_AMBIENT_FILL    = true;
+// Ambient fill (must match raster look)
+#define USE_AMBIENT_FILL      1
+
+// Optional: 1-bounce perfect reflections (no noise, no GI)
+#define ENABLE_SIMPLE_REFLECTIONS  1
+#define MAX_RT_DEPTH               2    // 1=primary only, 2=primary + 1 bounce
+#define REFLECTION_RAY_MIN_T       0.001
+
+// Light scale (must match raster)
+#define LIGHT_INTENSITY_SCALE      5.0
 
 // ------------------------------------------------------------
 // Buffer references (device address)
@@ -101,7 +118,7 @@ struct GpuLight
     vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
     vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius (dir)
     vec4 color_intensity; // rgb = color (linear), a = intensity
-    vec4 spot_params;     // x = innerCos, y = outerCos
+    vec4 spot_params;     // x = innerCos, y = outerCos, z = point/spot angular radius (radians)
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
@@ -293,8 +310,9 @@ vec3 coneSample(vec3 dirIn, float angRad, vec2 rnd2)
 // Shadow visibility for a ray: returns 1 if unoccluded else 0
 float traceShadow(vec3 orgW, vec3 dirW, float tMax)
 {
-    if (!ENABLE_SHADOWS)
-        return 1.0;
+#if !ENABLE_SHADOWS
+    return 1.0;
+#endif
 
     occFlag = 0u;
 
@@ -316,13 +334,17 @@ float traceShadow(vec3 orgW, vec3 dirW, float tMax)
 
 float shadowDirectional(vec3 P, vec3 N, vec3 Ldir, float angRad)
 {
-    if (!ENABLE_SHADOWS)
-        return 1.0;
+#if !ENABLE_SHADOWS
+    return 1.0;
+#endif
 
     float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
     vec3  org = P + N * eps;
 
-    if (!ENABLE_DIR_SOFT || angRad <= 0.0 || DIR_SHADOW_SAMPLES <= 1)
+#if !ENABLE_DIR_SOFT
+    return traceShadow(org, normalize(Ldir), 1e30);
+#else
+    if (angRad <= 0.0 || DIR_SHADOW_SAMPLES <= 1)
         return traceShadow(org, normalize(Ldir), 1e30);
 
     float sum = 0.0;
@@ -337,12 +359,14 @@ float shadowDirectional(vec3 P, vec3 N, vec3 Ldir, float angRad)
     }
 
     return sum / float(DIR_SHADOW_SAMPLES);
+#endif
 }
 
 float shadowPointOrSpotSoft(vec3 P, vec3 N, vec3 Ldir, float distToLight, float angRad)
 {
-    if (!ENABLE_SHADOWS)
-        return 1.0;
+#if !ENABLE_SHADOWS
+    return 1.0;
+#endif
 
     float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
     vec3  org = P + N * eps;
@@ -354,7 +378,6 @@ float shadowPointOrSpotSoft(vec3 P, vec3 N, vec3 Ldir, float distToLight, float 
         return traceShadow(org, normalize(Ldir), tMax);
 
     // Soft shadow: sample a cone around the light direction.
-    // This approximates a finite emitter with angular radius angRad.
     const int sampCt = 4; // tune: 4/8/16
     float sum = 0.0;
 
@@ -372,15 +395,51 @@ float shadowPointOrSpotSoft(vec3 P, vec3 N, vec3 Ldir, float distToLight, float 
 }
 
 // ------------------------------------------------------------
+// Optional: simple reflections (single bounce)
+// ------------------------------------------------------------
+#if ENABLE_SIMPLE_REFLECTIONS
+vec3 traceReflection(vec3 orgW, vec3 dirW, int nextDepth)
+{
+    // Save caller payload (we are reusing the same payload variable)
+    vec4 saved = payload;
+
+    // Nested ray starts with black, and carries depth in .w
+    payload = vec4(0.0, 0.0, 0.0, float(nextDepth));
+
+    // Trace using the SAME primary hit group + primary miss.
+    traceRayEXT(
+        tlasTop,
+        gl_RayFlagsCullBackFacingTrianglesEXT | gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0, 1, 0,                 // sbtRecordOffset=0, stride=1, missIndex=0
+        orgW,
+        REFLECTION_RAY_MIN_T,
+        dirW,
+        1e30,
+        0
+    );
+
+    vec3 col = payload.rgb;
+
+    // Restore caller payload
+    payload = saved;
+    return col;
+}
+#endif
+
+// ------------------------------------------------------------
 // Main
 // ------------------------------------------------------------
 void main()
 {
+    // Depth encoded in payload.w during RT recursion (see file header note)
+    int depth = int(payload.w + 0.5);
+
     const uint instId = gl_InstanceCustomIndexEXT;
 
     if (instId >= uint(instBuf.insts.length()))
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0);
+        payload = vec4(1.0, 0.0, 1.0, (depth == 0) ? 1.0 : float(depth));
         return;
     }
 
@@ -393,14 +452,14 @@ void main()
         instDat.matAdr == 0ul ||
         instDat.triCnt == 0u)
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0);
+        payload = vec4(1.0, 0.0, 1.0, (depth == 0) ? 1.0 : float(depth));
         return;
     }
 
     const uint primId = gl_PrimitiveID;
     if (primId >= instDat.triCnt)
     {
-        payload = vec4(1.0, 0.0, 1.0, 1.0);
+        payload = vec4(1.0, 0.0, 1.0, (depth == 0) ? 1.0 : float(depth));
         return;
     }
 
@@ -505,8 +564,7 @@ void main()
         float atten;
         evalLight(Ld, posW, L, atten);
 
-        // Shadows
-        if (ENABLE_SHADOWS)
+#if ENABLE_SHADOWS
         {
             uint lt = uint(Ld.pos_type.w + 0.5);
 
@@ -519,11 +577,12 @@ void main()
             else
             {
                 float distToLight = length(Ld.pos_type.xyz - posW);
-                float angRad = max(Ld.spot_params.z, 0.0); // NEW: point/spot angular radius in radians
+                float angRad = max(Ld.spot_params.z, 0.0); // point/spot angular radius (radians)
                 float vis = shadowPointOrSpotSoft(posW, N, L, distToLight, angRad);
                 atten *= vis;
             }
         }
+#endif
 
         float NdotL = saturate(dot(N, L));
         float NdotV = saturate(dot(N, V));
@@ -544,9 +603,6 @@ void main()
         vec3 spec = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-7);
         vec3 kd   = (vec3(1.0) - F) * (1.0 - metallic);
         vec3 diff = kd * albedo / 3.14159265;
-
-        // Match your raster scale
-        const float LIGHT_INTENSITY_SCALE = 5.0;
 
         vec3 radiance = Ld.color_intensity.rgb *
                         (Ld.color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
@@ -575,30 +631,72 @@ void main()
         emissive *= texture(tex2d[mat.emisTex], vUv).rgb;
 
     vec3 ambientFill = vec3(0.0);
-    if (USE_AMBIENT_FILL)
-        ambientFill = uLights.ambient.rgb * albedo * ao;
+#if USE_AMBIENT_FILL
+    ambientFill = uLights.ambient.rgb * albedo * ao;
+#endif
 
     vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive + ambientFill;
     colorLinear = max(colorLinear, vec3(0.0));
+
+// --------------------------------------------------------
+// Optional: 1-bounce perfect reflections (no noise)
+// --------------------------------------------------------
+#if ENABLE_SIMPLE_REFLECTIONS
+    //const int depth = int(payload.w + 0.5);
+
+    if (depth < (MAX_RT_DEPTH - 1))
+    {
+        // Only do reflections for smooth / metallic surfaces.
+        float reflectStrength = max(metallic, 1.0 - roughness);
+        reflectStrength = saturate(reflectStrength);
+
+        if (reflectStrength > 0.01)
+        {
+            // Incoming ray direction is gl_WorldRayDirectionEXT (from origin toward hit)
+            vec3 I = normalize(gl_WorldRayDirectionEXT);
+
+            // Reflection direction
+            vec3 Rdir = normalize(reflect(I, N));
+
+            // Offset to avoid self-intersection
+            float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
+            vec3  org = posW + N * eps;
+
+            vec3 reflCol = traceReflection(org, Rdir, depth + 1);
+
+            // Fresnel-weighted mix (simple but stable)
+            vec3 F = fresnelSchlick(saturate(dot(N, V)), F0);
+
+            // Conservative energy: add a reflection term rather than fully replacing
+            colorLinear = mix(colorLinear, reflCol, 0.35 * reflectStrength) * (1.0 - 0.15 * reflectStrength)
+                        + reflCol * (0.15 * reflectStrength) * F;
+        }
+    }
+#endif
 
     // --------------------------------------------------------
     // Exposure + tonemap (MUST match raster)
     // --------------------------------------------------------
     float exposure = FIXED_EXPOSURE;
 
-    if (USE_UBO_EXPOSURE)
+#if USE_UBO_EXPOSURE
     {
         float t = saturate(uLights.ambient.a); // UI 0..1
         float exposureEV = mix(EXPOSURE_EV_MIN, EXPOSURE_EV_MAX, t);
         exposure = exp2(exposureEV);
     }
+#endif
 
     vec3 outRgb = colorLinear * exposure;
 
-    if (ENABLE_TONEMAP)
-        outRgb = tonemapACES(outRgb);
-    else
-        outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
+#if ENABLE_TONEMAP
+    outRgb = tonemapACES(outRgb);
+#else
+    outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
+#endif
 
-    payload = vec4(outRgb, 1.0);
+    // Output:
+    // - depth==0: store alpha=1 for your present path
+    // - depth>0 : keep payload.w=depth for nested rays
+    payload = vec4(outRgb, (depth == 0) ? 1.0 : float(depth));
 }

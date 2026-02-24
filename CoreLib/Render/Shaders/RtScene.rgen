@@ -49,7 +49,8 @@ void main()
     vec3 ro = p0;
     vec3 rd = normalize(p1 - p0);
 
-    payload = uCamera.clearColor;
+    // payload = uCamera.clearColor;
+    payload = vec4(uCamera.clearColor.rgb, 0.0); // payload.w = depth (0 for primary)
 
     // SBT mapping:
     //  - Hit[0]  = primary closest hit
