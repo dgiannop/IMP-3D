@@ -117,7 +117,7 @@ bool RtOutputImage::createImage(const VulkanContext& ctx, uint32_t w, uint32_t h
 {
     // Output format: keep it simple.
     // VK_FORMAT_R8G8B8A8_UNORM works almost everywhere.
-    const VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
+    const VkFormat fmt = VK_FORMAT_R16G16B16A16_SFLOAT; // VK_FORMAT_R8G8B8A8_UNORM;
 
     VkImageCreateInfo ici = {};
     ici.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
