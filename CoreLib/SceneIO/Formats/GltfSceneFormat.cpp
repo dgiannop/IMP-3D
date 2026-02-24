@@ -625,6 +625,44 @@ namespace
             l.spotOuterConeRad = d.outerConeRad;
             l.enabled          = true;
 
+            {
+                // Keep “normal” editor-style intensities as-is (e.g. 1..500).
+                // Only rescale when glTF gives photometric-looking values (thousands+).
+                constexpr float kPhotometricThreshold       = 2000.0f; // tweak: 1000..5000
+                constexpr float kGltfToEditorIntensityScale = 0.0005f; // used only above threshold
+                constexpr float kMaxImportedIntensity       = 50.0f;   // final safety cap (editor units)
+
+                const float srcIntensity = d.intensity;
+
+                float finalIntensity = srcIntensity;
+
+                if (srcIntensity > kPhotometricThreshold)
+                {
+                    finalIntensity = srcIntensity * kGltfToEditorIntensityScale;
+
+                    report.warning(
+                        "glTF: light '" + lightName +
+                        "' intensity looks photometric (src=" + std::to_string(srcIntensity) +
+                        "); scaled to " + std::to_string(finalIntensity) + " for editor.");
+                }
+
+                if (finalIntensity > kMaxImportedIntensity)
+                {
+                    report.warning(
+                        "glTF: light '" + lightName +
+                        "' intensity still high after scaling (src=" + std::to_string(srcIntensity) +
+                        ", final=" + std::to_string(finalIntensity) +
+                        "); clamping to " + std::to_string(kMaxImportedIntensity) + " for editor.");
+
+                    finalIntensity = kMaxImportedIntensity;
+                }
+
+                if (!std::isfinite(finalIntensity) || finalIntensity < 0.0f)
+                    finalIntensity = 0.0f;
+
+                l.intensity = finalIntensity;
+            }
+
             SceneLight* sl = scene->createSceneLight(l);
             if (sl)
             {
