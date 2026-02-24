@@ -462,7 +462,7 @@ private:
 
     VkSampler m_rtSampler = VK_NULL_HANDLE;
 
-    VkFormat m_rtFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat m_rtFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     vkrt::RtPipeline        m_rtPipeline = {};
     vkrt::RtSbt             m_rtSbt      = {};

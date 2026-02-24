@@ -977,12 +977,41 @@ void VulkanBackend::resizeViewportSwapchain(ViewportSwapchain* sc, const QSize& 
 
 VkSurfaceFormatKHR VulkanBackend::chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const noexcept
 {
+    auto pick = [&](VkFormat fmt) -> bool {
+        for (const auto& f : formats)
+        {
+            if (f.format == fmt && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                return true;
+        }
+        return false;
+    };
+
+    auto get = [&](VkFormat fmt) -> VkSurfaceFormatKHR {
+        for (const auto& f : formats)
+        {
+            if (f.format == fmt && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                return f;
+        }
+        return {};
+    };
+
+    if (pick(VK_FORMAT_B8G8R8A8_SRGB))
+        return get(VK_FORMAT_B8G8R8A8_SRGB);
+    if (pick(VK_FORMAT_R8G8B8A8_SRGB))
+        return get(VK_FORMAT_R8G8B8A8_SRGB);
+    if (pick(VK_FORMAT_B8G8R8A8_UNORM))
+        return get(VK_FORMAT_B8G8R8A8_UNORM);
+    if (pick(VK_FORMAT_R8G8B8A8_UNORM))
+        return get(VK_FORMAT_R8G8B8A8_UNORM);
+
+    // Fallback: prefer SRGB_NONLINEAR colorspace even if format isn't our favorite.
     for (const auto& f : formats)
     {
-        if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        if (f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             return f;
     }
 
+    // Final fallback.
     if (!formats.empty())
         return formats[0];
 
