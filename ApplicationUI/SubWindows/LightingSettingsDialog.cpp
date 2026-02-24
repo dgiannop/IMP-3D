@@ -153,7 +153,7 @@ void LightingSettingsDialog::pushToCore()
     s.sceneSpotConeMul      = ui->sceneSpotConeMulSlider->value() / 100.0f;
 
     // Exposure & tonemap
-    s.exposure = ui->exposureSlider->value() / 100.0f;
+    s.exposureEv100 = static_cast<float>(ui->exposureSlider->value()) * 0.1f;
     s.tonemap  = ui->tonemapCheck->isChecked();
 
     // Mode policy (combo indices map 1:1 to enum values)
@@ -198,7 +198,7 @@ void LightingSettingsDialog::pullFromCore()
     ui->sceneSpotConeMulSlider->setValue(int(s.sceneSpotConeMul * 100.0f));
 
     // Exposure & tonemap
-    ui->exposureSlider->setValue(int(s.exposure * 100.0f));
+    ui->exposureSlider->setValue(static_cast<int>(std::round(s.exposureEv100 * 10.0f)));
     ui->tonemapCheck->setChecked(s.tonemap);
 
     // Mode policy

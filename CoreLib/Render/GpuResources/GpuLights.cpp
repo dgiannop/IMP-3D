@@ -25,7 +25,9 @@
 //
 // Production/editor behavior (this file):
 //   - NO auto-exposure derived from max light intensity.
-//   - out.ambient.a = kBaseExposureScalar * settings.exposure
+//   - Exposure is controlled as EV100 (photometric):
+//       exposureScalar = 2^(-EV100)
+//     Recommended default EV100 ~= 5.64 to match the old baseline 0.02.
 // ============================================================
 
 #include "GpuLights.hpp"
@@ -75,14 +77,19 @@ namespace
     constexpr float kSceneSpotSoftnessRadians  = 0.01f; // ~0.57°
 
     // ------------------------------------------------------------
-    // Exposure calibration
+    // Exposure (photometric EV100)
     // ------------------------------------------------------------
-    // Baseline exposure scalar; settings.exposure is a UI multiplier.
-    constexpr float kBaseExposureScalar = 0.02f;
+    // exposureScalar = 2^(-EV100)
+    // Old baseline exposureScalar ~ 0.02 corresponds to EV100 ~= 5.643856.
+    constexpr float kDefaultEv100 = 5.64f;
 
-    // Safety clamp for the final exposure scalar.
-    constexpr float kMinFinalExposure = 0.0f;
-    constexpr float kMaxFinalExposure = 8.0f;
+    // UI sanity clamp for EV100 (editor)
+    constexpr float kMinEv100 = -10.0f;
+    constexpr float kMaxEv100 = 24.0f;
+
+    // Safety clamp for exposureScalar (prevents accidental huge values)
+    constexpr float kMinExposureScalar = 0.0f;
+    constexpr float kMaxExposureScalar = 64.0f;
 
     static glm::vec3 clamp01(const glm::vec3& c) noexcept
     {
@@ -270,6 +277,23 @@ namespace
         return (p == LightingSettings::ModePolicy::SceneOnly || p == LightingSettings::ModePolicy::Both);
     }
 
+    static float exposureScalarFromEv100(float ev100) noexcept
+    {
+        if (!std::isfinite(ev100))
+            ev100 = kDefaultEv100;
+
+        ev100 = std::clamp(ev100, kMinEv100, kMaxEv100);
+
+        // exposureScalar = 2^(-EV100)
+        float s = std::exp2(-ev100);
+
+        if (!std::isfinite(s))
+            s = std::exp2(-kDefaultEv100);
+
+        s = std::clamp(s, kMinExposureScalar, kMaxExposureScalar);
+        return s;
+    }
+
 } // namespace
 
 //============================================================
@@ -308,11 +332,15 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
         }
 
         std::printf("\n=== buildGpuLightsUBO() drawMode=%s ===\n", dmStr);
-        std::printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposureUI=%.3f tonemap=%d\n",
+
+        // NOTE:
+        // If you renamed settings.exposure -> settings.exposureEv100, update this print accordingly.
+        // For compatibility, we print both with a comment below.
+        std::printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposureEV100=%.3f tonemap=%d\n",
                     settings.useHeadlight ? 1 : 0,
                     settings.useSceneLights ? 1 : 0,
                     settings.ambientFill,
-                    settings.exposure,
+                    settings.exposureEv100,
                     settings.tonemap ? 1 : 0);
     }
 
@@ -473,18 +501,13 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     const float fill = std::max(0.0f, settings.ambientFill);
     out.ambient      = glm::vec4(fill, fill, fill, 0.0f);
 
-    const float exposureMul = std::max(0.0f, settings.exposure);
-
-    float exposureScalar = kBaseExposureScalar * exposureMul;
-    exposureScalar       = std::clamp(exposureScalar, kMinFinalExposure, kMaxFinalExposure);
-
-    out.ambient.a = exposureScalar;
+    const float exposureScalar = exposureScalarFromEv100(settings.exposureEv100);
+    out.ambient.a              = exposureScalar;
 
     if constexpr (kLogSceneLights)
     {
-        std::printf("Exposure: base=%.6f mul=%.6f => exposureScalar=%.6f\n",
-                    kBaseExposureScalar,
-                    exposureMul,
+        std::printf("Exposure(EV100): ev=%.3f => exposureScalar=%.6f\n",
+                    settings.exposureEv100,
                     out.ambient.a);
 
         std::printf("Scene lights: pushed=%u (seen=%u) maxSceneLight(log)=%.3f\n",

@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--===========================================================
-    SubWindows/LightingSettingsDialog.ui
-    Adds "Scene Light Tuning" section with global multipliers.
-============================================================-->
 <ui version="4.0">
  <class>LightingSettingsDialog</class>
  <widget class="QDialog" name="LightingSettingsDialog">
@@ -29,7 +25,6 @@
   <property name="windowTitle">
    <string>Lighting</string>
   </property>
-
   <layout class="QVBoxLayout" name="rootLayout">
    <property name="spacing">
     <number>0</number>
@@ -46,8 +41,6 @@
    <property name="bottomMargin">
     <number>0</number>
    </property>
-
-   <!-- Title -->
    <item>
     <widget class="QLabel" name="titleLabel">
      <property name="minimumSize">
@@ -78,8 +71,6 @@
      </property>
     </widget>
    </item>
-
-   <!-- Body -->
    <item>
     <layout class="QVBoxLayout" name="bodyLayout">
      <property name="spacing">
@@ -97,8 +88,6 @@
      <property name="bottomMargin">
       <number>10</number>
      </property>
-
-     <!-- Section: Sources -->
      <item>
       <widget class="QLabel" name="sourcesSectionLabel">
        <property name="minimumSize">
@@ -120,7 +109,6 @@
        </property>
       </widget>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="useHeadlightRow">
        <property name="spacing">
@@ -161,7 +149,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="useSceneLightsRow">
        <property name="spacing">
@@ -202,7 +189,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="headlightIntensityRow">
        <property name="spacing">
@@ -239,7 +225,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="ambientFillRow">
        <property name="spacing">
@@ -276,8 +261,6 @@
        </item>
       </layout>
      </item>
-
-     <!-- Section: Scene Light Tuning -->
      <item>
       <widget class="QLabel" name="sceneTuningSectionLabel">
        <property name="minimumSize">
@@ -299,7 +282,6 @@
        </property>
       </widget>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="scenePointIntensityMulRow">
        <property name="spacing">
@@ -336,7 +318,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="scenePointRangeMulRow">
        <property name="spacing">
@@ -373,7 +354,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="sceneSpotIntensityMulRow">
        <property name="spacing">
@@ -410,7 +390,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="sceneSpotRangeMulRow">
        <property name="spacing">
@@ -447,7 +426,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="sceneSpotConeMulRow">
        <property name="spacing">
@@ -484,8 +462,6 @@
        </item>
       </layout>
      </item>
-
-     <!-- Section: Exposure -->
      <item>
       <widget class="QLabel" name="exposureSectionLabel">
        <property name="minimumSize">
@@ -507,7 +483,6 @@
        </property>
       </widget>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="exposureRow">
        <property name="spacing">
@@ -529,7 +504,7 @@
        <item>
         <widget class="QSlider" name="exposureSlider">
          <property name="minimum">
-          <number>0</number>
+          <number>-200</number>
          </property>
          <property name="maximum">
           <number>300</number>
@@ -544,7 +519,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="tonemapRow">
        <property name="spacing">
@@ -585,8 +559,6 @@
        </item>
       </layout>
      </item>
-
-     <!-- Section: Mode Policy -->
      <item>
       <widget class="QLabel" name="modeSectionLabel">
        <property name="minimumSize">
@@ -608,7 +580,6 @@
        </property>
       </widget>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="solidModeRow">
        <property name="spacing">
@@ -629,14 +600,25 @@
        </item>
        <item>
         <widget class="QComboBox" name="solidModeCombo">
-         <item><property name="text"><string>Headlight Only</string></property></item>
-         <item><property name="text"><string>Scene Only</string></property></item>
-         <item><property name="text"><string>Headlight + Scene</string></property></item>
+         <item>
+          <property name="text">
+           <string>Headlight Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Scene Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Headlight + Scene</string>
+          </property>
+         </item>
         </widget>
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="shadedModeRow">
        <property name="spacing">
@@ -657,14 +639,25 @@
        </item>
        <item>
         <widget class="QComboBox" name="shadedModeCombo">
-         <item><property name="text"><string>Headlight Only</string></property></item>
-         <item><property name="text"><string>Scene Only</string></property></item>
-         <item><property name="text"><string>Headlight + Scene</string></property></item>
+         <item>
+          <property name="text">
+           <string>Headlight Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Scene Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Headlight + Scene</string>
+          </property>
+         </item>
         </widget>
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="rtModeRow">
        <property name="spacing">
@@ -685,15 +678,25 @@
        </item>
        <item>
         <widget class="QComboBox" name="rtModeCombo">
-         <item><property name="text"><string>Headlight Only</string></property></item>
-         <item><property name="text"><string>Scene Only</string></property></item>
-         <item><property name="text"><string>Headlight + Scene</string></property></item>
+         <item>
+          <property name="text">
+           <string>Headlight Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Scene Only</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Headlight + Scene</string>
+          </property>
+         </item>
         </widget>
        </item>
       </layout>
      </item>
-
-     <!-- Section: Debug -->
      <item>
       <widget class="QLabel" name="debugSectionLabel">
        <property name="minimumSize">
@@ -715,7 +718,6 @@
        </property>
       </widget>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="clampRow">
        <property name="spacing">
@@ -756,7 +758,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <layout class="QHBoxLayout" name="clampMaxRow">
        <property name="spacing">
@@ -793,7 +794,6 @@
        </item>
       </layout>
      </item>
-
      <item>
       <spacer name="bottomSpacer">
        <property name="orientation">
@@ -807,8 +807,6 @@
        </property>
       </spacer>
      </item>
-
-     <!-- Buttons -->
      <item>
       <layout class="QHBoxLayout" name="buttonRow">
        <property name="spacing">
@@ -858,7 +856,6 @@
        </item>
       </layout>
      </item>
-
     </layout>
    </item>
   </layout>
