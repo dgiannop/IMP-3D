@@ -461,9 +461,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         // Present RT output
         vkutil::setViewportAndScissor(cmd, w, h);
 
-        vkCmdBindPipeline(cmd,
-                          VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          m_rtPresent.pipeline());
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresent.pipeline());
 
         VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
         vkCmdBindDescriptorSets(cmd,
@@ -693,8 +691,8 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
 
     // -------------------------------------------------------------------------
     // Build two batches:
-    //  - lineVertices: wide-line pipeline (existing)
-    //  - fillVertices: triangle list pipeline (new)
+    //  - lineVertices: wide-line pipeline
+    //  - fillVertices: triangle list pipeline
     // -------------------------------------------------------------------------
 
     std::vector<OverlayVertex>     lineVertices = {};
@@ -1044,9 +1042,7 @@ void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
 
     vkCmdPushConstants(cmd,
                        m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT |
-                           VK_SHADER_STAGE_GEOMETRY_BIT |
-                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0,
                        sizeof(PushConstants),
                        &pc);
@@ -1088,125 +1084,6 @@ void Renderer::destroyPipelines() noexcept
     destroyPipe(m_selPolyHiddenPipeline);
 }
 
-//==================================================================
-// Descriptors + pipeline layout (device-level)
-//==================================================================
-
-// bool Renderer::createDescriptors(uint32_t framesInFlight)
-// {
-//     VkDevice device = m_ctx.device;
-//     if (!device)
-//         return false;
-
-//     m_framesInFlight  = std::clamp(framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
-//     const uint32_t fi = m_framesInFlight;
-
-//     // ------------------------------------------------------------
-//     // Destroy/recreate (safe on resize / re-init)
-//     // IMPORTANT: clear cached per-viewport sets because they are tied to the pool/layout.
-//     // ------------------------------------------------------------
-//     m_viewportUbos.clear();
-
-//     m_descriptorPool.destroy();
-//     m_descriptorSetLayout.destroy();
-//     m_materialSetLayout.destroy();
-
-//     // ------------------------------------------------------------
-//     // set = 0 : Frame globals (per-viewport)
-//     //   binding 0 = CameraUBO     (shared by raster + RT)
-//     //   binding 1 = GpuLightsUBO  (shared by raster + RT)
-//     // ------------------------------------------------------------
-//     {
-//         DescriptorBindingInfo uboBindings[2] = {};
-
-//         // CameraUBO (proj/view/viewProj/inverses/camPos/viewport/clearColor)
-//         uboBindings[0].binding = 0;
-//         uboBindings[0].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-//         uboBindings[0].stages  = VK_SHADER_STAGE_VERTEX_BIT |
-//                                 VK_SHADER_STAGE_GEOMETRY_BIT |
-//                                 VK_SHADER_STAGE_FRAGMENT_BIT |
-//                                 VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-//                                 VK_SHADER_STAGE_MISS_BIT_KHR |
-//                                 VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-//         uboBindings[0].count = 1;
-
-//         // Lights UBO (GpuLightsUBO)
-//         uboBindings[1].binding = 1;
-//         uboBindings[1].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-//         uboBindings[1].stages  = VK_SHADER_STAGE_ALL;
-//         uboBindings[1].count = 1;
-
-//         if (!m_descriptorSetLayout.create(device, std::span{uboBindings, 2}))
-//         {
-//             std::cerr << "RendererVK: Failed to create Frame Globals DescriptorSetLayout.\n";
-//             return false;
-//         }
-//     }
-
-//     // ------------------------------------------------------------
-//     // set = 1 : Scene / materials
-//     //   binding 0 = materials SSBO
-//     //   binding 1 = texture table (combined image sampler array)
-//     // ------------------------------------------------------------
-//     {
-//         DescriptorBindingInfo matBindings[2] = {};
-
-//         matBindings[0].binding = 0;
-//         matBindings[0].type    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-//         matBindings[0].stages  = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-//         matBindings[0].count   = 1;
-
-//         matBindings[1].binding = 1;
-//         matBindings[1].type    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-//         matBindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-//         matBindings[1].count   = vkcfg::kMaxTextureCount;
-
-//         if (!m_materialSetLayout.create(device, std::span{matBindings, 2}))
-//         {
-//             std::cerr << "RendererVK: Failed to create material DescriptorSetLayout.\n";
-//             return false;
-//         }
-//     }
-
-//     // ------------------------------------------------------------
-//     // Pool sizes
-//     //
-//     // Frame globals: (maxViewports * frames) each with 2 UBO bindings.
-//     // Material sets: (frames) each with 1 SSBO + kMaxTextureCount combined samplers.
-//     // ------------------------------------------------------------
-//     const uint32_t rasterSetCount   = fi * kMaxViewports;
-//     const uint32_t materialSetCount = fi;
-
-//     std::array<VkDescriptorPoolSize, 3> poolSizes{
-//         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, rasterSetCount * 2u},
-//         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, materialSetCount},
-//         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialSetCount * vkcfg::kMaxTextureCount},
-//     };
-
-//     const uint32_t maxSets = rasterSetCount + materialSetCount;
-
-//     if (!m_descriptorPool.create(device, poolSizes, maxSets))
-//     {
-//         std::cerr << "RendererVK: Failed to create shared DescriptorPool.\n";
-//         return false;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Allocate per-frame material sets (set = 1)
-//     // ------------------------------------------------------------
-//     for (uint32_t i = 0; i < fi; ++i)
-//     {
-//         m_materialSets[i] = {};
-
-//         if (!m_materialSets[i].allocate(device, m_descriptorPool.pool(), m_materialSetLayout.layout()))
-//         {
-//             std::cerr << "RendererVK: Failed to allocate material DescriptorSet for frame " << i << ".\n";
-//             return false;
-//         }
-//     }
-
-//     return true;
-// }
 //==================================================================
 // Descriptors + pipeline layout (device-level)
 //==================================================================
@@ -1941,10 +1818,6 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
 // RT per-viewport state (lazy allocation)
 //==================================================================
 
-//==================================================================
-// RT per-viewport state (lazy allocation)
-//==================================================================
-
 Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_t frameIdx)
 {
     RtViewportState& st = m_rtViewports[vp];
@@ -2610,10 +2483,6 @@ void Renderer::writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
     // set 2, binding 2 = TLAS
     rtv.sets[frameIndex].writeAccelerationStructure(m_ctx.device, 2, tf.as);
 }
-
-//==================================================================
-// RT dispatch
-//==================================================================
 
 //==================================================================
 // RT dispatch

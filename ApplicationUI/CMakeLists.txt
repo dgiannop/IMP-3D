@@ -16,9 +16,11 @@ qt_add_executable(ApplicationUI
     MainWindow.hpp
     MainWindow.ui
 
-
-    ViewportWidget.hpp ViewportWidget.cpp ViewportWidget.ui
-    ScrollButton.hpp ScrollButton.cpp
+    ViewportWidget.hpp
+    ViewportWidget.cpp
+    ViewportWidget.ui
+    ScrollButton.hpp
+    ScrollButton.cpp
     ViewportManager.hpp
     ViewportManager.cpp
     ViewportRenderWindow.hpp
@@ -26,26 +28,67 @@ qt_add_executable(ApplicationUI
     VulkanBackend.hpp
     VulkanBackend.cpp
 
-    MenuStackedWidget.hpp MenuStackedWidget.cpp
-    ShortcutButton.hpp ShortcutButton.cpp
+    MenuStackedWidget.hpp
+    MenuStackedWidget.cpp
+    ShortcutButton.hpp
+    ShortcutButton.cpp
     Resources.qrc
     SubWindows/SubWindowBase.hpp
-    SubWindows/MaterialAssignDialog.hpp SubWindows/MaterialAssignDialog.cpp SubWindows/MaterialAssignDialog.ui
+    SubWindows/MaterialAssignDialog.hpp
+    SubWindows/MaterialAssignDialog.cpp
+    SubWindows/MaterialAssignDialog.ui
     SubWindows/SubWindowManager.hpp
-    SubWindows/PropertyWindow.hpp SubWindows/PropertyWindow.cpp SubWindows/PropertyWindow.ui
+    SubWindows/PropertyWindow.hpp
+    SubWindows/PropertyWindow.cpp
+    SubWindows/PropertyWindow.ui
     SubWindows/PropertyItem.hpp
-    SubWindows/MaterialEditorDialog.hpp SubWindows/MaterialEditorDialog.cpp SubWindows/MaterialEditorDialog.ui
+    SubWindows/MaterialEditorDialog.hpp
+    SubWindows/MaterialEditorDialog.cpp
+    SubWindows/MaterialEditorDialog.ui
     VkDebugNames.hpp
     MainUtilities.hpp
-    SubWindows/LightsEditorDialog.hpp SubWindows/LightsEditorDialog.cpp SubWindows/LightsEditorDialog.ui
-    SubWindows/LightingSettingsDialog.hpp SubWindows/LightingSettingsDialog.cpp SubWindows/LightingSettingsDialog.ui
-    SubWindows/CreateLightDialog.hpp SubWindows/CreateLightDialog.cpp SubWindows/CreateLightDialog.ui
-    SubWindows/SceneStatsDialog.hpp SubWindows/SceneStatsDialog.cpp SubWindows/SceneStatsDialog.ui
-    SubWindows/TextureEditorDialog.hpp SubWindows/TextureEditorDialog.cpp SubWindows/TextureEditorDialog.ui
-    SubWindows/LoadTextureDialog.hpp SubWindows/LoadTextureDialog.cpp SubWindows/LoadTextureDialog.ui
+    SubWindows/LightsEditorDialog.hpp
+    SubWindows/LightsEditorDialog.cpp
+    SubWindows/LightsEditorDialog.ui
+    SubWindows/LightingSettingsDialog.hpp
+    SubWindows/LightingSettingsDialog.cpp
+    SubWindows/LightingSettingsDialog.ui
+    SubWindows/CreateLightDialog.hpp
+    SubWindows/CreateLightDialog.cpp
+    SubWindows/CreateLightDialog.ui
+    SubWindows/SceneStatsDialog.hpp
+    SubWindows/SceneStatsDialog.cpp
+    SubWindows/SceneStatsDialog.ui
+    SubWindows/TextureEditorDialog.hpp
+    SubWindows/TextureEditorDialog.cpp
+    SubWindows/TextureEditorDialog.ui
+    SubWindows/LoadTextureDialog.hpp
+    SubWindows/LoadTextureDialog.cpp
+    SubWindows/LoadTextureDialog.ui
 )
 
+# Output filename becomes Imp3d.exe (target name remains ApplicationUI)
 set_target_properties(ApplicationUI PROPERTIES OUTPUT_NAME "Imp3d")
+
+# ------------------------------------------------------------------
+# Convenience: copy the built exe to the root of the build directory:
+#   <build>/Imp3d.exe
+# Works with Visual Studio multi-config generators.
+# ------------------------------------------------------------------
+add_custom_command(TARGET ApplicationUI POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:ApplicationUI>"
+        "${CMAKE_BINARY_DIR}/$<TARGET_FILE_NAME:ApplicationUI>"
+    COMMENT "Copying Imp3d.exe to build root"
+)
+
+# Optional: copy PDB too (if generated)
+add_custom_command(TARGET ApplicationUI POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_PDB_FILE:ApplicationUI>"
+        "${CMAKE_BINARY_DIR}/$<TARGET_PDB_FILE_NAME:ApplicationUI>"
+    COMMENT "Copying Imp3d.pdb to build root (if present)"
+)
 
 # Include directories for CoreLib
 target_include_directories(ApplicationUI PRIVATE
