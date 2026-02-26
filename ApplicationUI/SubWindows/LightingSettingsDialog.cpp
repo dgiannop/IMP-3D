@@ -1,6 +1,3 @@
-//============================================================
-// LightingSettingsDialog.cpp  (FULL REPLACEMENT)
-//============================================================
 #include "LightingSettingsDialog.hpp"
 
 #include <QAbstractButton>

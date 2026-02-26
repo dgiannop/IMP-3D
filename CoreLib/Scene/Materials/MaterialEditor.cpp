@@ -100,8 +100,6 @@ int32_t MaterialEditor::findByName(std::string_view name) const
 
     const auto& mats = mh->materials();
 
-    // Case-insensitive compare using your existing helper.
-    // MaterialHandler uses un::to_lower() internally; we reuse it here.
     const std::string keyLower = un::to_lower(std::string{name});
 
     for (int32_t i = 0; i < static_cast<int32_t>(mats.size()); ++i)

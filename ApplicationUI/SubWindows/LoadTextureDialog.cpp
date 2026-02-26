@@ -86,13 +86,11 @@ void LoadTextureDialog::onLoad()
 
     m_loadedId = id;
 
-    // Optional: apply user display name if your Image supports renaming.
     const QString qname = ui->nameLineEdit->text().trimmed();
     if (!qname.isEmpty())
     {
         if (Image* img = ih->get(id))
         {
-            // If Image has a setter like: void name(const std::string&)
             if constexpr (requires(Image* i) { i->setName(std::string{}); })
             {
                 img->setName(qname.toStdString());

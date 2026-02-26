@@ -1,6 +1,3 @@
-//============================================================
-// ViewportRenderWindow.cpp  (FULL REPLACEMENT)
-//============================================================
 #include "ViewportRenderWindow.hpp"
 
 #include <qvulkanfunctions.h>
@@ -199,7 +196,6 @@ void ViewportRenderWindow::destroySwapchain() noexcept
         return;
 
     // If backend is already gone, we cannot destroy Vulkan objects safely here.
-    // (But with your shutdown order, this shouldn't happen.)
     if (m_backend)
     {
         m_backend->destroyViewportSwapchain(m_swapchain);

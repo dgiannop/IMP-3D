@@ -499,7 +499,7 @@ uint32_t SubdivEvaluator::faceMaterialId(int face) const noexcept
 }
 
 // -----------------------------------------------------------------------------
-// Optional utilities (kept from your previous version)
+// Optional utilities (kept from previous version)
 // -----------------------------------------------------------------------------
 
 std::vector<std::pair<int, int>>

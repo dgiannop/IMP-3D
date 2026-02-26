@@ -130,7 +130,7 @@
 //             }
 
 //             // ------------------------------------------------------------
-//             // Remove originals at end (your approach)
+//             // Remove originals at end
 //             // ------------------------------------------------------------
 //             for (int32_t poly : procecedPolys)
 //             {
@@ -392,7 +392,7 @@ bool CmdDissolveEdge::execute(Scene* scene)
                 if (mesh->vert_valid(v))
                     stripVerts.insert(v);
 
-            // Selected edges are already canonical in OrderedEdgePath by your comment.
+            // Selected edges are already canonical in OrderedEdgePath.
             // Still, we keep them canonical for safety if anything changes later.
             std::unordered_set<IndexPair, smu::IndexPairHash> stripEdges;
             stripEdges.reserve(oep.edges.size() * 2);
@@ -552,7 +552,7 @@ bool CmdDissolveEdge::execute(Scene* scene)
             }
 
             // ------------------------------------------------------------
-            // Remove originals at end (your approach)
+            // Remove originals at end
             // ------------------------------------------------------------
             for (int32_t poly : processedPolys)
             {

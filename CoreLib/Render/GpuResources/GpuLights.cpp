@@ -1,6 +1,3 @@
-//============================================================
-// GpuLights.cpp  (FULL REPLACEMENT)
-//============================================================
 // ============================================================
 // GpuLights.cpp  (WORLD-space LightsUBO: directional/point/spot)
 // ============================================================
@@ -297,7 +294,7 @@ namespace
 } // namespace
 
 //============================================================
-// buildGpuLightsUBO()  (FULL REPLACEMENT)
+// buildGpuLightsUBO()
 //============================================================
 void buildGpuLightsUBO(const LightingSettings&  settings,
                        const HeadlightSettings& headlight,
@@ -333,9 +330,6 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
 
         std::printf("\n=== buildGpuLightsUBO() drawMode=%s ===\n", dmStr);
 
-        // NOTE:
-        // If you renamed settings.exposure -> settings.exposureEv100, update this print accordingly.
-        // For compatibility, we print both with a comment below.
         std::printf("settings: useHeadlight=%d useSceneLights=%d ambientFill=%.3f exposureEV100=%.3f tonemap=%d\n",
                     settings.useHeadlight ? 1 : 0,
                     settings.useSceneLights ? 1 : 0,
@@ -455,7 +449,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                     const char* typeStr = (l->type == LightType::Directional) ? "Directional"
                                           : (l->type == LightType::Point)     ? "Point"
                                                                               : "Spot";
-                    std::printf("  Light %-11s  I=%.3f  range=%.3f  color=(%.3f %.3f %.3f)\n",
+                    std::printf("%-11s Light:   I=%.3f  range=%.3f  color=(%.3f %.3f %.3f)\n",
                                 typeStr,
                                 intensity,
                                 range,

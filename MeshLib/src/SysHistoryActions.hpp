@@ -69,7 +69,7 @@ struct UndoRemoveVertex : public HistoryAction
             if (!mesh->poly_valid(p.index))
             {
                 // Force slot restore (you rely on capacity being large enough).
-                // This assumes HoleList capacity wasn't shrunk; should hold in your design.
+                // This assumes HoleList capacity wasn't shrunk; should hold.
                 mesh_data->polys[p.index] = p.data;
             }
             else

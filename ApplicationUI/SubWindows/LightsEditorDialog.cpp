@@ -1,6 +1,3 @@
-//==============================================================
-// LightsEditorDialog.cpp
-//==============================================================
 #include "LightsEditorDialog.hpp"
 
 #include <QAbstractButton>
@@ -9,11 +6,8 @@
 #include <QSplitter>
 
 #include "Core.hpp"
-#include "SubWindows/ui_LightsEditorDialog.h"
-
-// If SceneLight is in some header, include it here.
-// Adjust include path to your project layout.
 #include "SceneLight.hpp"
+#include "SubWindows/ui_LightsEditorDialog.h"
 
 namespace
 {

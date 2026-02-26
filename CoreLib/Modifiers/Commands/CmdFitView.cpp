@@ -298,7 +298,7 @@ bool CmdFitView::execute(Scene* scene)
         const float target = std::min(vp->width() * PAD, vp->height() * PAD);
 
         auto measure_box = [&]() -> float {
-            // use your local measure_box_pixels lambda (max of projected bbox width/height)
+            // use local measure_box_pixels lambda (max of projected bbox width/height)
             const float s = measure_box_pixels(vp, bmin, bmax);
             return (std::isfinite(s) ? s : 0.0f);
         };

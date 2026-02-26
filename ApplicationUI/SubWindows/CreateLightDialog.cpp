@@ -1,6 +1,3 @@
-//============================================================
-// CreateLightDialog.cpp
-//============================================================
 #include "CreateLightDialog.hpp"
 
 #include <QAbstractButton>
@@ -270,7 +267,7 @@ void CreateLightDialog::onCreate()
     if (qname.isEmpty())
         qname = base_name_for_type_label(typeLabel);
 
-    // Enforce uniqueness at the dialog level (per your request).
+    // Enforce uniqueness at the dialog level.
     const std::vector<SceneLight*> lights = m_core->sceneLights();
     const std::string              unique = make_unique_name(lights, qname.toStdString());
 

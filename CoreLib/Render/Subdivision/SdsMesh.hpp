@@ -114,7 +114,7 @@ public:
 private:
     std::unique_ptr<OpenSubdiv::Far::TopologyRefiner> m_refiner = {};
 
-    // Minimal OSD primvar adapter (hidden; keeps your public API glm-only).
+    // Minimal OSD primvar adapter (hidden; keeps the public API glm-only).
     template<typename V>
     struct OsdPrimvar
     {

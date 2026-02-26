@@ -1,6 +1,3 @@
-//============================================================
-// ImageHandler.cpp  (FULL REPLACEMENT)
-//============================================================
 #include "ImageHandler.hpp"
 
 #include <iostream>

@@ -265,21 +265,11 @@ namespace vkrt
         // ------------------------------------------------------------
         // Group index mapping
         // ------------------------------------------------------------
-        // Default: assumes groups are contiguous:
-        //   [raygen...][miss...][hit...][callable...]
-        //
-        // BUT your pipeline is currently:
         //   0 raygen
         //   1 primary miss
         //   2 primary hit
         //   3 shadow miss
         //   4 shadow hit
-        //
-        // So for the (1,2,2,0) case we must remap:
-        //   miss = [1,3]
-        //   hit  = [2,4]
-        //
-        // This fixes missIndex=1 / sbtRecordOffset=1 hangs.
         std::vector<uint32_t> raygenGroups;
         std::vector<uint32_t> missGroups;
         std::vector<uint32_t> hitGroups;

@@ -51,7 +51,7 @@ namespace
 
     // ------------------------------------------------------------
     // Old-school "connect_poly_verts" but index-based, returns two index lists.
-    // This is your 2016 helper verbatim in spirit.
+    // This is the 2016 helper verbatim in spirit.
     // ------------------------------------------------------------
     using CntPoly  = std::vector<int>;
     using CntPolys = std::vector<CntPoly>;
@@ -262,7 +262,7 @@ namespace
     // NOTE: This is intentionally "old-style":
     // - Only rewrites THIS poly.
     // - Neighbor polys will also insert the SAME vm later because of midCache,
-    //   exactly like your old split_edge + AutoWelder behavior.
+    //   exactly like the old split_edge + AutoWelder behavior.
     // ------------------------------------------------------------
     static int32_t split_edge_in_poly(SysMesh&                    mesh,
                                       int32_t                     poly,
@@ -417,7 +417,7 @@ namespace
     }
 
     // ------------------------------------------------------------
-    // EDGE-mode core (ported from your old code):
+    // EDGE-mode core (ported from the old code):
     // For each poly that has >=2 selected edges:
     //   split those selected edges (midpoints),
     //   connect the two midpoints inside the poly.

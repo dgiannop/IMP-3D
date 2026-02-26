@@ -668,14 +668,14 @@ bool VulkanBackend::createDevice()
         m_supportsRayTracing = false;
     }
 
-    // Your RT shaders require Int64 capability.
+    // RT shaders require Int64 capability.
     if (m_supportsRayTracing && !supportedCore.features.shaderInt64)
     {
         std::cerr << "VulkanBackend: shaderInt64 not supported; disabling ray tracing.\n";
         m_supportsRayTracing = false;
     }
 
-    // Buffer Device Address is required for your RT path (device addresses).
+    // Buffer Device Address is required for RT path (device addresses).
     if (m_supportsRayTracing && supported12.bufferDeviceAddress != VK_TRUE)
     {
         std::cerr << "VulkanBackend: bufferDeviceAddress not supported; disabling ray tracing.\n";

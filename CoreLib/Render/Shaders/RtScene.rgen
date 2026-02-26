@@ -1,5 +1,5 @@
 //==============================================================
-// RtScene.rgen  (Primary rays)  — matches your current bindings
+// RtScene.rgen  (Primary rays)  — matches current bindings
 //==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require

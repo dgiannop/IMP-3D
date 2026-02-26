@@ -349,7 +349,6 @@ MaterialEditorDialog::MaterialEditorDialog(QWidget* parent) :
 
     if (ui->rightPanel)
     {
-        // Keep it stable: fixed 420 like your original.
         ui->rightPanel->setMinimumWidth(420);
         ui->rightPanel->setMaximumWidth(420);
 
@@ -694,7 +693,7 @@ void MaterialEditorDialog::loadMaterialToUi(int32_t id)
     setComboToImageId(ui->emissiveMapCombo, m->emissiveTexture());
 
     // MRAO display-only (use if exists; otherwise keep None)
-    // If you have mraoTexture(), show it; otherwise leave None.
+    // If have mraoTexture(), show it; otherwise leave None.
     ImageId mraoId = kInvalidImageId;
     if constexpr (requires { m->mraoTexture(); })
         mraoId = m->mraoTexture();

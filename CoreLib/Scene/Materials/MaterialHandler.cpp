@@ -54,7 +54,7 @@ int32_t MaterialHandler::createMaterial(std::string_view name)
         {
             Material mat(unique);
             mat.changeCounter()->addParent(m_changeCounter);
-            // mat.setBaseColor({0.55f, 0.55f, 0.75f, 1.f}); // your default
+            // mat.setBaseColor({0.55f, 0.55f, 0.75f, 1.f}); // default
 
             m_materials.push_back(std::move(mat));
             m_changeCounter->change();

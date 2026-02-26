@@ -276,7 +276,7 @@ bool CmdCreatePoly::execute(Scene* scene)
         try_copy_map_loops(mesh, 1, newPoly, sorted, expectedN);
 
         // ------------------------------------------------------------
-        // 7) Optional UX: selection changes (adjust to your real API)
+        // 7) Optional UX: selection changes
         // ------------------------------------------------------------
         // mesh->clear_selected_verts();
         // mesh->clear_selected_edges();

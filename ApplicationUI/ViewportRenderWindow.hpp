@@ -1,6 +1,3 @@
-//============================================================
-// ViewportRenderWindow.hpp  (FULL REPLACEMENT)
-//============================================================
 #pragma once
 
 #include <QElapsedTimer>

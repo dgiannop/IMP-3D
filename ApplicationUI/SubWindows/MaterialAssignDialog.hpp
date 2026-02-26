@@ -1,6 +1,3 @@
-//============================================================
-// MaterialAssignDialog.hpp  (FULL REPLACEMENT)
-//============================================================
 #ifndef MATERIALASSIGNDIALOG_HPP
 #define MATERIALASSIGNDIALOG_HPP
 

@@ -86,7 +86,7 @@ namespace
 
         outMips.reserve(levels);
 
-        // We store only layer 0, faceSlice 0 (matches your current usage).
+        // We store only layer 0, faceSlice 0.
         const uint32_t layer     = 0;
         const uint32_t faceSlice = 0;
 

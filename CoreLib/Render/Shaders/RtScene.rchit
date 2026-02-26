@@ -4,14 +4,14 @@
 // + Shadows (dir soft, point/spot soft via spot_params.z)
 // + OPTIONAL: single-bounce perfect reflections (compile flag)
 //
-// SBT ASSUMPTIONS (you must match your C++ SBT records):
+// SBT ASSUMPTIONS (you must match C++ SBT records):
 //   HitGroup[0] = Primary shading (this shader)
 //   HitGroup[1] = Shadow occlusion hit (RtShadow.rchit OR RtShadow.rahit)
 //   Miss[0]     = Primary miss (RtScene.rmiss)
 //   Miss[1]     = Shadow miss (RtShadow.rmiss)  -> leaves occFlag = 0
 //
 // NOTE ABOUT PAYLOAD:
-//   We keep your existing payload = vec4 at location=0.
+//   We keep the existing payload = vec4 at location=0.
 //   To support 1-bounce reflections without adding a new payload struct,
 //   payload.w is used as a recursion depth counter *during RT*.
 //   - RayGen should initialize payload = vec4(0,0,0, 0) (w = depth 0).
@@ -273,7 +273,7 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
                     ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
                     : step(outerC, cosAn);
 
-        atten *= coneV; // NOTE: no extra squaring (matches your raster)
+        atten *= coneV; // NOTE: no extra squaring (matches the raster)
     }
 }
 

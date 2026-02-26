@@ -649,6 +649,7 @@ void MainWindow::handleAction()
         else if (name == "actionUndo")
         {
             m_core->runAction("Undo");
+            static_cast<MenuStackedWidget*>(ui->stackedWidget)->externalToolClicked();
         }
         else if (name == "actionRedo")
         {

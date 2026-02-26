@@ -1,6 +1,3 @@
-//============================================================
-// TextureEditorDialog.hpp  (FULL REPLACEMENT)
-//============================================================
 #ifndef TEXTUREEDITORDIALOG_HPP
 #define TEXTUREEDITORDIALOG_HPP
 

@@ -1,6 +1,3 @@
-//============================================================
-// TextureEditorDialog.cpp  (FULL REPLACEMENT)
-//============================================================
 #include "TextureEditorDialog.hpp"
 
 #include <QFileDialog>
@@ -45,7 +42,7 @@ namespace
             case 3:
                 return QImage::Format_RGB888;
             case 4:
-                return QImage::Format_RGBA8888; // change to BGRA8888 if your loader outputs BGRA
+                return QImage::Format_RGBA8888; // change to BGRA8888 if loader outputs BGRA
             default:
                 break;
         }
@@ -117,7 +114,7 @@ void TextureEditorDialog::idleEvent(Core* core)
         }
     }
 
-    // 2) Keep your scene-stamp path for scene-driven stuff (e.g. future “Used By”)
+    // 2) Keep scene-stamp path for scene-driven stuff (e.g. future “Used By”)
     const uint64_t stamp = core->sceneContentChangeStamp();
     if (stamp != m_lastSceneStamp)
     {
@@ -314,7 +311,7 @@ void TextureEditorDialog::updatePreview(Core* core)
     if (!img)
         return;
 
-    // If your Image stores only encoded data (KTX/KTX2) and not decoded pixels,
+    // If Image stores only encoded data (KTX/KTX2) and not decoded pixels,
     // img->data() may be null. In that case show a clear fallback.
     if (!img->data() || img->width() <= 0 || img->height() <= 0)
     {
@@ -333,7 +330,7 @@ void TextureEditorDialog::updatePreview(Core* core)
 
     const int w   = img->width();
     const int h   = img->height();
-    const int bpl = w * img->channels(); // if you have a stride in Image, use it instead
+    const int bpl = w * img->channels(); // use stride better if we had it in image
 
     const QImage wrapped(reinterpret_cast<const uchar*>(img->data()), w, h, bpl, fmt);
     if (wrapped.isNull())
