@@ -214,15 +214,15 @@ namespace
         const float tolWorld = 0.05f;
         const float tol2     = tolWorld * tolWorld;
 
-        const int vertCount = sys->num_verts(); // <-- adjust
+        const int vertCount = sys->num_verts();
         result.reserve(vertCount / 4);
 
         for (int vi = 0; vi < vertCount; ++vi)
         {
-            if (!sys->vert_valid(vi)) // <-- adjust/remove if not present
+            if (!sys->vert_valid(vi))
                 continue;
 
-            const glm::vec3 p = sys->vert_position(vi); // <-- adjust
+            const glm::vec3 p = sys->vert_position(vi);
 
             RayPointHit rp = closestRayPoint(ray, p);
             if (rp.dist2 > tol2)
@@ -259,8 +259,8 @@ namespace
             if (!sys->vert_valid(edge.first) || !sys->vert_valid(edge.second))
                 continue;
 
-            const glm::vec3 a = sys->vert_position(edge.first);  // <-- adjust
-            const glm::vec3 b = sys->vert_position(edge.second); // <-- adjust
+            const glm::vec3 a = sys->vert_position(edge.first);
+            const glm::vec3 b = sys->vert_position(edge.second);
 
             RaySegmentHit rs = closestRaySegment(ray, a, b);
             if (!rs.valid || rs.dist2 > tol2)
@@ -378,26 +378,26 @@ namespace
         if (!sys)
             return result;
 
-        const int polyCount = sys->num_polys(); // <-- adjust
+        const int polyCount = sys->num_polys();
         result.reserve(polyCount / 4);
 
         for (int pi = 0; pi < polyCount; ++pi)
         {
-            if (!sys->poly_valid(pi)) // <-- if you have this
+            if (!sys->poly_valid(pi))
                 continue;
 
-            const auto verts = sys->poly_verts(pi); // <-- adjust
+            const auto verts = sys->poly_verts(pi);
             if (verts.size() < 3)
                 continue;
 
-            const glm::vec3 v0     = sys->vert_position(verts[0]); // <-- adjust
+            const glm::vec3 v0     = sys->vert_position(verts[0]);
             bool            anyHit = false;
             float           bestT  = std::numeric_limits<float>::max();
 
             for (std::size_t i = 1; i + 1 < verts.size(); ++i)
             {
-                const glm::vec3 v1 = sys->vert_position(verts[i]);     // <-- adjust
-                const glm::vec3 v2 = sys->vert_position(verts[i + 1]); // <-- adjust
+                const glm::vec3 v1 = sys->vert_position(verts[i]);
+                const glm::vec3 v2 = sys->vert_position(verts[i + 1]);
 
                 RayHit rh = rayTriangleIntersect(ray, v0, v1, v2);
                 if (!rh.hit)
@@ -425,7 +425,7 @@ namespace
 } // anonymous namespace
 
 // ==================================================================
-// SceneQueryCpu methods (unchanged except using MeshHit::valid())
+// SceneQueryCpu methods
 // ==================================================================
 
 void SceneQueryCpu::rebuild(Scene* /*scene*/)

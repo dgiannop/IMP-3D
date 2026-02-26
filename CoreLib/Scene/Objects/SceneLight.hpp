@@ -1,6 +1,10 @@
+//============================================================
+// SceneLight.hpp  (FULL REPLACEMENT)
+//============================================================
 #pragma once
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <string>
 #include <string_view>
 
@@ -34,6 +38,12 @@ public:
 
     /** @brief Destroys the SceneLight. */
     ~SceneLight() override = default;
+
+    SceneLight(const SceneLight&)            = delete;
+    SceneLight& operator=(const SceneLight&) = delete;
+
+    SceneLight(SceneLight&&) noexcept            = default;
+    SceneLight& operator=(SceneLight&&) noexcept = default;
 
     /** @copydoc SceneObject::type */
     [[nodiscard]] SceneObjectType type() const noexcept override { return SceneObjectType::Light; }
@@ -73,6 +83,50 @@ public:
      * @return Name view (lifetime owned by this object).
      */
     [[nodiscard]] std::string_view name() const noexcept;
+
+    /**
+     * @brief Sets the scene object display name AND updates the underlying Light::name.
+     *
+     * This keeps the SceneLight label and the authoritative Light data in sync.
+     */
+    void name(std::string_view n) noexcept;
+
+    // ------------------------------------------------------------
+    // Delegated Light parameters (read/write underlying Light)
+    // ------------------------------------------------------------
+    [[nodiscard]] bool enabled() const noexcept;
+    void               enabled(bool v) noexcept;
+
+    [[nodiscard]] LightType lightType() const noexcept;
+    void                    lightType(LightType t) noexcept;
+
+    [[nodiscard]] glm::vec3 color() const noexcept;
+    void                    color(const glm::vec3& c) noexcept;
+
+    [[nodiscard]] float intensity() const noexcept;
+    void                intensity(float v) noexcept;
+
+    [[nodiscard]] float range() const noexcept;
+    void                range(float v) noexcept;
+
+    [[nodiscard]] float spotInnerConeRad() const noexcept;
+    void                spotInnerConeRad(float r) noexcept;
+
+    [[nodiscard]] float spotOuterConeRad() const noexcept;
+    void                spotOuterConeRad(float r) noexcept;
+
+    // Convenience accessors (WORLD space) - useful for gizmos.
+    [[nodiscard]] glm::vec3 position() const noexcept;
+    void                    position(const glm::vec3& p) noexcept;
+
+    [[nodiscard]] glm::vec3 direction() const noexcept;
+    void                    direction(const glm::vec3& d) noexcept;
+
+private:
+    [[nodiscard]] Light*       lightPtr() noexcept;
+    [[nodiscard]] const Light* lightPtr() const noexcept;
+
+    void notifyChanged() noexcept;
 
 private:
     /** @brief Non-owning pointer to the owning light storage. */
