@@ -281,6 +281,7 @@ target_include_directories(CoreLib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Render/Helpers
     ${CMAKE_CURRENT_SOURCE_DIR}/Render/GpuResources
     ${CMAKE_CURRENT_SOURCE_DIR}/Render/Subdivision
+    ${CMAKE_CURRENT_SOURCE_DIR}/Render/RayTracing
     ${CMAKE_CURRENT_SOURCE_DIR}/Render/Settings
     ${CMAKE_CURRENT_SOURCE_DIR}/Utilities
     ${CMAKE_CURRENT_SOURCE_DIR}/CoreModules/include

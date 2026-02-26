@@ -21,71 +21,10 @@
 #include "VkUtilities.hpp"
 
 //==================================================================
-// RtViewportState destruction
-//==================================================================
-
-//==================================================================
-// RtViewportState destruction
-//==================================================================
-
-void Renderer::RtViewportState::destroyDeviceResources(const VulkanContext& ctx, uint32_t framesInFlight) noexcept
-{
-    const uint32_t fi = std::min(framesInFlight, vkcfg::kMaxFramesInFlight);
-
-    for (uint32_t i = 0; i < fi; ++i)
-    {
-        instanceDataBuffers[i].destroy();
-        instanceDataBuffers[i] = {};
-
-        scratchBuffers[i].destroy();
-        scratchBuffers[i] = {};
-        scratchSizes[i]   = 0;
-
-        // DescriptorSet is a small handle wrapper; releasing is pool-owned.
-        sets[i] = {};
-    }
-
-    if (ctx.device)
-    {
-        VkDevice device = ctx.device;
-
-        for (uint32_t i = 0; i < fi; ++i)
-        {
-            RtImagePerFrame& img = images[i];
-
-            if (img.view)
-            {
-                vkDestroyImageView(device, img.view, nullptr);
-                img.view = VK_NULL_HANDLE;
-            }
-            if (img.image)
-            {
-                vkDestroyImage(device, img.image, nullptr);
-                img.image = VK_NULL_HANDLE;
-            }
-            if (img.memory)
-            {
-                vkFreeMemory(device, img.memory, nullptr);
-                img.memory = VK_NULL_HANDLE;
-            }
-
-            img.width     = 0;
-            img.height    = 0;
-            img.needsInit = true;
-        }
-    }
-
-    cachedW = 0;
-    cachedH = 0;
-}
-
-//==================================================================
 // Init / Lifetime
 //==================================================================
 
-Renderer::Renderer() noexcept : m_rtTlasChangeCounter{std::make_shared<SysCounter>()}, m_rtTlasChangeMonitor{m_rtTlasChangeCounter}
-{
-}
+Renderer::Renderer() noexcept = default;
 
 bool Renderer::initDevice(const VulkanContext& ctx)
 {
@@ -97,9 +36,6 @@ bool Renderer::initDevice(const VulkanContext& ctx)
 
     m_viewportUbos.clear();
 
-    // Fixed-size storage: reset by assignment.
-    m_rtTlasFrames = {};
-
     if (!createDescriptors(m_framesInFlight))
         return false;
 
@@ -109,11 +45,14 @@ bool Renderer::initDevice(const VulkanContext& ctx)
     m_grid = std::make_unique<GridRendererVK>(&m_ctx);
     m_grid->createDeviceResources();
 
+    // ------------------------------------------------------------
+    // RT module init (device lifetime)
+    // ------------------------------------------------------------
     if (rtReady(m_ctx))
     {
-        if (!initRayTracingResources())
+        if (!m_rt.initDevice(m_ctx, m_descriptorSetLayout.layout(), m_materialSetLayout.layout()))
         {
-            std::cerr << "initRayTracingResources() failed." << std::endl;
+            std::cerr << "RtRenderer::initDevice() failed.\n";
             return false;
         }
     }
@@ -135,11 +74,14 @@ bool Renderer::initSwapchain(VkRenderPass renderPass)
             return false;
     }
 
+    // ------------------------------------------------------------
+    // RT module swapchain init (present pipeline depends on render pass)
+    // ------------------------------------------------------------
     if (rtReady(m_ctx))
     {
-        if (!createRtPresentPipeline(renderPass))
+        if (!m_rt.initSwapchain(renderPass))
         {
-            std::cerr << "createRtPresentPipeline() failed." << std::endl;
+            std::cerr << "RtRenderer::initSwapchain() failed.\n";
             return false;
         }
     }
@@ -152,7 +94,7 @@ void Renderer::destroySwapchainResources() noexcept
     if (m_grid)
         m_grid->destroySwapchainResources();
 
-    destroyRtPresentPipeline();
+    m_rt.destroySwapchainResources();
     destroyPipelines();
 }
 
@@ -167,7 +109,6 @@ void Renderer::shutdown() noexcept
     for (auto& [vp, state] : m_viewportUbos)
     {
         const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-
         for (uint32_t i = 0; i < fi; ++i)
         {
             state.cameraBuffers[i].destroy();
@@ -180,11 +121,6 @@ void Renderer::shutdown() noexcept
         }
     }
     m_viewportUbos.clear();
-
-    // Per-viewport RT state
-    for (auto& [vp, st] : m_rtViewports)
-        st.destroyDeviceResources(m_ctx, m_framesInFlight);
-    m_rtViewports.clear();
 
     // Destroy per-frame material buffers explicitly.
     for (uint32_t i = 0; i < m_framesInFlight; ++i)
@@ -203,28 +139,6 @@ void Renderer::shutdown() noexcept
     m_descriptorSetLayout.destroy();
     m_materialSetLayout.destroy();
 
-    // RT device-level resources
-    destroyAllRtTlasFrames();
-    destroyAllRtBlas();
-
-    m_rtSbt.destroy();
-    m_rtPipeline.destroy();
-
-    m_rtPool.destroy();
-    m_rtSetLayout.destroy();
-
-    if (m_rtSampler != VK_NULL_HANDLE && m_ctx.device)
-    {
-        vkDestroySampler(m_ctx.device, m_rtSampler, nullptr);
-        m_rtSampler = VK_NULL_HANDLE;
-    }
-
-    if (m_rtUploadPool != VK_NULL_HANDLE && m_ctx.device)
-    {
-        vkDestroyCommandPool(m_ctx.device, m_rtUploadPool, nullptr);
-        m_rtUploadPool = VK_NULL_HANDLE;
-    }
-
     if (m_pipelineLayout != VK_NULL_HANDLE && m_ctx.device)
     {
         vkDestroyPipelineLayout(m_ctx.device, m_pipelineLayout, nullptr);
@@ -242,43 +156,19 @@ void Renderer::shutdown() noexcept
         m_overlayFillVertexBuffer.destroy();
     m_overlayFillVertexCapacity = 0;
 
+    // ------------------------------------------------------------
+    // RT module shutdown (device lifetime)
+    // ------------------------------------------------------------
+    m_rt.shutdown();
+
     m_materialCount  = 0;
     m_framesInFlight = 0;
-
-    m_ctx = {};
-
-    m_rtTlasLinkedMeshes.clear();
-    m_rtTlasChangeCounter.reset();
+    m_ctx            = {};
 }
 
 void Renderer::idle(Scene* scene)
 {
-    if (!scene)
-        return;
-
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm)
-            continue;
-
-        SysMesh* mesh = sm->sysMesh();
-        if (!mesh)
-            continue;
-
-        if (m_rtTlasLinkedMeshes.contains(mesh))
-            continue;
-
-        mesh->topology_counter()->addParent(m_rtTlasChangeCounter);
-        mesh->deform_counter()->addParent(m_rtTlasChangeCounter);
-
-        m_rtTlasLinkedMeshes.insert(mesh);
-    }
-
-    if (m_rtTlasChangeMonitor.changed())
-    {
-        for (RtTlasFrame& tf : m_rtTlasFrames)
-            tf.buildKey = 0;
-    }
+    m_rt.idle(scene);
 }
 
 void Renderer::waitDeviceIdle() noexcept
@@ -293,7 +183,7 @@ void Renderer::setLightingSettings(const LightingSettings& settings) noexcept
 {
     m_lightingSettings = settings;
 
-    // Mirror the obvious headlight controls into the renderer headlight.
+    // Mirror the headlight controls into the renderer headlight.
     m_headlight.enabled   = m_lightingSettings.useHeadlight;
     m_headlight.intensity = m_lightingSettings.headlightIntensity;
 }
@@ -304,7 +194,74 @@ const LightingSettings& Renderer::lightingSettings() const noexcept
 }
 
 //==================================================================
-// renderPrePass (NOW does ALL MeshGpuResources::update(cmd) work here)
+// Shared per-viewport/per-frame globals (set=0)
+//==================================================================
+
+void Renderer::updateViewportFrameGlobals(Viewport* vp, Scene* scene, uint32_t frameIndex) noexcept
+{
+    if (!vp || !scene)
+        return;
+
+    if (frameIndex >= m_framesInFlight)
+        return;
+
+    ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIndex);
+
+    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
+    if (frameIndex >= fi)
+        return;
+
+    if (!vpUbo.cameraBuffers[frameIndex].valid() || !vpUbo.lightBuffers[frameIndex].valid())
+        return;
+
+    // CameraUBO
+    {
+        CameraUBO ubo{};
+
+        const glm::mat4 proj = vp->projection();
+        const glm::mat4 view = vp->view();
+
+        ubo.proj     = proj;
+        ubo.view     = view;
+        ubo.viewProj = proj * view;
+
+        ubo.invProj     = glm::inverse(proj);
+        ubo.invView     = glm::inverse(view);
+        ubo.invViewProj = glm::inverse(ubo.viewProj);
+
+        const glm::vec3 camPos = vp->cameraPosition();
+        ubo.camPos             = glm::vec4(camPos, 1.0f);
+
+        const float fw   = static_cast<float>(vp->width());
+        const float fh   = static_cast<float>(vp->height());
+        const float invW = (fw > 0.0f) ? 1.0f / fw : 0.0f;
+        const float invH = (fh > 0.0f) ? 1.0f / fh : 0.0f;
+
+        ubo.viewport   = glm::vec4(fw, fh, invW, invH);
+        ubo.clearColor = vp->clearColor();
+
+        vpUbo.cameraBuffers[frameIndex].upload(&ubo, sizeof(ubo));
+    }
+
+    // Lights
+    {
+        GpuLightsUBO lights{};
+        buildGpuLightsUBO(
+            m_lightingSettings,
+            m_headlight,
+            *vp,
+            scene,
+            lights);
+
+        vpUbo.lightBuffers[frameIndex].upload(&lights, sizeof(lights));
+    }
+}
+
+//==================================================================
+// renderPrePass
+//   - runs all MeshGpuResources::update() OUTSIDE render pass
+//   - updates set=0 (Camera+Lights) buffers for this viewport/frame
+//   - dispatches RT trace OUTSIDE render pass via RtRenderer (if enabled)
 //==================================================================
 
 void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
@@ -315,33 +272,51 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
     if (fc.frameIndex >= m_framesInFlight)
         return;
 
-    // ------------------------------------------------------------
+    const uint32_t frameIdx = fc.frameIndex;
+
     // 1) Update ALL MeshGpuResources here (outside render pass)
-    // ------------------------------------------------------------
-    forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
-        // IMPORTANT: update() records transfer/barrier commands.
-        // Must be done BEFORE the render pass begins.
+    forEachVisibleMesh(scene, [&](SceneMesh* /*sm*/, MeshGpuResources* gpu) {
         gpu->update(fc);
     });
 
-    // ------------------------------------------------------------
-    // 2) RT dispatch (still here, also outside render pass)
-    // ------------------------------------------------------------
-    if (vp->drawMode() == DrawMode::RAY_TRACE)
-    {
-        if (!rtReady(m_ctx))
-            return;
+    // 2) Update set=0 buffers (Camera+Lights) for this viewport/frame
+    updateViewportFrameGlobals(vp, scene, frameIdx);
 
-        renderRayTrace(vp, scene, fc);
+    // 3) If RT: make sure set=1 materials are ready, then dispatch RT (outside render pass)
+    if (vp->drawMode() == DrawMode::RAY_TRACE && rtReady(m_ctx))
+    {
+        if (scene->materialHandler() && scene->textureHandler())
+        {
+            const uint64_t matCounter =
+                scene->materialHandler()->changeCounter() ? scene->materialHandler()->changeCounter()->value() : 0ull;
+
+            if (m_materialCounterPerFrame[frameIdx] != matCounter)
+            {
+                const auto& mats = scene->materialHandler()->materials();
+                uploadMaterialsToGpu(mats, *scene->textureHandler(), frameIdx, fc);
+                updateMaterialTextureTable(*scene->textureHandler(), frameIdx);
+
+                m_materialCounterPerFrame[frameIdx] = matCounter;
+            }
+        }
+
+        ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIdx);
+
+        const VkDescriptorSet set0 = vpUbo.uboSets[frameIdx].set();
+        const VkDescriptorSet set1 = m_materialSets[frameIdx].set();
+
+        m_rt.renderPrePass(vp, scene, fc, set0, set1);
     }
 }
 
 //==================================================================
-// Render (RT present + raster overlays/selection)
+// Render (RT present OR raster)
+//   - INSIDE render pass
 //==================================================================
 
 void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 {
+    std::cerr << "Render called\n";
     if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
         return;
 
@@ -361,122 +336,44 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     const glm::vec4 wireVisibleColor{0.85f, 0.85f, 0.85f, 1.0f};
     const glm::vec4 wireHiddenColor{0.85f, 0.85f, 0.85f, 0.25f};
 
-    auto uploadViewportUboSet0 = [&]() -> bool {
+    auto bindSet0 = [&]() -> bool {
         ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIdx);
 
         const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
         if (frameIdx >= fi)
             return false;
 
-        if (!vpUbo.cameraBuffers[frameIdx].valid() ||
-            !vpUbo.lightBuffers[frameIdx].valid())
-        {
+        VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
+        if (gfxSet0 == VK_NULL_HANDLE)
             return false;
-        }
 
-        // ------------------------------------------------------------
-        // CameraUBO (shared raster + RT)
-        // ------------------------------------------------------------
-        {
-            CameraUBO ubo{};
-
-            const glm::mat4 proj = vp->projection();
-            const glm::mat4 view = vp->view();
-
-            ubo.proj     = proj;
-            ubo.view     = view;
-            ubo.viewProj = proj * view;
-
-            ubo.invProj     = glm::inverse(proj);
-            ubo.invView     = glm::inverse(view);
-            ubo.invViewProj = glm::inverse(ubo.viewProj);
-
-            const glm::vec3 camPos = vp->cameraPosition();
-            ubo.camPos             = glm::vec4(camPos, 1.0f);
-
-            const float fw   = static_cast<float>(vp->width());
-            const float fh   = static_cast<float>(vp->height());
-            const float invW = (fw > 0.0f) ? 1.0f / fw : 0.0f;
-            const float invH = (fh > 0.0f) ? 1.0f / fh : 0.0f;
-
-            ubo.viewport   = glm::vec4(fw, fh, invW, invH);
-            ubo.clearColor = vp->clearColor();
-
-            vpUbo.cameraBuffers[frameIdx].upload(&ubo, sizeof(ubo));
-        }
-
-        // ------------------------------------------------------------
-        // Lights
-        // ------------------------------------------------------------
-        {
-            GpuLightsUBO lights{};
-            buildGpuLightsUBO(
-                m_lightingSettings,
-                m_headlight, // Renderer-owned modeling light
-                *vp,
-                scene,
-                lights);
-
-            vpUbo.lightBuffers[frameIdx].upload(&lights, sizeof(lights));
-        }
-
-        // ------------------------------------------------------------
-        // Bind set=0 (Camera + Lights)
-        // ------------------------------------------------------------
-        {
-            VkDescriptorSet gfxSet0 = vpUbo.uboSets[frameIdx].set();
-            vkCmdBindDescriptorSets(cmd,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    m_pipelineLayout,
-                                    0,
-                                    1,
-                                    &gfxSet0,
-                                    0,
-                                    nullptr);
-        }
+        vkCmdBindDescriptorSets(cmd,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_pipelineLayout,
+                                0,
+                                1,
+                                &gfxSet0,
+                                0,
+                                nullptr);
 
         return true;
     };
 
     // ------------------------------------------------------------
-    // RAY TRACE PRESENT PATH (present RT image, then draw overlays)
+    // RT PRESENT PATH (inside render pass)
     // ------------------------------------------------------------
     if (vp->drawMode() == DrawMode::RAY_TRACE)
     {
         if (!rtReady(m_ctx))
             return;
 
-        RtViewportState& rtv = ensureRtViewportState(vp, frameIdx);
-
-        if (!ensureRtOutputImages(rtv, fc, w, h))
-            return;
-
-        if (!m_rtPresent.valid())
-            return;
-
-        const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-        if (frameIdx >= fi)
-            return;
-
-        // Present RT output
         vkutil::setViewportAndScissor(cmd, w, h);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rtPresent.pipeline());
+        // Fullscreen present of the RT output for this viewport+frame
+        m_rt.present(cmd, vp, fc);
 
-        VkDescriptorSet rtSet0 = rtv.sets[frameIdx].set();
-        vkCmdBindDescriptorSets(cmd,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_rtPresent.layout(),
-                                0,
-                                1,
-                                &rtSet0,
-                                0,
-                                nullptr);
-
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-
-        // Restore normal set=0 (MVP + Lights) so overlays/selection/grid can render on top.
-        if (!uploadViewportUboSet0())
+        // Re-bind set=0 so selection/grid/overlays can render on top
+        if (!bindSet0())
             return;
 
         vkutil::setViewportAndScissor(cmd, w, h);
@@ -487,25 +384,21 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     }
 
     // ------------------------------------------------------------
-    // NORMAL GRAPHICS PATH (bind MVP+Lights set=0)
+    // NORMAL GRAPHICS PATH
     // ------------------------------------------------------------
-    if (!uploadViewportUboSet0())
+    if (!bindSet0())
         return;
 
     vkutil::setViewportAndScissor(cmd, w, h);
 
-    // ------------------------------------------------------------
     // Solid / Shaded
-    // ------------------------------------------------------------
     if (vp->drawMode() != DrawMode::WIREFRAME)
     {
         const bool isShaded = (vp->drawMode() == DrawMode::SHADED);
 
-        // Choose solid or shaded pipeline
-        VkPipeline triPipe = isShaded
-                                 ? m_shadedPipeline.handle()
-                                 : m_solidPipeline.handle();
+        VkPipeline triPipe = isShaded ? m_shadedPipeline.handle() : m_solidPipeline.handle();
 
+        // Ensure materials (needed for shaded; harmless for solid if shaders ignore)
         if (scene->materialHandler() && scene->textureHandler())
         {
             const uint64_t matCounter =
@@ -521,6 +414,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
             }
         }
 
+        // Bind set=1 (materials + texture table)
         {
             VkDescriptorSet set1 = m_materialSets[frameIdx].set();
             vkCmdBindDescriptorSets(cmd,
@@ -564,9 +458,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         constexpr bool drawEdgesInSolid = true;
         if (!isShaded && drawEdgesInSolid && m_wireOverlayPipeline.valid())
         {
-            vkCmdBindPipeline(cmd,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              m_wireOverlayPipeline.handle());
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_wireOverlayPipeline.handle());
 
             forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
@@ -593,17 +485,13 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
             });
         }
     }
-    // ------------------------------------------------------------
     // Wireframe mode (hidden-line)
-    // ------------------------------------------------------------
     else
     {
         // 1) depth-only triangles
         if (m_depthOnlyPipeline.valid())
         {
-            vkCmdBindPipeline(cmd,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              m_depthOnlyPipeline.handle());
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_depthOnlyPipeline.handle());
 
             forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 PushConstants pc{};
@@ -612,9 +500,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
                 vkCmdPushConstants(cmd,
                                    m_pipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT |
-                                       VK_SHADER_STAGE_GEOMETRY_BIT |
-                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0,
                                    sizeof(PushConstants),
                                    &pc);
@@ -635,9 +521,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
             if (!pipeline.valid())
                 return;
 
-            vkCmdBindPipeline(cmd,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline.handle());
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
 
             forEachVisibleMesh(scene, [&](SceneMesh* sm, MeshGpuResources* gpu) {
                 const bool useSubdiv = (sm->subdivisionLevel() > 0);
@@ -671,9 +555,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     drawSelection(cmd, vp, scene);
 
     if (scene->showSceneGrid())
-    {
         drawSceneGrid(cmd, vp, scene);
-    }
 }
 
 //==================================================================
@@ -688,12 +570,6 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
     const std::vector<OverlayHandler::Overlay>& ovs = overlays.overlays();
     if (ovs.empty())
         return;
-
-    // -------------------------------------------------------------------------
-    // Build two batches:
-    //  - lineVertices: wide-line pipeline
-    //  - fillVertices: triangle list pipeline
-    // -------------------------------------------------------------------------
 
     std::vector<OverlayVertex>     lineVertices = {};
     std::vector<OverlayFillVertex> fillVertices = {};
@@ -743,15 +619,9 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
 
     for (const OverlayHandler::Overlay& ov : ovs)
     {
-        // ------------------------------------------------------------
-        // Lines
-        // ------------------------------------------------------------
         for (const OverlayHandler::Line& L : ov.lines)
             pushLine(L.a, L.b, L.thickness, L.color);
 
-        // ------------------------------------------------------------
-        // Polygons
-        // ------------------------------------------------------------
         for (const OverlayHandler::Polygon& P : ov.polygons)
         {
             const std::vector<glm::vec3>& pts = P.verts;
@@ -775,9 +645,6 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
             }
         }
 
-        // ------------------------------------------------------------
-        // Points -> small cross (optional)
-        // ------------------------------------------------------------
         for (const OverlayHandler::Point& pt : ov.points)
         {
             const float pxW = vp->pixelScale(pt.p);
@@ -793,9 +660,6 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Draw filled polys FIRST (so outlines sit on top)
-    // -------------------------------------------------------------------------
     if (!fillVertices.empty())
     {
         const std::size_t fillCount = fillVertices.size();
@@ -831,9 +695,6 @@ void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHand
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Draw lines AFTER
-    // -------------------------------------------------------------------------
     if (lineVertices.empty())
         return;
 
@@ -891,7 +752,7 @@ void Renderer::ensureOverlayVertexCapacity(std::size_t requiredVertexCount)
                                  bufferSize,
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                 /*persistentMap*/ true);
+                                 true);
 
     if (!m_overlayVertexBuffer.valid())
     {
@@ -920,7 +781,7 @@ void Renderer::ensureOverlayFillVertexCapacity(std::size_t requiredVertexCount)
                                      bufferSize,
                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                     /*persistentMap*/ true);
+                                     true);
 
     if (!m_overlayFillVertexBuffer.valid())
     {
@@ -932,7 +793,7 @@ void Renderer::ensureOverlayFillVertexCapacity(std::size_t requiredVertexCount)
 }
 
 //==================================================================
-// drawSelection (NO MeshGpuResources::update(cmd) calls here)
+// drawSelection
 //==================================================================
 
 void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
@@ -940,12 +801,8 @@ void Renderer::drawSelection(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     if (!scene || !vp)
         return;
 
-    if (!m_selVertPipeline.valid() &&
-        !m_selEdgePipeline.valid() &&
-        !m_selPolyPipeline.valid())
-    {
+    if (!m_selVertPipeline.valid() && !m_selEdgePipeline.valid() && !m_selPolyPipeline.valid())
         return;
-    }
 
     VkDeviceSize zeroOffset = 0;
 
@@ -1038,7 +895,7 @@ void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
     PushConstants pc{};
     pc.model         = gridModel;
     pc.color         = glm::vec4(0, 0, 0, 0);
-    pc.overlayParams = glm::vec4(0.0f); // unused for grid
+    pc.overlayParams = glm::vec4(0.0f);
 
     vkCmdPushConstants(cmd,
                        m_pipelineLayout,
@@ -1060,7 +917,6 @@ void Renderer::destroyPipelines() noexcept
     if (!m_ctx.device)
         return;
 
-    // Often this is already handled at a higher level.
     vkDeviceWaitIdle(m_ctx.device);
 
     auto destroyPipe = [](GraphicsPipeline& p) noexcept {
@@ -1097,25 +953,16 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     m_framesInFlight  = std::clamp(framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
     const uint32_t fi = m_framesInFlight;
 
-    // ------------------------------------------------------------
-    // Destroy/recreate (safe on resize / re-init)
-    // IMPORTANT: clear cached per-viewport sets because they are tied to the pool/layout.
-    // ------------------------------------------------------------
     m_viewportUbos.clear();
 
     m_descriptorPool.destroy();
     m_descriptorSetLayout.destroy();
     m_materialSetLayout.destroy();
 
-    // ------------------------------------------------------------
-    // set = 0 : Frame globals (per-viewport)
-    //   binding 0 = CameraUBO     (shared by raster + RT)
-    //   binding 1 = GpuLightsUBO  (shared by raster + RT)
-    // ------------------------------------------------------------
+    // set = 0 : Frame globals
     {
         DescriptorBindingInfo uboBindings[2] = {};
 
-        // CameraUBO
         uboBindings[0].binding = 0;
         uboBindings[0].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uboBindings[0].stages  = VK_SHADER_STAGE_VERTEX_BIT |
@@ -1126,7 +973,6 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
                                 VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
         uboBindings[0].count = 1;
 
-        // Lights UBO
         uboBindings[1].binding = 1;
         uboBindings[1].type    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uboBindings[1].stages  = VK_SHADER_STAGE_ALL;
@@ -1139,15 +985,7 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         }
     }
 
-    // ------------------------------------------------------------
-    // set = 1 : Scene / materials
-    //   binding 0 = materials SSBO
-    //   binding 1 = texture table (combined image sampler array)
-    //
-    // IMPORTANT:
-    // Any-hit shaders read material/texture data for alpha cutouts, so
-    // VK_SHADER_STAGE_ANY_HIT_BIT_KHR must be included here.
-    // ------------------------------------------------------------
+    // set = 1 : Materials + texture table
     {
         DescriptorBindingInfo matBindings[2] = {};
 
@@ -1172,12 +1010,6 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         }
     }
 
-    // ------------------------------------------------------------
-    // Pool sizes
-    //
-    // Frame globals: (maxViewports * frames) each with 2 UBO bindings.
-    // Material sets: (frames) each with 1 SSBO + kMaxTextureCount combined samplers.
-    // ------------------------------------------------------------
     const uint32_t rasterSetCount   = fi * kMaxViewports;
     const uint32_t materialSetCount = fi;
 
@@ -1195,9 +1027,6 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         return false;
     }
 
-    // ------------------------------------------------------------
-    // Allocate per-frame material sets (set = 1)
-    // ------------------------------------------------------------
     for (uint32_t i = 0; i < fi; ++i)
     {
         m_materialSets[i] = {};
@@ -1221,8 +1050,8 @@ bool Renderer::createPipelineLayout() noexcept
         return true;
 
     VkDescriptorSetLayout setLayouts[2] = {
-        m_descriptorSetLayout.layout(), // set 0
-        m_materialSetLayout.layout(),   // set 1
+        m_descriptorSetLayout.layout(),
+        m_materialSetLayout.layout(),
     };
 
     VkPushConstantRange pcRange{};
@@ -1251,7 +1080,6 @@ void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
     m_materialCount = static_cast<uint32_t>(materials.size());
     if (m_materialCount == 0)
     {
-        // Optional: still bind an empty range so descriptor is valid.
         if (m_materialBuffers[frameIndex].valid())
         {
             m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device,
@@ -1293,12 +1121,11 @@ void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
                    sizeBytes,
                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   /*persistentMap*/ false);
+                   false);
     }
 
     buf.upload(gpuMats.data(), sizeBytes);
 
-    // IMPORTANT: set=1 binding=0 for THIS frame points to THIS frame’s SSBO.
     m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device,
                                                   0,
                                                   buf.buffer(),
@@ -1319,14 +1146,12 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
     VkImageView       fbView   = (fallback ? fallback->view : VK_NULL_HANDLE);
     VkSampler         fbSamp   = (fallback ? fallback->sampler : VK_NULL_HANDLE);
 
-    // If fallback isn't wired yet, fail safe by not updating (prevents invalid writes).
     if (fbView == VK_NULL_HANDLE || fbSamp == VK_NULL_HANDLE)
         return;
 
     std::vector<VkDescriptorImageInfo> infos = {};
     infos.resize(vkcfg::kMaxTextureCount);
 
-    // Fill all entries with fallback first (guarantees non-null for unused slots).
     for (uint32_t i = 0; i < vkcfg::kMaxTextureCount; ++i)
     {
         VkDescriptorImageInfo info = {};
@@ -1339,7 +1164,6 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
     const int texCount = static_cast<int>(textureHandler.size());
     const int count    = std::min(texCount, static_cast<int>(vkcfg::kMaxTextureCount));
 
-    // Overwrite with real textures where available.
     for (int i = 0; i < count; ++i)
     {
         const GpuTexture* tex = textureHandler.get(i);
@@ -1357,7 +1181,6 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
         infos[static_cast<size_t>(i)] = info;
     }
 
-    // set=1, binding=1
     m_materialSets[frameIndex].writeCombinedImageSamplerArray(device, 1, infos);
 }
 
@@ -1376,9 +1199,6 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     if (!m_ctx.device)
         return false;
 
-    // ------------------------------------------------------------
-    // Vertex input descriptions
-    // ------------------------------------------------------------
     VkVertexInputBindingDescription      solidBindings[4] = {};
     VkVertexInputAttributeDescription    solidAttrs[4]    = {};
     VkPipelineVertexInputStateCreateInfo viSolid{};
@@ -1418,9 +1238,6 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     viOverlay.vertexAttributeDescriptionCount = 3;
     viOverlay.pVertexAttributeDescriptions    = overlayAttrs;
 
-    // ------------------------------------------------------------
-    // Overlay fill vertex input (triangles)
-    // ------------------------------------------------------------
     VkVertexInputBindingDescription overlayFillBinding{};
     overlayFillBinding.binding   = 0;
     overlayFillBinding.stride    = sizeof(OverlayFillVertex);
@@ -1445,108 +1262,56 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     viOverlayFill.vertexAttributeDescriptionCount = 2;
     viOverlayFill.pVertexAttributeDescriptions    = overlayFillAttrs;
 
-    // ------------------------------------------------------------
-    // Main mesh / wireframe / overlay pipelines via helpers
-    // ------------------------------------------------------------
-
-    // Solid
-    if (!vkutil::createSolidPipeline(m_ctx,
-                                     renderPass,
-                                     m_pipelineLayout,
-                                     m_ctx.sampleCount,
-                                     viSolid,
-                                     m_solidPipeline))
+    if (!vkutil::createSolidPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viSolid, m_solidPipeline))
     {
         std::cerr << "RendererVK: createSolidPipeline failed.\n";
         return false;
     }
 
-    // Shaded
-    if (!vkutil::createShadedPipeline(m_ctx,
-                                      renderPass,
-                                      m_pipelineLayout,
-                                      m_ctx.sampleCount,
-                                      viSolid,
-                                      m_shadedPipeline))
+    if (!vkutil::createShadedPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viSolid, m_shadedPipeline))
     {
         std::cerr << "RendererVK: createShadedPipeline failed.\n";
         return false;
     }
 
-    // Depth-only (triangles, no color)
-    if (!vkutil::createDepthOnlyPipeline(m_ctx,
-                                         renderPass,
-                                         m_pipelineLayout,
-                                         m_ctx.sampleCount,
-                                         viSolid,
-                                         m_depthOnlyPipeline))
+    if (!vkutil::createDepthOnlyPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viSolid, m_depthOnlyPipeline))
     {
         std::cerr << "RendererVK: createDepthOnlyPipeline failed.\n";
         return false;
     }
 
-    // Wireframe visible
-    if (!vkutil::createWireframePipeline(m_ctx,
-                                         renderPass,
-                                         m_pipelineLayout,
-                                         m_ctx.sampleCount,
-                                         viLines,
-                                         m_wirePipeline))
+    if (!vkutil::createWireframePipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viLines, m_wirePipeline))
     {
         std::cerr << "RendererVK: createWireframePipeline failed.\n";
         return false;
     }
 
-    // Wireframe hidden (depth GREATER)
-    if (!vkutil::createWireframeHiddenPipeline(m_ctx,
-                                               renderPass,
-                                               m_pipelineLayout,
-                                               m_ctx.sampleCount,
-                                               viLines,
-                                               m_wireHiddenPipeline))
+    if (!vkutil::createWireframeHiddenPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viLines, m_wireHiddenPipeline))
     {
         std::cerr << "RendererVK: createWireframeHiddenPipeline failed.\n";
         return false;
     }
 
-    // Wire overlay in SOLID mode (depth bias)
-    if (!vkutil::createWireframeDepthBiasPipeline(m_ctx,
-                                                  renderPass,
-                                                  m_pipelineLayout,
-                                                  m_ctx.sampleCount,
-                                                  viLines,
-                                                  m_wireOverlayPipeline))
+    if (!vkutil::createWireframeDepthBiasPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viLines, m_wireOverlayPipeline))
     {
         std::cerr << "RendererVK: createWireframeDepthBiasPipeline failed.\n";
         return false;
     }
 
-    // Overlay (gizmos) - wide lines
-    if (!vkutil::createOverlayPipeline(m_ctx,
-                                       renderPass,
-                                       m_pipelineLayout,
-                                       m_ctx.sampleCount,
-                                       viOverlay,
-                                       m_overlayPipeline))
+    if (!vkutil::createOverlayPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viOverlay, m_overlayPipeline))
     {
         std::cerr << "RendererVK: createOverlayPipeline failed.\n";
         return false;
     }
 
-    // Overlay fill (gizmos) - triangles
-    if (!vkutil::createOverlayFillPipeline(m_ctx,
-                                           renderPass,
-                                           m_pipelineLayout,
-                                           m_ctx.sampleCount,
-                                           viOverlayFill,
-                                           m_overlayFillPipeline))
+    if (!vkutil::createOverlayFillPipeline(m_ctx, renderPass, m_pipelineLayout, m_ctx.sampleCount, viOverlayFill, m_overlayFillPipeline))
     {
         std::cerr << "RendererVK: createOverlayFillPipeline failed.\n";
         return false;
     }
 
     // ------------------------------------------------------------
-    // Selection pipelines (keep existing MeshPipelinePreset logic)
+    // Selection pipelines (unchanged)
     // ------------------------------------------------------------
     const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
@@ -1636,15 +1401,8 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         return true;
     };
 
-    // Visible verts
     {
-        VkPipeline p = createMeshPipeline(m_ctx,
-                                          renderPass,
-                                          m_pipelineLayout,
-                                          selVertStages,
-                                          2,
-                                          &viLines,
-                                          selVertPreset);
+        VkPipeline p = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selVertStages, 2, &viLines, selVertPreset);
         if (!wrapSelPipeline(m_selVertPipeline, p))
         {
             std::cerr << "RendererVK: createMeshPipeline(selection verts) failed.\n";
@@ -1652,15 +1410,8 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         }
     }
 
-    // Visible edges
     {
-        VkPipeline p = createMeshPipeline(m_ctx,
-                                          renderPass,
-                                          m_pipelineLayout,
-                                          selStages,
-                                          2,
-                                          &viLines,
-                                          selEdgePreset);
+        VkPipeline p = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selEdgePreset);
         if (!wrapSelPipeline(m_selEdgePipeline, p))
         {
             std::cerr << "RendererVK: createMeshPipeline(selection edges) failed.\n";
@@ -1668,15 +1419,8 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         }
     }
 
-    // Visible polys
     {
-        VkPipeline p = createMeshPipeline(m_ctx,
-                                          renderPass,
-                                          m_pipelineLayout,
-                                          selStages,
-                                          2,
-                                          &viLines,
-                                          selPolyPreset);
+        VkPipeline p = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selPolyPreset);
         if (!wrapSelPipeline(m_selPolyPipeline, p))
         {
             std::cerr << "RendererVK: createMeshPipeline(selection polys) failed.\n";
@@ -1684,15 +1428,8 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         }
     }
 
-    // Hidden verts
     {
-        VkPipeline p = createMeshPipeline(m_ctx,
-                                          renderPass,
-                                          m_pipelineLayout,
-                                          selVertStages,
-                                          2,
-                                          &viLines,
-                                          selVertHiddenPreset);
+        VkPipeline p = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selVertStages, 2, &viLines, selVertHiddenPreset);
         if (!wrapSelPipeline(m_selVertHiddenPipeline, p))
         {
             std::cerr << "RendererVK: createMeshPipeline(selection verts hidden) failed.\n";
@@ -1700,15 +1437,8 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         }
     }
 
-    // Hidden edges
     {
-        VkPipeline p = createMeshPipeline(m_ctx,
-                                          renderPass,
-                                          m_pipelineLayout,
-                                          selStages,
-                                          2,
-                                          &viLines,
-                                          selEdgeHiddenPreset);
+        VkPipeline p = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selEdgeHiddenPreset);
         if (!wrapSelPipeline(m_selEdgeHiddenPipeline, p))
         {
             std::cerr << "RendererVK: createMeshPipeline(selection edges hidden) failed.\n";
@@ -1716,15 +1446,8 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         }
     }
 
-    // Hidden polys
     {
-        VkPipeline p = createMeshPipeline(m_ctx,
-                                          renderPass,
-                                          m_pipelineLayout,
-                                          selStages,
-                                          2,
-                                          &viLines,
-                                          selPolyHiddenPreset);
+        VkPipeline p = createMeshPipeline(m_ctx, renderPass, m_pipelineLayout, selStages, 2, &viLines, selPolyHiddenPreset);
         if (!wrapSelPipeline(m_selPolyHiddenPipeline, p))
         {
             std::cerr << "RendererVK: createMeshPipeline(selection polys hidden) failed.\n";
@@ -1736,7 +1459,7 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
 }
 
 //==================================================================
-// Per-viewport Camera + Lights UBO (device-level)
+// Per-viewport Camera + Lights UBO (lazy allocation)
 //==================================================================
 
 Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint32_t frameIdx)
@@ -1748,7 +1471,6 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
 
     bool needWrite = false;
 
-    // Allocate set=0 for this viewport/frame
     if (s.uboSets[frameIdx].set() == VK_NULL_HANDLE)
     {
         if (!s.uboSets[frameIdx].allocate(m_ctx.device, m_descriptorPool.pool(), m_descriptorSetLayout.layout()))
@@ -1759,7 +1481,6 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
         needWrite = true;
     }
 
-    // CameraUBO buffer (binding 0)
     if (!s.cameraBuffers[frameIdx].valid())
     {
         s.cameraBuffers[frameIdx].create(m_ctx.device,
@@ -1777,7 +1498,6 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
         needWrite = true;
     }
 
-    // Lights UBO buffer (binding 1)
     if (!s.lightBuffers[frameIdx].valid())
     {
         s.lightBuffers[frameIdx].create(m_ctx.device,
@@ -1798,1454 +1518,13 @@ Renderer::ViewportUboState& Renderer::ensureViewportUboState(Viewport* vp, uint3
         needWrite = true;
     }
 
-    // Write descriptors if any of the buffers were created
     if (needWrite)
     {
-        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device,
-                                               0,
-                                               s.cameraBuffers[frameIdx].buffer(),
-                                               sizeof(CameraUBO));
-        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device,
-                                               1,
-                                               s.lightBuffers[frameIdx].buffer(),
-                                               sizeof(GpuLightsUBO));
+        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 0, s.cameraBuffers[frameIdx].buffer(), sizeof(CameraUBO));
+        s.uboSets[frameIdx].writeUniformBuffer(m_ctx.device, 1, s.lightBuffers[frameIdx].buffer(), sizeof(GpuLightsUBO));
     }
 
     return s;
-}
-
-//==================================================================
-// RT per-viewport state (lazy allocation)
-//==================================================================
-
-Renderer::RtViewportState& Renderer::ensureRtViewportState(Viewport* vp, uint32_t frameIdx)
-{
-    RtViewportState& st = m_rtViewports[vp];
-
-    if (frameIdx >= m_framesInFlight || frameIdx >= vkcfg::kMaxFramesInFlight)
-        return st;
-
-    // Ensure the per-viewport Set0 UBO set for THIS slot exists
-    // (CameraUBO + Lights UBO). This does not modify descriptors,
-    // only ensures buffers/sets exist.
-    (void)ensureViewportUboState(vp, frameIdx);
-
-    bool needRtSetWrite = false;
-
-    // Allocate RT-only set (Set 2)
-    if (st.sets[frameIdx].set() == VK_NULL_HANDLE)
-    {
-        if (!st.sets[frameIdx].allocate(m_ctx.device, m_rtPool.pool(), m_rtSetLayout.layout()))
-        {
-            std::cerr << "RendererVK: Failed to allocate RT set for viewport frame " << frameIdx << ".\n";
-            return st;
-        }
-        needRtSetWrite = true;
-    }
-
-    // Instance data SSBO (Set 2, binding 3)
-    if (!st.instanceDataBuffers[frameIdx].valid())
-    {
-        st.instanceDataBuffers[frameIdx].create(m_ctx.device,
-                                                m_ctx.physicalDevice,
-                                                sizeof(RtInstanceData),
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                                false,
-                                                false);
-        needRtSetWrite = true;
-    }
-
-    if (needRtSetWrite && st.instanceDataBuffers[frameIdx].valid())
-    {
-        st.sets[frameIdx].writeStorageBuffer(m_ctx.device,
-                                             3,
-                                             st.instanceDataBuffers[frameIdx].buffer(),
-                                             st.instanceDataBuffers[frameIdx].size(),
-                                             0);
-    }
-
-    return st;
-}
-
-void Renderer::updateViewportLightsUbo(Viewport* vp, Scene* scene, uint32_t frameIndex)
-{
-    if (!vp || !scene)
-        return;
-
-    if (frameIndex >= m_framesInFlight)
-        return;
-
-    ViewportUboState& ubo = ensureViewportUboState(vp, frameIndex);
-
-    if (frameIndex >= ubo.lightBuffers.size())
-        return;
-
-    if (!ubo.lightBuffers[frameIndex].valid())
-        return;
-
-    GpuLightsUBO lights{};
-    buildGpuLightsUBO(m_lightingSettings, m_headlight, *vp, scene, lights);
-    ubo.lightBuffers[frameIndex].upload(&lights, sizeof(lights));
-}
-
-//==================================================================
-// RT present pipeline (swapchain-level)
-//==================================================================
-
-bool Renderer::createRtPresentPipeline(VkRenderPass renderPass)
-{
-    m_rtPresent.destroy(m_ctx.device);
-
-    if (!rtReady(m_ctx))
-        return true; // RT disabled: it's fine to "succeed" with no pipeline
-
-    if (!m_rtSetLayout.layout())
-    {
-        std::cerr << "RendererVK: RT set layout not created yet.\n";
-        return false;
-    }
-
-    if (!m_rtPresent.create(m_ctx.device, renderPass, m_ctx.sampleCount, m_rtSetLayout.layout()))
-    {
-        std::cerr << "RendererVK: RtPresentPipeline::create() failed.\n";
-        return false;
-    }
-
-    return true;
-}
-
-void Renderer::destroyRtPresentPipeline() noexcept
-{
-    m_rtPresent.destroy(m_ctx.device);
-}
-
-//==================================================================
-// RT init (device-level) - now ONLY creates layout/pool/pipeline/sbt/sampler
-// (sets + camera buffers + images are per-viewport, lazy)
-//==================================================================
-
-bool Renderer::initRayTracingResources()
-{
-    if (!rtReady(m_ctx))
-        return false;
-
-    VkDevice device = m_ctx.device;
-    if (!device)
-        return false;
-
-    // ------------------------------------------------------------
-    // Set 2 = RT-only (RT pipelines only)
-    //   binding 0 = storage image (raygen writes)
-    //   binding 1 = present sampler / sampled image
-    //   binding 2 = TLAS
-    //   binding 3 = RT instance data SSBO
-    // ------------------------------------------------------------
-    DescriptorBindingInfo bindings[4]{};
-
-    // storage image (RGEN writes)
-    bindings[0].binding = 0;
-    bindings[0].type    = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[0].stages  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    bindings[0].count   = 1;
-
-    // combined image sampler (used by RtPresent and optionally raygen)
-    bindings[1].binding = 1;
-    bindings[1].type    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].stages  = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    bindings[1].count   = 1;
-
-    // TLAS
-    bindings[2].binding = 2;
-    bindings[2].type    = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    bindings[2].stages  = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-    bindings[2].count   = 1;
-
-    // RT instance data SSBO
-    bindings[3].binding = 3;
-    bindings[3].type    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[3].stages  = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-    bindings[3].count   = 1;
-
-    if (!m_rtSetLayout.create(device, std::span{bindings, 4}))
-    {
-        std::cerr << "RendererVK: Failed to create RT DescriptorSetLayout.\n";
-        return false;
-    }
-
-    // Pool is sized for (frames * maxViewports)
-    const uint32_t setCount = std::max(1u, m_framesInFlight) * kMaxViewports;
-
-    std::array<VkDescriptorPoolSize, 4> poolSizes = {
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, setCount},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, setCount},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, setCount},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, setCount}, // instance SSBO
-    };
-
-    if (!m_rtPool.create(device, poolSizes, /*maxSets*/ setCount))
-    {
-        std::cerr << "RendererVK: Failed to create RT DescriptorPool.\n";
-        return false;
-    }
-
-    if (m_rtSampler == VK_NULL_HANDLE)
-    {
-        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        sci.magFilter    = VK_FILTER_LINEAR;
-        sci.minFilter    = VK_FILTER_LINEAR;
-        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.maxLod       = 0.0f;
-
-        if (vkCreateSampler(device, &sci, nullptr, &m_rtSampler) != VK_SUCCESS)
-        {
-            std::cerr << "RendererVK: Failed to create RT present sampler.\n";
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------
-    // RT scene pipeline layout:
-    //   set 0 = Frame globals (m_descriptorSetLayout)
-    //   set 1 = Scene / materials (m_materialSetLayout)
-    //   set 2 = RT-only (m_rtSetLayout)
-    // ------------------------------------------------------------
-    VkDescriptorSetLayout setLayouts[3] = {
-        m_descriptorSetLayout.layout(), // set 0
-        m_materialSetLayout.layout(),   // set 1
-        m_rtSetLayout.layout(),         // set 2
-    };
-
-    if (!m_rtPipeline.createScenePipeline(m_ctx, setLayouts, 3))
-    {
-        std::cerr << "RendererVK: Failed to create RT scene pipeline.\n";
-        return false;
-    }
-
-    if (m_rtUploadPool == VK_NULL_HANDLE)
-    {
-        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        pci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pci.queueFamilyIndex = m_ctx.graphicsQueueFamilyIndex;
-
-        if (vkCreateCommandPool(device, &pci, nullptr, &m_rtUploadPool) != VK_SUCCESS)
-        {
-            std::cerr << "RendererVK: Failed to create RT upload command pool.\n";
-            return false;
-        }
-    }
-
-    if (!m_rtSbt.buildAndUpload(m_ctx,
-                                m_rtPipeline.pipeline(),
-                                vkrt::RtPipeline::kRaygenCount,
-                                vkrt::RtPipeline::kMissCount,
-                                vkrt::RtPipeline::kHitCount,
-                                vkrt::RtPipeline::kCallableCount,
-                                m_rtUploadPool,
-                                m_ctx.graphicsQueue))
-    {
-        std::cerr << "RendererVK: Failed to build/upload SBT.\n";
-        return false;
-    }
-
-    return true;
-}
-
-//==================================================================
-// RT output images
-//==================================================================
-
-void Renderer::destroyRtOutputImages(RtViewportState& s, uint32_t framesInFlight) noexcept
-{
-    if (!m_ctx.device)
-        return;
-
-    VkDevice device = m_ctx.device;
-
-    const uint32_t fi = std::min(framesInFlight, vkcfg::kMaxFramesInFlight);
-
-    for (uint32_t i = 0; i < fi; ++i)
-    {
-        RtImagePerFrame& img = s.images[i];
-
-        if (img.view)
-        {
-            vkDestroyImageView(device, img.view, nullptr);
-            img.view = VK_NULL_HANDLE;
-        }
-        if (img.image)
-        {
-            vkDestroyImage(device, img.image, nullptr);
-            img.image = VK_NULL_HANDLE;
-        }
-        if (img.memory)
-        {
-            vkFreeMemory(device, img.memory, nullptr);
-            img.memory = VK_NULL_HANDLE;
-        }
-
-        img.width     = 0;
-        img.height    = 0;
-        img.needsInit = true;
-    }
-
-    s.cachedW = 0;
-    s.cachedH = 0;
-}
-
-bool Renderer::ensureRtOutputImages(RtViewportState& s, const RenderFrameContext& fc, uint32_t w, uint32_t h)
-{
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.physicalDevice)
-        return false;
-
-    if (w == 0 || h == 0)
-        return false;
-
-    const uint32_t frameIndex = fc.frameIndex;
-    if (frameIndex >= m_framesInFlight)
-        return false;
-
-    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-    if (frameIndex >= fi)
-        return false;
-
-    // If THIS slot already matches, we're done.
-    {
-        const RtImagePerFrame& img = s.images[frameIndex];
-        if (img.image && img.view && img.width == w && img.height == h)
-        {
-            s.cachedW = w;
-            s.cachedH = h;
-            return true;
-        }
-    }
-
-    VkDevice device = m_ctx.device;
-
-    // -------------------------------------------------------------------------
-    // Destroy only this slot's resources (DEFERRED if available).
-    // -------------------------------------------------------------------------
-    {
-        RtImagePerFrame& img = s.images[frameIndex];
-
-        const VkImageView    oldView = img.view;
-        const VkImage        oldImg  = img.image;
-        const VkDeviceMemory oldMem  = img.memory;
-
-        if (oldView || oldImg || oldMem)
-        {
-            auto destroyOld = [device, oldView, oldImg, oldMem]() noexcept {
-                if (oldView)
-                    vkDestroyImageView(device, oldView, nullptr);
-                if (oldImg)
-                    vkDestroyImage(device, oldImg, nullptr);
-                if (oldMem)
-                    vkFreeMemory(device, oldMem, nullptr);
-            };
-
-            if (fc.deferred)
-                fc.deferred->enqueue(frameIndex, std::move(destroyOld));
-            else
-                destroyOld();
-        }
-
-        img.view   = VK_NULL_HANDLE;
-        img.image  = VK_NULL_HANDLE;
-        img.memory = VK_NULL_HANDLE;
-
-        img.width     = 0;
-        img.height    = 0;
-        img.needsInit = true;
-    }
-
-    VkPhysicalDeviceMemoryProperties memProps{};
-    vkGetPhysicalDeviceMemoryProperties(m_ctx.physicalDevice, &memProps);
-
-    auto findDeviceLocalType = [&](uint32_t typeBits) noexcept -> uint32_t {
-        for (uint32_t m = 0; m < memProps.memoryTypeCount; ++m)
-        {
-            if ((typeBits & (1u << m)) &&
-                (memProps.memoryTypes[m].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
-            {
-                return m;
-            }
-        }
-        return UINT32_MAX;
-    };
-
-    RtImagePerFrame newImg = {};
-
-    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    ici.imageType   = VK_IMAGE_TYPE_2D;
-    ici.format      = m_rtFormat;
-    ici.extent      = VkExtent3D{w, h, 1};
-    ici.mipLevels   = 1;
-    ici.arrayLayers = 1;
-    ici.samples     = VK_SAMPLE_COUNT_1_BIT;
-    ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage       = VK_IMAGE_USAGE_STORAGE_BIT |
-                VK_IMAGE_USAGE_SAMPLED_BIT |
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vkCreateImage(device, &ici, nullptr, &newImg.image) != VK_SUCCESS)
-        return false;
-
-    VkMemoryRequirements req{};
-    vkGetImageMemoryRequirements(device, newImg.image, &req);
-
-    const uint32_t typeIndex = findDeviceLocalType(req.memoryTypeBits);
-    if (typeIndex == UINT32_MAX)
-    {
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize  = req.size;
-    mai.memoryTypeIndex = typeIndex;
-
-    if (vkAllocateMemory(device, &mai, nullptr, &newImg.memory) != VK_SUCCESS)
-    {
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    if (vkBindImageMemory(device, newImg.image, newImg.memory, 0) != VK_SUCCESS)
-    {
-        vkFreeMemory(device, newImg.memory, nullptr);
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vci.image                           = newImg.image;
-    vci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format                          = m_rtFormat;
-    vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    vci.subresourceRange.baseMipLevel   = 0;
-    vci.subresourceRange.levelCount     = 1;
-    vci.subresourceRange.baseArrayLayer = 0;
-    vci.subresourceRange.layerCount     = 1;
-
-    if (vkCreateImageView(device, &vci, nullptr, &newImg.view) != VK_SUCCESS)
-    {
-        vkFreeMemory(device, newImg.memory, nullptr);
-        vkDestroyImage(device, newImg.image, nullptr);
-        return false;
-    }
-
-    newImg.width     = w;
-    newImg.height    = h;
-    newImg.needsInit = true;
-
-    // Commit into this slot.
-    s.images[frameIndex] = newImg;
-
-    // Update only THIS frame slot’s descriptors (set 2 / RT-only)
-    s.sets[frameIndex].writeStorageImage(device, 0, newImg.view, VK_IMAGE_LAYOUT_GENERAL);
-    s.sets[frameIndex].writeCombinedImageSampler(device,
-                                                 1,
-                                                 m_rtSampler,
-                                                 newImg.view,
-                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    s.cachedW = w;
-    s.cachedH = h;
-    return true;
-}
-
-//==================================================================
-// RT scratch
-//==================================================================
-
-bool Renderer::ensureRtScratch(Viewport* vp, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept
-{
-    if (!rtReady(m_ctx) || !m_ctx.device || !vp)
-        return false;
-
-    if (bytes == 0)
-        return false;
-
-    if (fc.frameIndex >= m_framesInFlight)
-        return false;
-
-    RtViewportState& rts = ensureRtViewportState(vp, fc.frameIndex);
-
-    GpuBuffer&    scratch = rts.scratchBuffers[fc.frameIndex];
-    VkDeviceSize& cap     = rts.scratchSizes[fc.frameIndex];
-
-    // Vulkan requires scratch address alignment. We'll allocate extra so we can align the address safely.
-    const VkDeviceSize align =
-        (m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment != 0)
-            ? VkDeviceSize(m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment)
-            : VkDeviceSize(256);
-
-    const VkDeviceSize want = bytes + align;
-
-    if (scratch.valid() && cap >= want)
-        return true;
-
-    // If replacing an existing scratch buffer, defer destruction to this viewport’s per-frame queue.
-    if (scratch.valid())
-    {
-        if (fc.deferred)
-        {
-            GpuBuffer old = std::move(scratch);
-            cap           = 0;
-
-            fc.deferred->enqueue(fc.frameIndex, [buf = std::move(old)]() mutable {
-                buf.destroy();
-            });
-        }
-        else
-        {
-            scratch.destroy();
-            cap = 0;
-        }
-    }
-
-    scratch.create(m_ctx.device,
-                   m_ctx.physicalDevice,
-                   want,
-                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                   false,
-                   true);
-
-    if (!scratch.valid())
-        return false;
-
-    cap = want;
-    return true;
-}
-
-//==================================================================
-// RT AS teardown
-//==================================================================
-
-void Renderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept
-{
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch)
-        return;
-
-    if (!sm)
-        return;
-
-    auto it = m_rtBlas.find(sm);
-    if (it == m_rtBlas.end())
-        return;
-
-    RtBlas& b = it->second;
-
-    // Nothing to destroy
-    if (b.as == VK_NULL_HANDLE && !b.asBuffer.valid())
-    {
-        m_rtBlas.erase(it);
-        return;
-    }
-
-    // Move resources out first so analyzers see a clear ownership transfer.
-    VkAccelerationStructureKHR oldAs      = b.as;
-    GpuBuffer                  oldBacking = std::move(b.asBuffer);
-
-    // Clear the live entry immediately after moving out.
-    // From here on, this RtBlas no longer owns the AS/backing buffer.
-    b.as       = VK_NULL_HANDLE;
-    b.asBuffer = {};
-
-    b.address       = 0;
-    b.buildKey      = 0;
-    b.posBuffer     = VK_NULL_HANDLE;
-    b.posCount      = 0;
-    b.idxBuffer     = VK_NULL_HANDLE;
-    b.idxCount      = 0;
-    b.subdivLevel   = 0;
-    b.topoCounter   = 0;
-    b.deformCounter = 0;
-
-    if (fc.deferred)
-    {
-        VkDevice device = m_ctx.device;
-        auto*    rt     = m_ctx.rtDispatch;
-
-        fc.deferred->enqueue(
-            fc.frameIndex,
-            [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
-                if (rt && device && oldAs != VK_NULL_HANDLE)
-                    rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
-
-                backing.destroy();
-            });
-    }
-    else
-    {
-        // Fallback (ideally shouldn't happen)
-        if (m_ctx.rtDispatch && m_ctx.device && oldAs != VK_NULL_HANDLE)
-            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, oldAs, nullptr);
-
-        oldBacking.destroy();
-    }
-
-    // Remove entry from map now that resources have been scheduled/freed.
-    m_rtBlas.erase(it); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
-}
-
-void Renderer::destroyAllRtBlas() noexcept
-{
-    if (!m_ctx.device || !m_ctx.rtDispatch)
-        return;
-
-    for (auto& [sm, b] : m_rtBlas)
-    {
-        if (b.as != VK_NULL_HANDLE)
-            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
-
-        b.as = VK_NULL_HANDLE;
-        b.asBuffer.destroy();
-        b.address  = 0;
-        b.buildKey = 0;
-    }
-
-    m_rtBlas.clear();
-}
-
-void Renderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffers) noexcept
-{
-    if (frameIndex >= m_rtTlasFrames.size())
-        return;
-
-    RtTlasFrame& t = m_rtTlasFrames[frameIndex];
-
-    if (rtReady(m_ctx) && m_ctx.rtDispatch && m_ctx.device && t.as)
-        m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
-
-    t.as       = VK_NULL_HANDLE;
-    t.address  = 0;
-    t.buildKey = 0;
-
-    t.buffer.destroy();
-
-    if (destroyInstanceBuffers)
-    {
-        t.instanceBuffer.destroy();
-        t.instanceStaging.destroy();
-    }
-}
-
-void Renderer::clearRtTlasDescriptor(Viewport* /*vp*/, uint32_t /*frameIndex*/) noexcept
-{
-    // Intentionally does nothing unless nullDescriptor is enabled.
-    //
-    // Without nullDescriptor, writing VK_NULL_HANDLE to an
-    // ACCELERATION_STRUCTURE_KHR descriptor is invalid and produces
-    // validation errors.
-    //
-    // When TLAS is missing, the RT path exits before vkCmdTraceRaysKHR,
-    // so the previous binding is never consumed by shaders.
-}
-
-void Renderer::destroyAllRtTlasFrames() noexcept
-{
-    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-
-    for (uint32_t i = 0; i < fi; ++i)
-        destroyRtTlasFrame(i, true);
-
-    // Reset handles/keys to a clean state (fixed-size storage).
-    m_rtTlasFrames = {};
-}
-
-//==================================================================
-// RT dispatch (per-viewport)
-//==================================================================
-
-void Renderer::writeRtTlasDescriptor(Viewport* vp, uint32_t frameIndex) noexcept
-{
-    if (!vp)
-        return;
-
-    if (frameIndex >= m_rtTlasFrames.size())
-        return;
-
-    RtTlasFrame& tf = m_rtTlasFrames[frameIndex];
-    if (tf.as == VK_NULL_HANDLE)
-        return;
-
-    RtViewportState& rtv = ensureRtViewportState(vp, frameIndex);
-    if (frameIndex >= rtv.sets.size())
-        return;
-
-    // set 2, binding 2 = TLAS
-    rtv.sets[frameIndex].writeAccelerationStructure(m_ctx.device, 2, tf.as);
-}
-
-//==================================================================
-// RT dispatch
-//==================================================================
-
-void Renderer::renderRayTrace(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
-{
-    if (!rtReady(m_ctx) || !m_ctx.rtDispatch)
-        return;
-
-    if (!fc.cmd || !vp || !scene)
-        return;
-
-    if (!m_rtPipeline.valid() || !m_rtSbt.buffer())
-        return;
-
-    if (fc.frameIndex >= m_framesInFlight)
-        return;
-
-    const uint32_t frameIdx = fc.frameIndex;
-
-    const uint32_t w = static_cast<uint32_t>(vp->width());
-    const uint32_t h = static_cast<uint32_t>(vp->height());
-    if (w == 0 || h == 0)
-        return;
-
-    // Ensure per-viewport lighting buffers exist and contain current data
-    updateViewportLightsUbo(vp, scene, frameIdx);
-
-    ViewportUboState& ubo = ensureViewportUboState(vp, frameIdx);
-    RtViewportState&  rtv = ensureRtViewportState(vp, frameIdx);
-
-    if (!ensureRtOutputImages(rtv, fc, w, h))
-        return;
-
-    if (frameIdx >= rtv.images.size() ||
-        frameIdx >= rtv.instanceDataBuffers.size() ||
-        frameIdx >= rtv.sets.size() ||
-        frameIdx >= ubo.uboSets.size())
-    {
-        return;
-    }
-
-    RtImagePerFrame& out = rtv.images[frameIdx];
-    if (!out.image || !out.view)
-        return;
-
-    if (ubo.uboSets[frameIdx].set() == VK_NULL_HANDLE ||
-        rtv.sets[frameIdx].set() == VK_NULL_HANDLE)
-    {
-        return;
-    }
-
-    // ------------------------------------------------------------
-    // Update CameraUBO for RT (shared with raster)
-    // ------------------------------------------------------------
-    if (!ubo.cameraBuffers[frameIdx].valid())
-        return;
-
-    {
-        CameraUBO cam = {};
-
-        const glm::mat4 proj = vp->projection();
-        const glm::mat4 view = vp->view();
-
-        cam.proj     = proj;
-        cam.view     = view;
-        cam.viewProj = proj * view;
-
-        cam.invProj     = glm::inverse(proj);
-        cam.invView     = glm::inverse(view);
-        cam.invViewProj = glm::inverse(cam.viewProj);
-
-        const glm::vec3 camPos = vp->cameraPosition();
-        cam.camPos             = glm::vec4(camPos, 1.0f);
-
-        const float fw   = static_cast<float>(w);
-        const float fh   = static_cast<float>(h);
-        const float invW = (fw > 0.0f) ? 1.0f / fw : 0.0f;
-        const float invH = (fh > 0.0f) ? 1.0f / fh : 0.0f;
-
-        cam.viewport   = glm::vec4(fw, fh, invW, invH);
-        cam.clearColor = vp->clearColor();
-
-        ubo.cameraBuffers[frameIdx].upload(&cam, sizeof(cam));
-    }
-
-    // ------------------------------------------------------------
-    // Clear RT output to viewport background (safe even if no TLAS)
-    // ------------------------------------------------------------
-    {
-        const VkClearColorValue clear = vkutil::toVkClearColor(vp->clearColor());
-
-        VkImageSubresourceRange range = {};
-        range.aspectMask              = VK_IMAGE_ASPECT_COLOR_BIT;
-        range.baseMipLevel            = 0;
-        range.levelCount              = 1;
-        range.baseArrayLayer          = 0;
-        range.layerCount              = 1;
-
-        if (out.needsInit)
-        {
-            vkutil::imageBarrier(fc.cmd,
-                                 out.image,
-                                 VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_GENERAL,
-                                 0,
-                                 VK_ACCESS_TRANSFER_WRITE_BIT,
-                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-            out.needsInit = false;
-        }
-        else
-        {
-            vkutil::imageBarrier(fc.cmd,
-                                 out.image,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_GENERAL,
-                                 VK_ACCESS_SHADER_READ_BIT,
-                                 VK_ACCESS_TRANSFER_WRITE_BIT,
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT);
-        }
-
-        vkCmdClearColorImage(fc.cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
-
-        vkutil::imageBarrier(fc.cmd,
-                             out.image,
-                             VK_IMAGE_LAYOUT_GENERAL,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_ACCESS_TRANSFER_WRITE_BIT,
-                             VK_ACCESS_SHADER_READ_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-    }
-
-    // ------------------------------------------------------------
-    // Build (or DESTROY) BLAS for visible meshes
-    // ------------------------------------------------------------
-    for (SceneMesh* sm : scene->sceneMeshes())
-    {
-        if (!sm || !sm->visible())
-            continue;
-
-        const render::geom::RtMeshGeometry geo = render::geom::selectRtGeometry(sm);
-
-        if (!geo.valid() || geo.buildIndexCount == 0 || geo.buildPosCount == 0)
-        {
-            destroyRtBlasFor(sm, fc);
-            continue;
-        }
-
-        (void)ensureMeshBlas(vp, sm, geo, fc);
-    }
-
-    // ------------------------------------------------------------
-    // Ensure scene TLAS
-    // ------------------------------------------------------------
-    if (!ensureSceneTlas(vp, scene, fc))
-        return;
-
-    if (frameIdx >= m_rtTlasFrames.size() ||
-        m_rtTlasFrames[frameIdx].as == VK_NULL_HANDLE)
-    {
-        // Avoid writing NULL AS unless nullDescriptor is enabled:
-        // just keep cleared output and bail.
-        return;
-    }
-
-    // Bind TLAS into THIS viewport’s RT set for this frame (Set 2, binding 2)
-    writeRtTlasDescriptor(vp, frameIdx);
-
-    // ------------------------------------------------------------
-    // Upload per-instance shader data
-    // ------------------------------------------------------------
-    {
-        std::vector<RtInstanceData> instData;
-        instData.reserve(scene->sceneMeshes().size());
-
-        for (SceneMesh* sm : scene->sceneMeshes())
-        {
-            if (!sm || !sm->visible())
-                continue;
-
-            auto it = m_rtBlas.find(sm);
-            if (it == m_rtBlas.end())
-                continue;
-
-            const RtBlas& b = it->second;
-            if (b.as == VK_NULL_HANDLE || b.address == 0)
-                continue;
-
-            const render::geom::RtMeshGeometry geo = render::geom::selectRtGeometry(sm);
-            if (!geo.valid() || !geo.shaderValid())
-                continue;
-
-            const uint32_t primCount = geo.buildIndexCount / 3u;
-            if (primCount == 0)
-                continue;
-
-            if (geo.shaderTriCount != primCount)
-                continue;
-
-            if (geo.shadeNrmCount != primCount * 3u)
-                continue;
-
-            if (geo.shadeUvCount != primCount * 3u)
-                continue;
-
-            if (geo.shadeMatIdCount != primCount)
-                continue;
-
-            RtInstanceData d = {};
-            d.posAdr         = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadePosBuffer);
-            d.idxAdr         = vkutil::bufferDeviceAddress(m_ctx.device, geo.shaderIndexBuffer);
-            d.nrmAdr         = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadeNrmBuffer);
-            d.uvAdr          = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadeUvBuffer);
-            d.matIdAdr       = vkutil::bufferDeviceAddress(m_ctx.device, geo.shadeMatIdBuffer);
-            d.triCount       = geo.shaderTriCount;
-
-            if (d.posAdr == 0 || d.idxAdr == 0 || d.nrmAdr == 0 || d.uvAdr == 0 || d.matIdAdr == 0 || d.triCount == 0)
-                continue;
-
-            instData.push_back(d);
-        }
-
-        if (!instData.empty())
-        {
-            const VkDeviceSize bytes = VkDeviceSize(instData.size() * sizeof(RtInstanceData));
-
-            rtv.instanceDataBuffers[frameIdx].upload(instData.data(), bytes);
-
-            // Set 2, binding 3 = instance data SSBO
-            rtv.sets[frameIdx].writeStorageBuffer(m_ctx.device,
-                                                  3,
-                                                  rtv.instanceDataBuffers[frameIdx].buffer(),
-                                                  bytes,
-                                                  0);
-        }
-        else
-        {
-            // Keep descriptor valid but with zero range
-            rtv.sets[frameIdx].writeStorageBuffer(m_ctx.device,
-                                                  3,
-                                                  rtv.instanceDataBuffers[frameIdx].buffer(),
-                                                  0,
-                                                  0);
-        }
-    }
-
-    // ------------------------------------------------------------
-    // Ensure material table is up to date for RT
-    // ------------------------------------------------------------
-    if (scene->materialHandler() && scene->textureHandler())
-    {
-        const uint64_t matCounter =
-            scene->materialHandler()->changeCounter() ? scene->materialHandler()->changeCounter()->value() : 0ull;
-
-        if (m_materialCounterPerFrame[frameIdx] != matCounter)
-        {
-            const auto& mats = scene->materialHandler()->materials();
-            uploadMaterialsToGpu(mats, *scene->textureHandler(), frameIdx, fc);
-            updateMaterialTextureTable(*scene->textureHandler(), frameIdx);
-
-            m_materialCounterPerFrame[frameIdx] = matCounter;
-        }
-    }
-
-    // ------------------------------------------------------------
-    // Transition for raygen writes
-    // ------------------------------------------------------------
-    vkutil::imageBarrier(fc.cmd,
-                         out.image,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_IMAGE_LAYOUT_GENERAL,
-                         VK_ACCESS_SHADER_READ_BIT,
-                         VK_ACCESS_SHADER_WRITE_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-
-    // ------------------------------------------------------------
-    // Bind RT pipeline + descriptor sets
-    //   Set 0 = Frame globals (CameraUBO + Lights)
-    //   Set 1 = Materials
-    //   Set 2 = RT-only (output image + TLAS + instance data)
-    // ------------------------------------------------------------
-    vkCmdBindPipeline(fc.cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
-
-    VkDescriptorSet sets[3] = {
-        ubo.uboSets[frameIdx].set(),    // set 0 : frame globals
-        m_materialSets[frameIdx].set(), // set 1 : materials
-        rtv.sets[frameIdx].set()        // set 2 : RT-only
-    };
-
-    vkCmdBindDescriptorSets(fc.cmd,
-                            VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_rtPipeline.layout(),
-                            0,
-                            3,
-                            sets,
-                            0,
-                            nullptr);
-
-    VkStridedDeviceAddressRegionKHR rgen = {};
-    VkStridedDeviceAddressRegionKHR miss = {};
-    VkStridedDeviceAddressRegionKHR hit  = {};
-    VkStridedDeviceAddressRegionKHR call = {};
-    m_rtSbt.regions(m_ctx, rgen, miss, hit, call);
-
-    m_ctx.rtDispatch->vkCmdTraceRaysKHR(fc.cmd, &rgen, &miss, &hit, &call, w, h, 1);
-
-    // ------------------------------------------------------------
-    // Transition back for present sampling
-    // ------------------------------------------------------------
-    vkutil::imageBarrier(fc.cmd,
-                         out.image,
-                         VK_IMAGE_LAYOUT_GENERAL,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_ACCESS_SHADER_WRITE_BIT,
-                         VK_ACCESS_SHADER_READ_BIT,
-                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-}
-
-//==================================================================
-// RT build helpers
-//==================================================================
-
-bool Renderer::ensureMeshBlas(Viewport* vp, SceneMesh* sm, const render::geom::RtMeshGeometry& geo, const RenderFrameContext& fc) noexcept
-{
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !vp || !sm || !fc.cmd)
-        return false;
-
-    if (!geo.valid() || geo.buildIndexCount == 0 || geo.buildPosCount == 0)
-        return false;
-
-    if (fc.frameIndex >= m_framesInFlight)
-        return false;
-
-    // ------------------------------------------------------------
-    // Build key: topology+deform counters + geometry sizes.
-    // ------------------------------------------------------------
-    uint64_t topo   = 0;
-    uint64_t deform = 0;
-
-    if (sm->sysMesh())
-    {
-        if (sm->sysMesh()->topology_counter())
-            topo = sm->sysMesh()->topology_counter()->value();
-        if (sm->sysMesh()->deform_counter())
-            deform = sm->sysMesh()->deform_counter()->value();
-    }
-
-    uint64_t key = topo;
-    key ^= (deform + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2));
-    key ^= (uint64_t(geo.buildPosCount) << 32) ^ uint64_t(geo.buildIndexCount);
-
-    RtBlas& b = m_rtBlas[sm];
-
-    if (b.as != VK_NULL_HANDLE && b.buildKey == key)
-        return true;
-
-    // ------------------------------------------------------------
-    // Tear down existing BLAS (deferred to the *viewport* frame slot)
-    // ------------------------------------------------------------
-    if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
-    {
-        if (fc.deferred)
-        {
-            VkDevice device = m_ctx.device;
-            auto*    rt     = m_ctx.rtDispatch;
-
-            VkAccelerationStructureKHR oldAs      = b.as;
-            GpuBuffer                  oldBacking = std::move(b.asBuffer);
-
-            fc.deferred->enqueue(fc.frameIndex,
-                                 [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
-                                     if (rt && device && oldAs != VK_NULL_HANDLE)
-                                         rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
-
-                                     backing.destroy();
-                                 });
-        }
-        else
-        {
-            if (m_ctx.rtDispatch && m_ctx.device && b.as != VK_NULL_HANDLE)
-                m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
-
-            b.asBuffer.destroy();
-        }
-
-        b.as       = VK_NULL_HANDLE; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
-        b.asBuffer = {};
-    }
-
-    b.address  = 0;
-    b.buildKey = 0;
-
-    // ------------------------------------------------------------
-    // Geometry device addresses
-    // ------------------------------------------------------------
-    const VkDeviceAddress vAdr = vkutil::bufferDeviceAddress(m_ctx.device, geo.buildPosBuffer);
-    const VkDeviceAddress iAdr = vkutil::bufferDeviceAddress(m_ctx.device, geo.buildIndexBuffer);
-
-    if (vAdr == 0 || iAdr == 0)
-        return false;
-
-    VkAccelerationStructureGeometryKHR asGeom = {};
-    asGeom.sType                              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    asGeom.geometryType                       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    asGeom.flags                              = 0; // allow any-hit (alpha test) //VK_GEOMETRY_OPAQUE_BIT_KHR;
-
-    VkAccelerationStructureGeometryTrianglesDataKHR tri = {};
-    tri.sType                                           = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-    tri.vertexFormat                                    = VK_FORMAT_R32G32B32_SFLOAT;
-    tri.vertexData.deviceAddress                        = vAdr;
-    tri.vertexStride                                    = sizeof(glm::vec3);
-    tri.maxVertex                                       = geo.buildPosCount ? (geo.buildPosCount - 1) : 0;
-    tri.indexType                                       = VK_INDEX_TYPE_UINT32;
-    tri.indexData.deviceAddress                         = iAdr;
-
-    asGeom.geometry.triangles = tri;
-
-    const uint32_t primCount = geo.buildIndexCount / 3u;
-    if (primCount == 0)
-        return false;
-
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {};
-    buildInfo.sType                                       = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-    buildInfo.type                                        = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags                                       = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    buildInfo.mode                                        = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    buildInfo.geometryCount                               = 1;
-    buildInfo.pGeometries                                 = &asGeom;
-
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {};
-    sizeInfo.sType                                    = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-
-    auto* rt = m_ctx.rtDispatch;
-    if (!rt)
-        return false;
-
-    rt->vkGetAccelerationStructureBuildSizesKHR(m_ctx.device,
-                                                VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                                &buildInfo,
-                                                &primCount,
-                                                &sizeInfo);
-
-    if (sizeInfo.accelerationStructureSize == 0 || sizeInfo.buildScratchSize == 0)
-        return false;
-
-    // ------------------------------------------------------------
-    // Create buffer backing the BLAS
-    // ------------------------------------------------------------
-    b.asBuffer.create(m_ctx.device,
-                      m_ctx.physicalDevice,
-                      sizeInfo.accelerationStructureSize,
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                      false,
-                      true);
-
-    if (!b.asBuffer.valid())
-        return false;
-
-    VkAccelerationStructureCreateInfoKHR asci = {};
-    asci.sType                                = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-    asci.type                                 = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    asci.size                                 = sizeInfo.accelerationStructureSize;
-    asci.buffer                               = b.asBuffer.buffer();
-
-    if (m_ctx.rtDispatch->vkCreateAccelerationStructureKHR(m_ctx.device, &asci, nullptr, &b.as) != VK_SUCCESS)
-        return false;
-
-    // ------------------------------------------------------------
-    // Per-viewport per-frame scratch (CRITICAL for multi-viewport)
-    // ------------------------------------------------------------
-    if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
-        return false;
-
-    RtViewportState& rts     = ensureRtViewportState(vp, fc.frameIndex);
-    GpuBuffer&       scratch = rts.scratchBuffers[fc.frameIndex];
-
-    VkDeviceAddress scratchAdr = vkutil::bufferDeviceAddress(m_ctx.device, scratch.buffer());
-    if (scratchAdr == 0)
-        return false;
-
-    const VkDeviceSize align =
-        (m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment != 0)
-            ? VkDeviceSize(m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment)
-            : VkDeviceSize(256);
-
-    scratchAdr = vkrt::align_up<VkDeviceAddress>(scratchAdr, VkDeviceAddress(align));
-
-    buildInfo.dstAccelerationStructure  = b.as;
-    buildInfo.scratchData.deviceAddress = scratchAdr;
-
-    VkAccelerationStructureBuildRangeInfoKHR range            = {};
-    range.primitiveCount                                      = primCount;
-    const VkAccelerationStructureBuildRangeInfoKHR* pRanges[] = {&range};
-
-    m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
-
-    // Barrier: BLAS build writes -> RT reads
-    vkutil::barrierAsBuildToTrace(fc.cmd);
-
-    VkAccelerationStructureDeviceAddressInfoKHR addrInfo = {};
-    addrInfo.sType                                       = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    addrInfo.accelerationStructure                       = b.as;
-
-    b.address  = m_ctx.rtDispatch->vkGetAccelerationStructureDeviceAddressKHR(m_ctx.device, &addrInfo);
-    b.buildKey = key;
-
-    return (b.address != 0);
-}
-
-bool Renderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept
-{
-    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !scene || !fc.cmd || !vp)
-        return false;
-
-    if (fc.frameIndex >= m_rtTlasFrames.size())
-        return false;
-
-    RtTlasFrame& t = m_rtTlasFrames[fc.frameIndex];
-
-    // Use change counter as the TLAS rebuild key.
-    uint64_t key = m_rtTlasChangeCounter ? m_rtTlasChangeCounter->value() : 1ull;
-
-    // ------------------------------------------------------------
-    // Helper: iterate visible meshes that have a valid BLAS (no GPU creation!)
-    // ------------------------------------------------------------
-    auto forEachVisibleBlasMesh = [&](auto&& fn) {
-        for (SceneMesh* sm : scene->sceneMeshes())
-        {
-            if (!sm || !sm->visible())
-                continue;
-
-            auto it = m_rtBlas.find(sm);
-            if (it == m_rtBlas.end())
-                continue;
-
-            const RtBlas& b = it->second;
-            if (b.as == VK_NULL_HANDLE || b.address == 0)
-                continue;
-
-            fn(*sm, b);
-        }
-    };
-
-    // Also rebuild TLAS if any BLAS changed
-    forEachVisibleBlasMesh([&](SceneMesh& /*sm*/, const RtBlas& b) {
-        key ^= (b.buildKey + 0x9e3779b97f4a7c15ull + (key << 6) + (key >> 2));
-    });
-
-    if (t.as != VK_NULL_HANDLE && t.buildKey == key)
-        return true;
-
-    // ------------------------------------------------------------
-    // Gather instances (must match ordering used for RtInstanceData upload!)
-    // ------------------------------------------------------------
-    std::vector<VkAccelerationStructureInstanceKHR> instances;
-    instances.reserve(scene->sceneMeshes().size());
-
-    forEachVisibleBlasMesh([&](SceneMesh& /*sm*/, const RtBlas& b) {
-        VkAccelerationStructureInstanceKHR inst{};
-        inst.transform.matrix[0][0] = 1.0f;
-        inst.transform.matrix[1][1] = 1.0f;
-        inst.transform.matrix[2][2] = 1.0f;
-
-        inst.instanceCustomIndex                    = static_cast<uint32_t>(instances.size());
-        inst.mask                                   = 0xFF;
-        inst.instanceShaderBindingTableRecordOffset = 0;
-        inst.flags                                  = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-        inst.accelerationStructureReference         = b.address;
-
-        instances.push_back(inst);
-    });
-
-    if (instances.empty())
-    {
-        // No geometry: destroy TLAS if it exists.
-        destroyRtTlasFrame(fc.frameIndex, false);
-
-        // CRITICAL: clear stale TLAS binding for this viewport+frame
-        clearRtTlasDescriptor(vp, fc.frameIndex);
-
-        t.buildKey = key;
-        return true;
-    }
-
-    const VkDeviceSize instanceBytes = VkDeviceSize(instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
-
-    // Ensure staging buffer (host visible)
-    if (!t.instanceStaging.valid() || t.instanceStaging.size() < instanceBytes)
-    {
-        t.instanceStaging.destroy();
-        t.instanceStaging.create(m_ctx.device,
-                                 m_ctx.physicalDevice,
-                                 instanceBytes,
-                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                 true);
-        if (!t.instanceStaging.valid())
-            return false;
-    }
-
-    // Ensure device-local instance buffer (for build input)
-    if (!t.instanceBuffer.valid() || t.instanceBuffer.size() < instanceBytes)
-    {
-        t.instanceBuffer.destroy();
-        t.instanceBuffer.create(m_ctx.device,
-                                m_ctx.physicalDevice,
-                                instanceBytes,
-                                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                false,
-                                true);
-        if (!t.instanceBuffer.valid())
-            return false;
-    }
-
-    // Upload instances -> staging
-    t.instanceStaging.upload(instances.data(), instanceBytes);
-
-    // Copy staging -> device-local
-    VkBufferCopy cpy{};
-    cpy.size = instanceBytes;
-    vkCmdCopyBuffer(fc.cmd, t.instanceStaging.buffer(), t.instanceBuffer.buffer(), 1, &cpy);
-
-    // Barrier: transfer write -> AS build read
-    vkutil::barrierTransferToAsBuildRead(fc.cmd);
-
-    // Build sizes for TLAS
-    VkAccelerationStructureGeometryKHR asGeom{};
-    asGeom.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    asGeom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-
-    VkAccelerationStructureGeometryInstancesDataKHR instData{};
-    instData.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-    instData.arrayOfPointers    = VK_FALSE;
-    instData.data.deviceAddress = vkutil::bufferDeviceAddress(m_ctx.device, t.instanceBuffer.buffer());
-
-    asGeom.geometry.instances = instData;
-
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
-    buildInfo.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-    buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    buildInfo.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    buildInfo.geometryCount = 1;
-    buildInfo.pGeometries   = &asGeom;
-
-    const uint32_t primCount = static_cast<uint32_t>(instances.size());
-
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
-    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-
-    m_ctx.rtDispatch->vkGetAccelerationStructureBuildSizesKHR(m_ctx.device,
-                                                              VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                                              &buildInfo,
-                                                              &primCount,
-                                                              &sizeInfo);
-
-    if (sizeInfo.accelerationStructureSize == 0 || sizeInfo.buildScratchSize == 0)
-        return false;
-
-    // Recreate TLAS buffer/AS if too small or missing
-    const bool needNewTlasStorage =
-        (!t.buffer.valid() || t.buffer.size() < sizeInfo.accelerationStructureSize || t.as == VK_NULL_HANDLE);
-
-    if (needNewTlasStorage)
-    {
-        if (t.as != VK_NULL_HANDLE || t.buffer.valid())
-        {
-            VkAccelerationStructureKHR oldAs      = std::exchange(t.as, VK_NULL_HANDLE);
-            GpuBuffer                  oldBacking = std::exchange(t.buffer, {});
-
-            if (fc.deferred)
-            {
-                VkDevice device = m_ctx.device;
-                auto*    rt     = m_ctx.rtDispatch;
-
-                fc.deferred->enqueue(
-                    fc.frameIndex,
-                    [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
-                        if (rt && device && oldAs != VK_NULL_HANDLE)
-                            rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
-                        backing.destroy();
-                    });
-            }
-            else
-            {
-                if (m_ctx.rtDispatch && m_ctx.device && oldAs)
-                    m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, oldAs, nullptr);
-
-                oldBacking.destroy();
-            }
-        }
-
-        t.address = 0; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
-
-        t.buffer.create(m_ctx.device,
-                        m_ctx.physicalDevice,
-                        sizeInfo.accelerationStructureSize,
-                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                        false,
-                        true);
-
-        if (!t.buffer.valid())
-            return false;
-
-        VkAccelerationStructureCreateInfoKHR asci{};
-        asci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-        asci.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        asci.size   = sizeInfo.accelerationStructureSize;
-        asci.buffer = t.buffer.buffer();
-
-        if (m_ctx.rtDispatch->vkCreateAccelerationStructureKHR(m_ctx.device, &asci, nullptr, &t.as) != VK_SUCCESS)
-            return false;
-    }
-
-    if (!ensureRtScratch(vp, fc, sizeInfo.buildScratchSize))
-        return false;
-
-    RtViewportState& rts     = ensureRtViewportState(vp, fc.frameIndex);
-    GpuBuffer&       scratch = rts.scratchBuffers[fc.frameIndex];
-
-    VkDeviceAddress scratchAdr = vkutil::bufferDeviceAddress(m_ctx.device, scratch.buffer());
-    if (scratchAdr == 0)
-        return false;
-
-    const VkDeviceSize align =
-        (m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment != 0)
-            ? VkDeviceSize(m_ctx.asProps.minAccelerationStructureScratchOffsetAlignment)
-            : VkDeviceSize(256);
-
-    scratchAdr = vkrt::align_up<VkDeviceAddress>(scratchAdr, VkDeviceAddress(align));
-
-    buildInfo.dstAccelerationStructure  = t.as;
-    buildInfo.scratchData.deviceAddress = scratchAdr;
-
-    VkAccelerationStructureBuildRangeInfoKHR range{};
-    range.primitiveCount                                      = primCount;
-    const VkAccelerationStructureBuildRangeInfoKHR* pRanges[] = {&range};
-
-    m_ctx.rtDispatch->vkCmdBuildAccelerationStructuresKHR(fc.cmd, 1, &buildInfo, pRanges);
-
-    // Barrier: TLAS build writes -> RT reads
-    vkutil::barrierAsBuildToTrace(fc.cmd);
-
-    VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
-    addrInfo.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    addrInfo.accelerationStructure = t.as;
-
-    t.address  = m_ctx.rtDispatch->vkGetAccelerationStructureDeviceAddressKHR(m_ctx.device, &addrInfo);
-    t.buildKey = key;
-
-    return (t.address != 0);
 }
 
 //==================================================================

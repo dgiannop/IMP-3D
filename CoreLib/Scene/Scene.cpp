@@ -515,10 +515,9 @@ void Scene::renderPrePass(Viewport* vp, const RenderFrameContext& fc)
     if (!vp || !fc.cmd)
         return;
 
-    // IMPORTANT:
-    // renderPrePass is where work that must happen OUTSIDE a render pass occurs.
-    // This includes mesh GPU uploads/updates (raster) and RT dispatch (ray tracing).
-    // It must run for all draw modes.
+    // Apply viewport matrices
+    vp->apply();
+
     if (m_renderer)
         m_renderer->renderPrePass(vp, this, fc);
 }
@@ -527,8 +526,6 @@ void Scene::render(Viewport* vp, const RenderFrameContext& fc)
 {
     if (!vp)
         return;
-
-    vp->apply();
 
     if (m_renderer)
         m_renderer->render(vp, this, fc);
