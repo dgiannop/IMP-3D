@@ -115,6 +115,15 @@ public:
     [[nodiscard]] float spotOuterConeRad() const noexcept;
     void                spotOuterConeRad(float r) noexcept;
 
+    [[nodiscard]] bool affectRaster() const noexcept;
+    void               affectRaster(bool v) noexcept;
+
+    [[nodiscard]] bool affectRt() const noexcept;
+    void               affectRt(bool v) noexcept;
+
+    [[nodiscard]] bool castShadows() const noexcept;
+    void               castShadows(bool v) noexcept;
+
     // Convenience accessors (WORLD space) - useful for gizmos.
     [[nodiscard]] glm::vec3 position() const noexcept;
     void                    position(const glm::vec3& p) noexcept;

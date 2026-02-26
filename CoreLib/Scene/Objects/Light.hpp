@@ -67,4 +67,8 @@ struct Light
     // Flags
     // ------------------------------------------------------------
     bool enabled = true;
+
+    bool affectRaster = true;
+    bool affectRt     = true;
+    bool castShadows  = true;
 };

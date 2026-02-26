@@ -1,6 +1,3 @@
-//==============================================================
-// LightsEditorDialog.hpp  (FULL REPLACEMENT)
-//==============================================================
 #pragma once
 
 #include <QColor>
@@ -8,7 +5,6 @@
 #include <QString>
 #include <SysCounter.hpp>
 
-#include "Light.hpp"
 #include "SubWindowBase.hpp"
 
 class Core;
@@ -47,6 +43,11 @@ private slots:
     void onRangeChanged(int v);
     void onSpotInnerChanged(int v);
     void onSpotOuterChanged(int v);
+
+    // NEW: Flags -> SceneLight
+    void onAffectRasterToggled(bool checked);
+    void onAffectRtToggled(bool checked);
+    void onCastShadowsToggled(bool checked);
 
 private:
     void applyCollapsedState(bool collapsed, bool force = false);

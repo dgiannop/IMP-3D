@@ -225,7 +225,6 @@ private:
     // ============================================================
 
     std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     m_materialBuffers         = {};
-    std::uint32_t                                        m_materialCount           = 0;
     std::array<std::uint64_t, vkcfg::kMaxFramesInFlight> m_materialCounterPerFrame = {};
 
 private:

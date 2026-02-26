@@ -1,6 +1,3 @@
-//==============================================================
-// LightsEditorDialog.cpp  (FULL REPLACEMENT)
-//==============================================================
 #include "LightsEditorDialog.hpp"
 
 #include <QAbstractButton>
@@ -124,8 +121,8 @@ LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
 
     if (ui->colorPickButton)
         connect(ui->colorPickButton, &QAbstractButton::clicked, this, &LightsEditorDialog::onPickColor);
-    if (ui->colorPreviewButton)
-        connect(ui->colorPreviewButton, &QAbstractButton::clicked, this, &LightsEditorDialog::onPickColor);
+    if (ui->colorSwatch)
+        connect(ui->colorSwatch, &QAbstractButton::clicked, this, &LightsEditorDialog::onPickColor);
 
     if (ui->intensitySlider)
         connect(ui->intensitySlider, &QSlider::valueChanged, this, &LightsEditorDialog::onIntensityChanged);
@@ -139,13 +136,13 @@ LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
     if (ui->spotOuterSlider)
         connect(ui->spotOuterSlider, &QSlider::valueChanged, this, &LightsEditorDialog::onSpotOuterChanged);
 
-    // Unimplemented in Light.hpp today: keep disabled in UI for now
+    // NEW: Flags wiring (must exist on SceneLight / Light storage)
     if (ui->affectRasterCheckBox)
-        ui->affectRasterCheckBox->setEnabled(false);
+        connect(ui->affectRasterCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onAffectRasterToggled);
     if (ui->affectRtCheckBox)
-        ui->affectRtCheckBox->setEnabled(false);
+        connect(ui->affectRtCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onAffectRtToggled);
     if (ui->castShadowsCheckBox)
-        ui->castShadowsCheckBox->setEnabled(false);
+        connect(ui->castShadowsCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onCastShadowsToggled);
 
     setRightPanelEnabled(false);
 }
@@ -390,7 +387,7 @@ void LightsEditorDialog::onAddLight()
     }
 
     QByteArray tmp;
-    m_core->createLight(to_sv_temp(name, tmp), LightType::Point);
+    (void)m_core->createLight(to_sv_temp(name, tmp), LightType::Point);
 
     // Force refresh immediately.
     m_lastSceneStamp = 0;
@@ -417,13 +414,13 @@ void LightsEditorDialog::setRightPanelEnabled(bool enabled)
 
 void LightsEditorDialog::updateColorSwatch(const QColor& c)
 {
-    if (!ui || !ui->colorPreviewButton)
+    if (!ui || !ui->colorSwatch)
         return;
 
     m_lastColorUi = c;
 
     const QString css = QString("background-color: %1;").arg(c.name(QColor::HexRgb));
-    ui->colorPreviewButton->setStyleSheet(css);
+    ui->colorSwatch->setStyleSheet(css);
 }
 
 int LightsEditorDialog::intensityToUi(float v) noexcept
@@ -480,6 +477,9 @@ void LightsEditorDialog::loadLightToUi(const SceneLight* l)
     const QSignalBlocker b4(ui->rangeSlider);
     const QSignalBlocker b5(ui->spotInnerSlider);
     const QSignalBlocker b6(ui->spotOuterSlider);
+    const QSignalBlocker b7(ui->affectRasterCheckBox);
+    const QSignalBlocker b8(ui->affectRtCheckBox);
+    const QSignalBlocker b9(ui->castShadowsCheckBox);
 
     ui->nameEdit->setText(to_qstring(l->name()));
     ui->enabledCheckBox->setChecked(l->enabled());
@@ -507,6 +507,14 @@ void LightsEditorDialog::loadLightToUi(const SceneLight* l)
     ui->rangeSlider->setValue(rangeToUi(l->range()));
     ui->spotInnerSlider->setValue(coneToUi(l->spotInnerConeRad()));
     ui->spotOuterSlider->setValue(coneToUi(l->spotOuterConeRad()));
+
+    // NEW: Flags (assumes SceneLight exposes these accessors)
+    if (ui->affectRasterCheckBox)
+        ui->affectRasterCheckBox->setChecked(l->affectRaster());
+    if (ui->affectRtCheckBox)
+        ui->affectRtCheckBox->setChecked(l->affectRt());
+    if (ui->castShadowsCheckBox)
+        ui->castShadowsCheckBox->setChecked(l->castShadows());
 
     // Disable irrelevant controls by type (still show values).
     const bool isDir  = (l->lightType() == LightType::Directional);
@@ -660,4 +668,44 @@ void LightsEditorDialog::onSpotOuterChanged(int v)
         return;
 
     l->spotOuterConeRad(coneFromUi(v));
+}
+
+// ------------------------------------------------------------
+// NEW: Flags slots -> model
+// ------------------------------------------------------------
+
+void LightsEditorDialog::onAffectRasterToggled(bool checked)
+{
+    if (m_loadingUi)
+        return;
+
+    SceneLight* l = selectedLight();
+    if (!l)
+        return;
+
+    l->affectRaster(checked);
+}
+
+void LightsEditorDialog::onAffectRtToggled(bool checked)
+{
+    if (m_loadingUi)
+        return;
+
+    SceneLight* l = selectedLight();
+    if (!l)
+        return;
+
+    l->affectRt(checked);
+}
+
+void LightsEditorDialog::onCastShadowsToggled(bool checked)
+{
+    if (m_loadingUi)
+        return;
+
+    SceneLight* l = selectedLight();
+    if (!l)
+        return;
+
+    l->castShadows(checked);
 }

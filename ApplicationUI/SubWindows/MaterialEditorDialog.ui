@@ -260,13 +260,12 @@ QFrame#propsFrame QSlider {
 }
 
 QFrame#propsFillFrame {
-    background-color: #303645;  /* same as label cells */
-    margin-top: 1px;
-    margin-bottom: 1px;
+    background-color: #2b2f36;
+    border-top: 1px solid #23262c;
+    border-bottom: 1px solid #23262c;
 }
 </string>
   </property>
-
   <layout class="QVBoxLayout" name="verticalLayoutRoot">
    <property name="spacing">
     <number>0</number>
@@ -283,7 +282,6 @@ QFrame#propsFillFrame {
    <property name="bottomMargin">
     <number>0</number>
    </property>
-
    <item>
     <widget class="QSplitter" name="splitterMain">
      <property name="lineWidth">
@@ -292,7 +290,6 @@ QFrame#propsFillFrame {
      <property name="orientation">
       <enum>Qt::Orientation::Horizontal</enum>
      </property>
-
      <widget class="QWidget" name="leftPanel">
       <property name="minimumSize">
        <size>
@@ -316,11 +313,13 @@ QFrame#propsFillFrame {
        <property name="bottomMargin">
         <number>0</number>
        </property>
-
        <item>
         <widget class="QFrame" name="leftHeaderFrame">
          <property name="sizePolicy">
-          <sizepolicy hsizetype="Expanding" vsizetype="Preferred"/>
+          <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
          </property>
          <property name="frameShape">
           <enum>QFrame::Shape::StyledPanel</enum>
@@ -347,7 +346,10 @@ QFrame#propsFillFrame {
           <item>
            <widget class="QLabel" name="materialsTitleLabel">
             <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Preferred"/>
+             <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
             </property>
             <property name="text">
              <string>Material List</string>
@@ -357,7 +359,6 @@ QFrame#propsFillFrame {
          </layout>
         </widget>
        </item>
-
        <item>
         <widget class="QListWidget" name="materialList">
          <property name="frameShape">
@@ -371,7 +372,6 @@ QFrame#propsFillFrame {
          </property>
         </widget>
        </item>
-
        <item>
         <widget class="QFrame" name="leftFooterFrame">
          <property name="frameShape">
@@ -396,7 +396,10 @@ QFrame#propsFillFrame {
           <item>
            <widget class="QLabel" name="label">
             <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Preferred"/>
+             <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
             </property>
             <property name="minimumSize">
              <size>
@@ -450,13 +453,14 @@ QFrame#propsFillFrame {
          </layout>
         </widget>
        </item>
-
       </layout>
      </widget>
-
      <widget class="QWidget" name="rightPanel">
       <property name="sizePolicy">
-       <sizepolicy hsizetype="Fixed" vsizetype="Preferred"/>
+       <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
       </property>
       <property name="minimumSize">
        <size>
@@ -470,7 +474,6 @@ QFrame#propsFillFrame {
         <height>16777215</height>
        </size>
       </property>
-
       <layout class="QVBoxLayout" name="rightLayout">
        <property name="spacing">
         <number>0</number>
@@ -487,7 +490,6 @@ QFrame#propsFillFrame {
        <property name="bottomMargin">
         <number>0</number>
        </property>
-
        <item>
         <widget class="QFrame" name="rightHeaderFrame">
          <property name="frameShape">
@@ -537,7 +539,10 @@ QFrame#propsFillFrame {
           <item>
            <widget class="QLabel" name="materialTitleLabel">
             <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Preferred"/>
+             <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
             </property>
             <property name="text">
              <string>Material Properties</string>
@@ -547,7 +552,6 @@ QFrame#propsFillFrame {
          </layout>
         </widget>
        </item>
-
        <item>
         <widget class="QFrame" name="propsFrame">
          <property name="frameShape">
@@ -569,7 +573,6 @@ QFrame#propsFillFrame {
           <property name="spacing">
            <number>1</number>
           </property>
-
           <item row="0" column="0">
            <widget class="QLabel" name="nameLabel">
             <property name="text">
@@ -580,7 +583,6 @@ QFrame#propsFillFrame {
           <item row="0" column="1" colspan="2">
            <widget class="QLineEdit" name="nameEdit"/>
           </item>
-
           <item row="1" column="0">
            <widget class="QLabel" name="baseColorLabel">
             <property name="text">
@@ -610,10 +612,12 @@ QFrame#propsFillFrame {
               <number>0</number>
              </property>
              <item>
-              <!-- PURE SWATCH: QFrame (no QPushButton metrics at all) -->
               <widget class="QFrame" name="baseColorSwatch">
                <property name="sizePolicy">
-                <sizepolicy hsizetype="Expanding" vsizetype="Fixed"/>
+                <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
                </property>
                <property name="minimumSize">
                 <size>
@@ -673,7 +677,6 @@ QFrame#propsFillFrame {
             </layout>
            </widget>
           </item>
-
           <item row="2" column="0">
            <widget class="QLabel" name="metallicLabel">
             <property name="text">
@@ -713,7 +716,6 @@ QFrame#propsFillFrame {
             </property>
            </widget>
           </item>
-
           <item row="3" column="0">
            <widget class="QLabel" name="roughnessLabel">
             <property name="text">
@@ -753,7 +755,6 @@ QFrame#propsFillFrame {
             </property>
            </widget>
           </item>
-
           <item row="4" column="0">
            <widget class="QLabel" name="emissiveLabel">
             <property name="text">
@@ -783,10 +784,12 @@ QFrame#propsFillFrame {
               <number>0</number>
              </property>
              <item>
-              <!-- PURE SWATCH: QFrame -->
               <widget class="QFrame" name="emissiveSwatch">
                <property name="sizePolicy">
-                <sizepolicy hsizetype="Expanding" vsizetype="Fixed"/>
+                <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
                </property>
                <property name="minimumSize">
                 <size>
@@ -846,7 +849,6 @@ QFrame#propsFillFrame {
             </layout>
            </widget>
           </item>
-
           <item row="5" column="0">
            <widget class="QLabel" name="emissiveIntensityLabel">
             <property name="text">
@@ -886,7 +888,6 @@ QFrame#propsFillFrame {
             </property>
            </widget>
           </item>
-
           <item row="6" column="0">
            <widget class="QLabel" name="opacityLabel">
             <property name="text">
@@ -926,7 +927,6 @@ QFrame#propsFillFrame {
             </property>
            </widget>
           </item>
-
           <item row="7" column="0">
            <widget class="QLabel" name="iorLabel">
             <property name="text">
@@ -966,7 +966,6 @@ QFrame#propsFillFrame {
             </property>
            </widget>
           </item>
-
           <item row="8" column="0">
            <widget class="QLabel" name="baseMapLabel">
             <property name="text">
@@ -977,7 +976,6 @@ QFrame#propsFillFrame {
           <item row="8" column="1" colspan="2">
            <widget class="QComboBox" name="baseMapCombo"/>
           </item>
-
           <item row="9" column="0">
            <widget class="QLabel" name="normalMapLabel">
             <property name="text">
@@ -988,7 +986,6 @@ QFrame#propsFillFrame {
           <item row="9" column="1" colspan="2">
            <widget class="QComboBox" name="normalMapCombo"/>
           </item>
-
           <item row="10" column="0">
            <widget class="QLabel" name="metallicMapLabel">
             <property name="text">
@@ -999,7 +996,6 @@ QFrame#propsFillFrame {
           <item row="10" column="1" colspan="2">
            <widget class="QComboBox" name="metallicMapCombo"/>
           </item>
-
           <item row="11" column="0">
            <widget class="QLabel" name="roughnessMapLabel">
             <property name="text">
@@ -1010,7 +1006,6 @@ QFrame#propsFillFrame {
           <item row="11" column="1" colspan="2">
            <widget class="QComboBox" name="roughnessMapCombo"/>
           </item>
-
           <item row="12" column="0">
            <widget class="QLabel" name="aoMapLabel">
             <property name="text">
@@ -1021,7 +1016,6 @@ QFrame#propsFillFrame {
           <item row="12" column="1" colspan="2">
            <widget class="QComboBox" name="aoMapCombo"/>
           </item>
-
           <item row="13" column="0">
            <widget class="QLabel" name="mraoMapLabel">
             <property name="text">
@@ -1036,7 +1030,6 @@ QFrame#propsFillFrame {
             </property>
            </widget>
           </item>
-
           <item row="14" column="0">
            <widget class="QLabel" name="emissiveMapLabel">
             <property name="text">
@@ -1047,11 +1040,9 @@ QFrame#propsFillFrame {
           <item row="14" column="1" colspan="2">
            <widget class="QComboBox" name="emissiveMapCombo"/>
           </item>
-
          </layout>
         </widget>
        </item>
-
        <item>
         <widget class="QFrame" name="propsFillFrame">
          <property name="sizePolicy">
@@ -1065,7 +1056,6 @@ QFrame#propsFillFrame {
          </property>
         </widget>
        </item>
-
        <item>
         <widget class="QFrame" name="rightFooterFrame">
          <property name="frameShape">
@@ -1090,7 +1080,10 @@ QFrame#propsFillFrame {
           <item>
            <widget class="QLabel" name="label_2">
             <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Fixed"/>
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
             </property>
             <property name="minimumSize">
              <size>
@@ -1112,7 +1105,10 @@ QFrame#propsFillFrame {
           <item>
            <widget class="QPushButton" name="assignButton">
             <property name="sizePolicy">
-             <sizepolicy hsizetype="Fixed" vsizetype="Fixed"/>
+             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
             </property>
             <property name="minimumSize">
              <size>
@@ -1134,7 +1130,6 @@ QFrame#propsFillFrame {
          </layout>
         </widget>
        </item>
-
       </layout>
      </widget>
     </widget>

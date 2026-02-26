@@ -32,7 +32,6 @@ bool Renderer::initDevice(const VulkanContext& ctx)
     m_framesInFlight = std::clamp(m_ctx.framesInFlight, 1u, vkcfg::kMaxFramesInFlight);
 
     m_materialCounterPerFrame = {};
-    m_materialCount           = 0;
 
     m_viewportUbos.clear();
 
@@ -161,7 +160,6 @@ void Renderer::shutdown() noexcept
     // ------------------------------------------------------------
     m_rt.shutdown();
 
-    m_materialCount  = 0;
     m_framesInFlight = 0;
     m_ctx            = {};
 }
@@ -316,7 +314,6 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
 
 void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 {
-    std::cerr << "Render called\n";
     if (!vp || !scene || fc.cmd == VK_NULL_HANDLE)
         return;
 
@@ -1069,24 +1066,16 @@ bool Renderer::createPipelineLayout() noexcept
 // Materials
 //==================================================================
 
-void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
-                                    TextureHandler&              texHandler,
-                                    uint32_t                     frameIndex,
-                                    const RenderFrameContext&    fc)
+void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials, TextureHandler& texHandler, uint32_t frameIndex, const RenderFrameContext& fc)
 {
     if (frameIndex >= m_framesInFlight)
         return;
 
-    m_materialCount = static_cast<uint32_t>(materials.size());
-    if (m_materialCount == 0)
+    if (materials.empty())
     {
         if (m_materialBuffers[frameIndex].valid())
         {
-            m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device,
-                                                          0,
-                                                          m_materialBuffers[frameIndex].buffer(),
-                                                          0,
-                                                          0);
+            m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device, 0, m_materialBuffers[frameIndex].buffer(), 0, 0);
         }
         return;
     }
@@ -1315,12 +1304,9 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
     // ------------------------------------------------------------
     const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
-    ShaderStage selVert =
-        vkutil::loadStage(m_ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage selFrag =
-        vkutil::loadStage(m_ctx.device, shaderDir, "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-    ShaderStage selVertFrag =
-        vkutil::loadStage(m_ctx.device, shaderDir, "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    ShaderStage selVert     = vkutil::loadStage(m_ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+    ShaderStage selFrag     = vkutil::loadStage(m_ctx.device, shaderDir, "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    ShaderStage selVertFrag = vkutil::loadStage(m_ctx.device, shaderDir, "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
     if (!selVert.isValid() || !selFrag.isValid() || !selVertFrag.isValid())
     {

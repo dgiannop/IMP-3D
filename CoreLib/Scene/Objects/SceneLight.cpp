@@ -370,6 +370,45 @@ void SceneLight::spotOuterConeRad(float r) noexcept
     notifyChanged();
 }
 
+bool SceneLight::affectRaster() const noexcept
+{
+    const Light* l = lightPtr();
+    return l ? l->affectRaster : true;
+}
+
+void SceneLight::affectRaster(bool v) noexcept
+{
+    Light* l        = lightPtr();
+    l->affectRaster = v;
+    notifyChanged();
+}
+
+bool SceneLight::affectRt() const noexcept
+{
+    const Light* l = lightPtr();
+    return l ? l->affectRt : true;
+}
+
+void SceneLight::affectRt(bool v) noexcept
+{
+    Light* l    = lightPtr();
+    l->affectRt = v;
+    notifyChanged();
+}
+
+bool SceneLight::castShadows() const noexcept
+{
+    const Light* l = lightPtr();
+    return l ? l->castShadows : true;
+}
+
+void SceneLight::castShadows(bool v) noexcept
+{
+    Light* l       = lightPtr();
+    l->castShadows = v;
+    notifyChanged();
+}
+
 // ------------------------------------------------------------
 // Convenience: position/direction (WORLD space)
 // ------------------------------------------------------------
