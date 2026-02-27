@@ -128,10 +128,17 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 // ------------------------------------------------------------
 struct GpuLight
 {
-    vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
-    vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius (dir)
-    vec4 color_intensity; // rgb = color (linear), a = intensity
-    vec4 spot_params;     // x = innerCos, y = outerCos, z = point/spot soft ang radius (radians)
+    vec3 position;   // WORLD position for point/spot, unused for directional
+    uint type;       // 0 = Directional, 1 = Point, 2 = Spot
+
+    vec3 direction;  // WORLD forward direction for directional/spot
+    float range;     // directional: softness radius (radians), point/spot: range (WORLD units)
+
+    vec3 color;      // linear RGB color
+    float intensity; // light strength
+
+    // x = innerCos, y = outerCos, z = RT soft-shadow radius (point/spot), w reserved
+    vec4 spot_params;
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
@@ -258,29 +265,36 @@ float smoothRangeWindow(float dist, float range)
 
 void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 {
-    uint lt = uint(Ld.pos_type.w + 0.5);
+    uint lt = Ld.type;
     atten   = 1.0;
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
-        Lworld = normalize(-Ld.dir_range.xyz); // surface->light
+        // Directional lights: direction is "forward"; surface->light is -direction.
+        Lworld = normalize(-Ld.direction);
         return;
     }
 
-    vec3  toLight = Ld.pos_type.xyz - Pworld;
+    // Point or spot: position is WORLD space light position.
+    vec3  toLight = Ld.position - Pworld; // surface->light vector
     float dist2   = max(dot(toLight, toLight), 1e-6);
     float dist    = sqrt(dist2);
 
     Lworld = toLight / dist;
 
+    // Inverse-square attenuation
     atten = 1.0 / dist2;
-    atten *= smoothRangeWindow(dist, Ld.dir_range.w);
 
+    // Gentle range window
+    atten *= smoothRangeWindow(dist, Ld.range);
+
+    // Spotlight cone
     if (lt == GPU_LIGHT_SPOT)
     {
-        vec3 spotFwdW = normalize(Ld.dir_range.xyz);
+        vec3 spotFwdW = normalize(Ld.direction);
 
-        vec3  lightToSurfaceW = normalize(Pworld - Ld.pos_type.xyz);
+        // Light-to-surface direction
+        vec3  lightToSurfaceW = normalize(Pworld - Ld.position);
         float cosAn           = dot(spotFwdW, lightToSurfaceW);
 
         float innerC = Ld.spot_params.x; // cos(inner)
@@ -290,7 +304,8 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
                     ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
                     : step(outerC, cosAn);
 
-        atten *= coneV; // NOTE: no extra squaring (matches raster)
+        // No extra squaring: keeps spots punchy while still smooth.
+        atten *= coneV;
     }
 }
 
@@ -586,17 +601,18 @@ void main()
 
 #if ENABLE_SHADOWS
         {
-            uint lt = uint(Ld.pos_type.w + 0.5);
+            uint lt = Ld.type;
 
             if (lt == GPU_LIGHT_DIRECTIONAL)
             {
-                float angRad = max(Ld.dir_range.w, 0.0);
+                // Directional softness in range (radians)
+                float angRad = max(Ld.range, 0.0);
                 float vis    = shadowDirectional(posW, N, L, angRad);
                 atten *= vis;
             }
             else
             {
-                float distToLight = length(Ld.pos_type.xyz - posW);
+                float distToLight = length(Ld.position - posW);
                 float angRad      = max(Ld.spot_params.z, 0.0); // point/spot angular radius (radians)
                 float vis         = shadowPointOrSpotSoft(posW, N, L, distToLight, angRad);
                 atten *= vis;
@@ -624,8 +640,8 @@ void main()
         vec3 kd   = (vec3(1.0) - F) * (1.0 - metallic);
         vec3 diff = kd * albedo / 3.14159265;
 
-        vec3 radiance = Ld.color_intensity.rgb *
-                        (Ld.color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
+        vec3 radiance = Ld.color *
+                        (Ld.intensity * LIGHT_INTENSITY_SCALE * atten);
 
         direct += (diff + spec) * radiance * NdotL;
     }
@@ -672,7 +688,7 @@ void main()
 
         if (reflectStrength > 0.01)
         {
-            vec3 I = normalize(gl_WorldRayDirectionEXT);
+            vec3 I    = normalize(gl_WorldRayDirectionEXT);
             vec3 Rdir = normalize(reflect(I, N));
 
             float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
@@ -692,17 +708,17 @@ void main()
     // --------------------------------------------------------
     // Exposure + tonemap (MUST match raster ShadedDraw.frag)
     // --------------------------------------------------------
-    float exposure = FIXED_EXPOSURE;
+    float exposureVal = FIXED_EXPOSURE;
 
 #if USE_UBO_EXPOSURE
     {
         float t          = saturate(Lights.exposure); // UI 0..1
         float exposureEV = mix(EXPOSURE_EV_MIN, EXPOSURE_EV_MAX, t);
-        exposure         = exp2(exposureEV);
+        exposureVal      = exp2(exposureEV);
     }
 #endif
 
-    vec3 outRgb = colorLinear * exposure;
+    vec3 outRgb = colorLinear * exposureVal;
 
 #if ENABLE_TONEMAP
     outRgb = tonemapACES(outRgb);

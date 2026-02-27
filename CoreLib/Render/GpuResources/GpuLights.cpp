@@ -4,17 +4,17 @@
 //
 // Conventions:
 //   - All lights in GpuLightsUBO are expressed in WORLD space.
-//     * Directional: lights[i].dir_range.xyz = forward (WORLD)
-//     * Point:       lights[i].pos_type.xyz  = position (WORLD)
-//     * Spot:        lights[i].pos_type.xyz  = position (WORLD)
-//                   lights[i].dir_range.xyz  = forward (WORLD)
-//   - lights[i].dir_range.w:
+//     * Directional: lights[i].direction = forward (WORLD)
+//     * Point:       lights[i].position  = position (WORLD)
+//     * Spot:        lights[i].position  = position (WORLD)
+//                   lights[i].direction = forward (WORLD)
+//   - lights[i].range:
 //     * Directional: angular radius (radians) for soft shadows (optional; 0 = hard)
 //     * Point/Spot:  range (world units), 0 = inverse-square only
 //
 // RT-only soft shadows for point/spot:
 //   - lights[i].spot_params.z stores angular radius (radians) for soft shadows.
-//     (Directional softness stays in dir_range.w.)
+//     (Directional softness stays in range.)
 //
 // IMPORTANT:
 //   - out.ambient      = ambient fill color (already scaled by ambientFill)
@@ -151,20 +151,29 @@ namespace
         outerRad = outV;
     }
 
+    // ------------------------------------------------------------
+    // GpuLight builders (WORLD space)
+    // ------------------------------------------------------------
     static GpuLight makeDirectionalWorld(const glm::vec3& dirWorld,
                                          const glm::vec3& color,
                                          float            intensity,
                                          float            softnessRadians) noexcept
     {
         GpuLight gl = {};
-        gl.pos_type = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(GpuLightType::Directional));
+
+        gl.position = glm::vec3(0.0f); // unused for directional
+        gl.type     = static_cast<std::uint32_t>(GpuLightType::Directional);
 
         const glm::vec3 fwdWorld = un::safe_normalize(dirWorld, glm::vec3(0.0f, 0.0f, -1.0f));
 
-        gl.dir_range       = glm::vec4(fwdWorld, std::max(0.0f, softnessRadians));
-        gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
-        gl.spot_params     = glm::vec4(0.0f);
+        gl.direction = fwdWorld;
+        // For directional lights, range stores angular radius (soft shadow radius).
+        gl.range = std::max(0.0f, softnessRadians);
 
+        gl.color     = clamp01(color);
+        gl.intensity = std::max(0.0f, intensity);
+
+        gl.spot_params = glm::vec4(0.0f); // not used for directional
         return gl;
     }
 
@@ -174,10 +183,17 @@ namespace
                                    float            range,
                                    float            softnessRadians) noexcept
     {
-        GpuLight gl        = {};
-        gl.pos_type        = glm::vec4(posWorld, static_cast<float>(GpuLightType::Point));
-        gl.dir_range       = glm::vec4(0.0f, 0.0f, 0.0f, std::max(0.0f, range));
-        gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
+        GpuLight gl = {};
+
+        gl.position = posWorld;
+        gl.type     = static_cast<std::uint32_t>(GpuLightType::Point);
+
+        gl.direction = glm::vec3(0.0f); // unused for pure point
+        // For point lights, range is distance falloff range.
+        gl.range = std::max(0.0f, range);
+
+        gl.color     = clamp01(color);
+        gl.intensity = std::max(0.0f, intensity);
 
         // x/y unused for point. z = RT soft-shadow angular radius.
         gl.spot_params = glm::vec4(0.0f, 0.0f, std::max(0.0f, softnessRadians), 0.0f);
@@ -202,17 +218,25 @@ namespace
         if (innerCos < outerCos)
             std::swap(innerCos, outerCos);
 
-        GpuLight gl        = {};
-        gl.pos_type        = glm::vec4(posWorld, static_cast<float>(GpuLightType::Spot));
-        gl.dir_range       = glm::vec4(un::safe_normalize(dirWorld, glm::vec3(0.0f, 0.0f, -1.0f)),
-                                 std::max(0.0f, range));
-        gl.color_intensity = glm::vec4(clamp01(color), std::max(0.0f, intensity));
+        GpuLight gl = {};
+
+        gl.position = posWorld;
+        gl.type     = static_cast<std::uint32_t>(GpuLightType::Spot);
+
+        gl.direction = un::safe_normalize(dirWorld, glm::vec3(0.0f, 0.0f, -1.0f));
+        gl.range     = std::max(0.0f, range);
+
+        gl.color     = clamp01(color);
+        gl.intensity = std::max(0.0f, intensity);
 
         // x=innerCos, y=outerCos, z=RT soft-shadow angular radius, w unused
         gl.spot_params = glm::vec4(innerCos, outerCos, std::max(0.0f, softnessRadians), 0.0f);
         return gl;
     }
 
+    // ------------------------------------------------------------
+    // Viewport helpers
+    // ------------------------------------------------------------
     static glm::vec3 viewportForwardWorld(const Viewport& vp) noexcept
     {
         const glm::mat4 invV = glm::inverse(vp.view());

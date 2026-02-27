@@ -9,7 +9,7 @@
 class Scene;
 class Viewport;
 
-constexpr uint32_t kMaxGpuLights = 64;
+constexpr std::uint32_t kMaxGpuLights = 64;
 
 /**
  * @brief std140-friendly UBO payload for lights.
@@ -18,7 +18,7 @@ constexpr uint32_t kMaxGpuLights = 64;
  * Shaders operate entirely in world space.
  *
  * Layout (matches std140 in GLSL):
- *   - count: number of active lights (<= kMaxGpuLights)
+ *   - count:   number of active lights (<= kMaxGpuLights)
  *   - pad0/1/2: explicit padding to keep 16-byte alignment
  *   - ambient: rgb ambient fill color
  *   - exposure: scalar used by shaders for exposure mapping
@@ -44,11 +44,6 @@ static_assert(alignof(GpuLightsUBO) == 16, "GpuLightsUBO must be 16-byte aligned
 
 /**
  * @brief Simple render-time headlight (modeling light) driven by the camera.
- *
- * The headlight follows the active viewport camera; direction/position
- * are derived from the viewport in WORLD SPACE.
- *
- * This is NOT a SceneLight; it is injected at render time.
  */
 struct HeadlightSettings
 {
@@ -57,14 +52,6 @@ struct HeadlightSettings
     float     intensity = 1.0f;
 };
 
-/**
- * @brief Build a per-viewport WORLD-SPACE light UBO by mixing headlight and Scene lights.
- *
- * Notes:
- *  - Scene lights are expected to already be in WORLD SPACE.
- *  - The headlight is derived from the viewport camera in WORLD SPACE.
- *  - No view-space transforms are performed here.
- */
 void buildGpuLightsUBO(const LightingSettings&  settings,
                        const HeadlightSettings& headlight,
                        const Viewport&          vp,

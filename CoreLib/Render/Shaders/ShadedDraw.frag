@@ -63,14 +63,21 @@ const int kMaxTextureCount = 512;
 layout(set = 1, binding = 1) uniform sampler2D uTextures[kMaxTextureCount];
 
 // ============================================================
-// Lights (WORLD space; matches RT)
+// Lights (WORLD space; matches C++ GpuLight)
 // ============================================================
 struct GpuLight
 {
-    vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
-    vec4 dir_range;       // xyz = forward dir (WORLD), w = range
-    vec4 color_intensity; // rgb = color (linear), a = intensity
-    vec4 spot_params;     // x = innerCos, y = outerCos
+    vec3 position;   // WORLD position for point/spot, unused for directional
+    uint type;       // 0 = Directional, 1 = Point, 2 = Spot
+
+    vec3 direction;  // WORLD forward direction for directional/spot
+    float range;     // directional: softness radius (radians), point/spot: range (WORLD units)
+
+    vec3 color;      // linear RGB color
+    float intensity; // light strength
+
+    // x = innerCos, y = outerCos, z = RT soft-shadow radius (point/spot), w reserved
+    vec4 spot_params;
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
@@ -194,16 +201,18 @@ float smoothRangeWindow(float dist, float range)
 
 void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
 {
-    uint lt = uint(Ld.pos_type.w + 0.5);
+    uint lt = Ld.type;
     atten   = 1.0;
 
     if (lt == GPU_LIGHT_DIRECTIONAL)
     {
-        Lworld = normalize(-Ld.dir_range.xyz); // surface->light
+        // Directional lights: direction is "forward"; surface->light is -direction.
+        Lworld = normalize(-Ld.direction);
         return;
     }
 
-    vec3  toLight = Ld.pos_type.xyz - Pworld; // surface->light vector
+    // Point or spot: position is WORLD space light position.
+    vec3  toLight = Ld.position - Pworld; // surface->light vector
     float dist2   = max(dot(toLight, toLight), 1e-6);
     float dist    = sqrt(dist2);
 
@@ -213,15 +222,16 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
     atten = 1.0 / dist2;
 
     // Gentle range window
-    atten *= smoothRangeWindow(dist, Ld.dir_range.w);
+    atten *= smoothRangeWindow(dist, Ld.range);
 
     // Spotlight cone
     if (lt == GPU_LIGHT_SPOT)
     {
-        vec3 spotFwdW = normalize(Ld.dir_range.xyz);
+        vec3 spotFwdW = normalize(Ld.direction);
 
-        vec3  lightToSurfaceW = normalize(Pworld - Ld.pos_type.xyz);
-        float cosAn = dot(spotFwdW, lightToSurfaceW);
+        // Light-to-surface direction
+        vec3  lightToSurfaceW = normalize(Pworld - Ld.position);
+        float cosAn           = dot(spotFwdW, lightToSurfaceW);
 
         float innerC = Ld.spot_params.x; // cos(inner)
         float outerC = Ld.spot_params.y; // cos(outer)
@@ -333,8 +343,8 @@ void main()
 
         const float LIGHT_INTENSITY_SCALE = 5.0; // 2..10
 
-        vec3 radiance = Lights.lights[i].color_intensity.rgb *
-                        (Lights.lights[i].color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
+        vec3 radiance = Lights.lights[i].color *
+                        (Lights.lights[i].intensity * LIGHT_INTENSITY_SCALE * atten);
 
         direct += (diff + spec) * radiance * NdotL;
     }
