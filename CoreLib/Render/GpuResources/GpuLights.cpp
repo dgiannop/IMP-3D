@@ -17,8 +17,9 @@
 //     (Directional softness stays in dir_range.w.)
 //
 // IMPORTANT:
-//   - out.ambient.rgb = ambient fill color (already scaled by ambientFill)
-//   - out.ambient.a   = exposure scalar used by shaders
+//   - out.ambient      = ambient fill color (already scaled by ambientFill)
+//   - out.exposure     = exposure scalar used by shaders
+//   - out.count        = number of active lights
 //
 // Production/editor behavior (this file):
 //   - NO auto-exposure derived from max light intensity.
@@ -95,19 +96,19 @@ namespace
                          std::clamp(c.z, 0.0f, 1.0f));
     }
 
-    static uint32_t lightCount(const GpuLightsUBO& ubo) noexcept
+    static std::uint32_t lightCount(const GpuLightsUBO& ubo) noexcept
     {
-        return ubo.info.x;
+        return ubo.count;
     }
 
-    static void setLightCount(GpuLightsUBO& ubo, uint32_t v) noexcept
+    static void setLightCount(GpuLightsUBO& ubo, std::uint32_t v) noexcept
     {
-        ubo.info.x = v;
+        ubo.count = v;
     }
 
     static void pushLight(GpuLightsUBO& out, const GpuLight& l) noexcept
     {
-        const uint32_t count = lightCount(out);
+        const std::uint32_t count = lightCount(out);
         if (count >= kMaxGpuLights)
             return;
 
@@ -240,7 +241,8 @@ namespace
         return p;
     }
 
-    static LightingSettings::ModePolicy policyForDrawMode(const LightingSettings& s, DrawMode mode) noexcept
+    static LightingSettings::ModePolicy policyForDrawMode(const LightingSettings& s,
+                                                          DrawMode                mode) noexcept
     {
         switch (mode)
         {
@@ -304,9 +306,11 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
 {
     constexpr bool kLogSceneLights = true;
 
-    out         = {};
-    out.info    = glm::uvec4(0u);
-    out.ambient = glm::vec4(0.0f);
+    // Zero everything; then explicitly reset the header fields for clarity.
+    out          = {};
+    out.count    = 0u;
+    out.ambient  = glm::vec3(0.0f);
+    out.exposure = 0.0f;
 
     const DrawMode dm = vp.drawMode();
 
@@ -399,8 +403,8 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     // ------------------------------------------------------------
     // 2) Scene lights (optional)
     // ------------------------------------------------------------
-    uint32_t sceneLightCount = 0u;
-    float    maxSceneLight   = 0.0f; // logging only
+    std::uint32_t sceneLightCount = 0u;
+    float         maxSceneLight   = 0.0f; // logging only
 
     const float ptIntMul  = clampNonNeg(settings.scenePointIntensityMul, 1.0f);
     const float ptRngMul  = clampPos(settings.scenePointRangeMul, 1.0f);
@@ -478,7 +482,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                     }
                 }
 
-                if (out.info.x >= kMaxGpuLights)
+                if (out.count >= kMaxGpuLights)
                     break;
             }
         }
@@ -490,22 +494,22 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
     }
 
     // ------------------------------------------------------------
-    // 3) Ambient.rgb (fill) and Ambient.a (exposure scalar)
+    // 3) Ambient.rgb (fill) and exposure scalar
     // ------------------------------------------------------------
     const float fill = std::max(0.0f, settings.ambientFill);
-    out.ambient      = glm::vec4(fill, fill, fill, 0.0f);
+    out.ambient      = glm::vec3(fill);
 
     const float exposureScalar = exposureScalarFromEv100(settings.exposureEv100);
-    out.ambient.a              = exposureScalar;
+    out.exposure               = exposureScalar;
 
     if constexpr (kLogSceneLights)
     {
         std::printf("Exposure(EV100): ev=%.3f => exposureScalar=%.6f\n",
                     settings.exposureEv100,
-                    out.ambient.a);
+                    out.exposure);
 
         std::printf("Scene lights: pushed=%u (seen=%u) maxSceneLight(log)=%.3f\n",
-                    out.info.x,
+                    out.count,
                     sceneLightCount,
                     maxSceneLight);
     }

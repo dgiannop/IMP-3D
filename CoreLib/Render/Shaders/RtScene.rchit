@@ -10,13 +10,26 @@
 //   Miss[0]     = Primary miss (RtScene.rmiss)
 //   Miss[1]     = Shadow miss (RtShadow.rmiss)  -> leaves occFlag = 0
 //
-// NOTE ABOUT PAYLOAD:
-//   We keep the existing payload = vec4 at location=0.
-//   To support 1-bounce reflections without adding a new payload struct,
-//   payload.w is used as a recursion depth counter *during RT*.
-//   - RayGen should initialize payload = vec4(0,0,0, 0) (w = depth 0).
-//   - For depth==0 we output alpha=1 in payload.w.
-//   - For depth>0 we preserve payload.w = depth so nested rays can propagate depth.
+// PAYLOAD CONVENTION:
+//   - payload (location=0)  = vec4 color/aux
+//       * During RT recursion: payload.w carries "depth" as int.
+//       * RayGen must set payload = vec4(0,0,0, 0) for primary rays.
+//       * This shader writes:
+//           depth==0 : payload.w = 1.0  (alpha for present pass)
+//           depth>0  : payload.w = depth (for nested rays)
+//   - occFlag (location=1)  = uint shadow-occlusion flag for shadow rays.
+//
+// LIGHT UBO LAYOUT (must match C++ GpuLightsUBO):
+//   layout(set = 0, binding = 1, std140) uniform LightsUBO
+//   {
+//       uint  count;
+//       uint  pad0;
+//       uint  pad1;
+//       uint  pad2;
+//       vec3  ambient;
+//       float exposure;
+//       GpuLight lights[64];
+//   } Lights;
 //==============================================================
 #version 460
 #extension GL_EXT_ray_tracing : require
@@ -25,7 +38,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(location = 0) rayPayloadInEXT vec4 payload;
-layout(location = 1) rayPayloadEXT   uint occFlag; // used only when tracing shadow rays from here
+layout(location = 1) rayPayloadEXT   uint occFlag; // used only for shadow rays
 
 hitAttributeEXT vec2 hitAttr;
 
@@ -111,25 +124,29 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 } uCamera;
 
 // ------------------------------------------------------------
-// Lights UBO (WORLD space; matches raster)
+// Lights UBO (WORLD space; matches raster and C++)
 // ------------------------------------------------------------
 struct GpuLight
 {
     vec4 pos_type;        // xyz = pos (WORLD) for point/spot, w = type
     vec4 dir_range;       // xyz = forward dir (WORLD), w = range OR angular radius (dir)
     vec4 color_intensity; // rgb = color (linear), a = intensity
-    vec4 spot_params;     // x = innerCos, y = outerCos, z = point/spot angular radius (radians)
+    vec4 spot_params;     // x = innerCos, y = outerCos, z = point/spot soft ang radius (radians)
 };
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    uvec4    info;    // x = lightCount
-    vec4     ambient; // rgb ambient fill, a exposure UI scalar (0..1)
+    uint  count;
+    uint  pad0;
+    uint  pad1;
+    uint  pad2;
+    vec3  ambient;   // ambient fill color (linear)
+    float exposure;  // UI 0..1 (mapped to EV in shader)
     GpuLight lights[64];
-} uLights;
+} Lights;
 
 // ------------------------------------------------------------
-// Materials + textures (match raster bindings)
+// Materials + textures (must match C++/raster layout)
 // ------------------------------------------------------------
 struct GpuMat
 {
@@ -273,7 +290,7 @@ void evalLight(in GpuLight Ld, in vec3 Pworld, out vec3 Lworld, out float atten)
                     ? saturate((cosAn - outerC) / max(innerC - outerC, 1e-5))
                     : step(outerC, cosAn);
 
-        atten *= coneV; // NOTE: no extra squaring (matches the raster)
+        atten *= coneV; // NOTE: no extra squaring (matches raster)
     }
 }
 
@@ -319,9 +336,9 @@ float traceShadow(vec3 orgW, vec3 dirW, float tMax)
     traceRayEXT(
         tlasTop,
         gl_RayFlagsTerminateOnFirstHitEXT |
-        gl_RayFlagsCullBackFacingTrianglesEXT, // keep consistent with your scene (adjust if needed)
+        gl_RayFlagsCullBackFacingTrianglesEXT,
         0xFF,
-        1, 1, 1,          // missIndex=1 (shadow miss), sbtRecordOffset=1 (shadow hit group)
+        1, 1, 1,          // sbtRecordOffset=1, sbtRecordStride=1, missIndex=1 (shadow)
         orgW,
         0.001,
         dirW,
@@ -351,8 +368,8 @@ float shadowDirectional(vec3 P, vec3 N, vec3 Ldir, float angRad)
     for (int s = 0; s < DIR_SHADOW_SAMPLES; ++s)
     {
         uvec3 key3 = uvec3(gl_LaunchIDEXT.xy, uint(s));
-        float r0 = hash13(key3);
-        float r1 = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
+        float r0   = hash13(key3);
+        float r1   = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
 
         vec3 d = coneSample(Ldir, angRad, vec2(r0, r1));
         sum += traceShadow(org, d, 1e30);
@@ -379,13 +396,13 @@ float shadowPointOrSpotSoft(vec3 P, vec3 N, vec3 Ldir, float distToLight, float 
 
     // Soft shadow: sample a cone around the light direction.
     const int sampCt = 4; // tune: 4/8/16
-    float sum = 0.0;
+    float     sum    = 0.0;
 
     for (int s = 0; s < sampCt; ++s)
     {
         uvec3 key3 = uvec3(gl_LaunchIDEXT.xy, uint(s));
-        float r0 = hash13(key3);
-        float r1 = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
+        float r0   = hash13(key3);
+        float r1   = hash13(key3 ^ uvec3(12345u, 67890u, 424242u));
 
         vec3 d = coneSample(normalize(Ldir), angRad, vec2(r0, r1));
         sum += traceShadow(org, d, tMax);
@@ -497,7 +514,8 @@ void main()
     vec3 nObj = normalize(nA * barA + nB * barB + nC * barC);
 
     vec3 geoNObj = normalize(cross(posB - posA, posC - posA));
-    if (dot(nObj, nObj) < 1e-20) nObj = geoNObj;
+    if (dot(nObj, nObj) < 1e-20)
+        nObj = geoNObj;
 
     vec3 N = toWorldNormal(nObj);
 
@@ -520,11 +538,13 @@ void main()
     const uint matCnt = uint(matSsb.mats.length());
     const uint matId  = (matCnt > 0u) ? min(matRaw, matCnt - 1u) : 0u;
 
-    GpuMat mat = (matCnt > 0u) ? matSsb.mats[matId] : GpuMat(
-        vec3(1, 0, 1), 1.0,
-        vec3(0),       0.0,
-        0.5, 0.0, 1.5, 0.0,
-        -1, -1, -1, -1);
+    GpuMat mat = (matCnt > 0u)
+        ? matSsb.mats[matId]
+        : GpuMat(
+            vec3(1, 0, 1), 1.0,
+            vec3(0),       0.0,
+            0.5, 0.0, 1.5, 0.0,
+            -1, -1, -1, -1);
 
     vec3 albedo = mat.baseCol;
     if (mat.baseTex >= 0)
@@ -554,11 +574,11 @@ void main()
     // --------------------------------------------------------
     vec3 direct = vec3(0.0);
 
-    uint lightCount = min(uLights.info.x, 64u);
+    uint lightCount = min(Lights.count, 64u);
 
     for (uint i = 0u; i < lightCount; ++i)
     {
-        GpuLight Ld = uLights.lights[i];
+        GpuLight Ld = Lights.lights[i];
 
         vec3  L;
         float atten;
@@ -577,8 +597,8 @@ void main()
             else
             {
                 float distToLight = length(Ld.pos_type.xyz - posW);
-                float angRad = max(Ld.spot_params.z, 0.0); // point/spot angular radius (radians)
-                float vis = shadowPointOrSpotSoft(posW, N, L, distToLight, angRad);
+                float angRad      = max(Ld.spot_params.z, 0.0); // point/spot angular radius (radians)
+                float vis         = shadowPointOrSpotSoft(posW, N, L, distToLight, angRad);
                 atten *= vis;
             }
         }
@@ -613,16 +633,18 @@ void main()
     // --------------------------------------------------------
     // Indirect (studio IBL) + ambient fill (match raster)
     // --------------------------------------------------------
-    float hasSceneLights = (uLights.info.x > 1u) ? 1.0 : 0.0;
-    float iblScale = mix(1.0, 0.20, hasSceneLights);
+    float hasSceneLights = (Lights.count > 1u) ? 1.0 : 0.0;
+    float iblScale       = mix(1.0, 0.20, hasSceneLights);
 
-    vec3  Fv   = fresnelSchlick(saturate(dot(N, V)), F0);
-    vec3  kdI  = (vec3(1.0) - Fv) * (1.0 - metallic);
+    vec3  Fv  = fresnelSchlick(saturate(dot(N, V)), F0);
+    vec3  kdI = (vec3(1.0) - Fv) * (1.0 - metallic);
 
     vec3 diffIBL = kdI * albedo * studioEnv(N) * 0.10 * ao * iblScale;
 
     vec3 R = reflect(-V, N);
-    vec3 specIBL = studioEnv(R) * Fv * (0.05 + 0.25 * (1.0 - roughness)) * iblScale;
+    vec3 specIBL = studioEnv(R) *
+                   Fv *
+                   (0.05 + 0.25 * (1.0 - roughness)) * iblScale;
 
     vec3 floorFill = albedo * 0.004;
 
@@ -632,58 +654,51 @@ void main()
 
     vec3 ambientFill = vec3(0.0);
 #if USE_AMBIENT_FILL
-    ambientFill = uLights.ambient.rgb * albedo * ao;
+    ambientFill = Lights.ambient * albedo * ao;
 #endif
 
     vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive + ambientFill;
     colorLinear = max(colorLinear, vec3(0.0));
 
-// --------------------------------------------------------
-// Optional: 1-bounce perfect reflections (no noise)
-// --------------------------------------------------------
+    // --------------------------------------------------------
+    // Optional: 1-bounce perfect reflections (no noise)
+    // --------------------------------------------------------
 #if ENABLE_SIMPLE_REFLECTIONS
-    //const int depth = int(payload.w + 0.5);
-
     if (depth < (MAX_RT_DEPTH - 1))
     {
         // Only do reflections for smooth / metallic surfaces.
         float reflectStrength = max(metallic, 1.0 - roughness);
-        reflectStrength = saturate(reflectStrength);
+        reflectStrength       = saturate(reflectStrength);
 
         if (reflectStrength > 0.01)
         {
-            // Incoming ray direction is gl_WorldRayDirectionEXT (from origin toward hit)
             vec3 I = normalize(gl_WorldRayDirectionEXT);
-
-            // Reflection direction
             vec3 Rdir = normalize(reflect(I, N));
 
-            // Offset to avoid self-intersection
             float eps = max(SHADOW_BIAS_MIN, SHADOW_BIAS_SLOPE * gl_HitTEXT);
             vec3  org = posW + N * eps;
 
             vec3 reflCol = traceReflection(org, Rdir, depth + 1);
 
-            // Fresnel-weighted mix (simple but stable)
             vec3 F = fresnelSchlick(saturate(dot(N, V)), F0);
 
-            // Conservative energy: add a reflection term rather than fully replacing
-            colorLinear = mix(colorLinear, reflCol, 0.35 * reflectStrength) * (1.0 - 0.15 * reflectStrength)
-                        + reflCol * (0.15 * reflectStrength) * F;
+            colorLinear =
+                mix(colorLinear, reflCol, 0.35 * reflectStrength) * (1.0 - 0.15 * reflectStrength) +
+                reflCol * (0.15 * reflectStrength) * F;
         }
     }
 #endif
 
     // --------------------------------------------------------
-    // Exposure + tonemap (MUST match raster)
+    // Exposure + tonemap (MUST match raster ShadedDraw.frag)
     // --------------------------------------------------------
     float exposure = FIXED_EXPOSURE;
 
 #if USE_UBO_EXPOSURE
     {
-        float t = saturate(uLights.ambient.a); // UI 0..1
+        float t          = saturate(Lights.exposure); // UI 0..1
         float exposureEV = mix(EXPOSURE_EV_MIN, EXPOSURE_EV_MAX, t);
-        exposure = exp2(exposureEV);
+        exposure         = exp2(exposureEV);
     }
 #endif
 

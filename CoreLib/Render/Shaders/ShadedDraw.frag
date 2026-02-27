@@ -2,20 +2,8 @@
 // ShadedDraw.frag  (WORLD-space shading; WORLD-space lights)
 // Production-ready defaults:
 // - Swapchain/target is SRGB: DO NOT gamma-encode here.
-// - Camera-like exposure control (EV -> exp2) using uLights.ambient.a as UI 0..1.
-// - No per-light radiance clamp (keeps highlight structure; ACES handles rolloff).
-// - WORLD-space light conventions match RT:
-//
-//   Directional:
-//     * dir_range.xyz = forward direction the light points toward (WORLD)
-//     * surface->light (WORLD) = -forward
-//
-//   Point/Spot:
-//     * pos_type.xyz  = position in WORLD space
-//     * dir_range.xyz = forward direction in WORLD space (spot)
-//     * dir_range.w   = range
-//     * spot_params.x = innerCos
-//     * spot_params.y = outerCos
+// - Camera-like exposure control using Lights.exposure.
+// - WORLD-space light conventions match RT.
 //==============================================================
 #version 450
 
@@ -87,10 +75,14 @@ struct GpuLight
 
 layout(set = 0, binding = 1, std140) uniform LightsUBO
 {
-    uvec4    info;        // x = lightCount
-    vec4     ambient;     // rgb ambient fill, a exposure UI scalar (0..1)
+    uint  count;          // number of active lights
+    uint  pad0;
+    uint  pad1;
+    uint  pad2;
+    vec3  ambient;        // ambient fill color (linear)
+    float exposure;       // exposure scalar or UI value
     GpuLight lights[64];
-} uLights;
+} Lights;
 
 // ============================================================
 // Output controls
@@ -99,11 +91,11 @@ layout(set = 0, binding = 1, std140) uniform LightsUBO
 const bool ENABLE_GAMMA_ENCODE = false;
 const bool ENABLE_TONEMAP      = true;
 
-// Use uLights.ambient.a as UI slider 0..1 mapped to EV range.
-const bool USE_UBO_EXPOSURE    = true;
+// Use Lights.exposure as input to exposure mapping.
+const bool  USE_UBO_EXPOSURE   = true;
 const float FIXED_EXPOSURE     = 1.0;
 
-// Optional ambient fill from uLights.ambient.rgb
+// Optional ambient fill from Lights.ambient
 const bool USE_AMBIENT_FILL    = true;
 
 // Exposure mapping (UI 0..1 -> EV)
@@ -187,12 +179,6 @@ mat3 tbnFromDerivatives(vec3 P, vec3 N, vec2 uv)
 
 // ------------------------------------------------------------
 // Light evaluation (WORLD)
-// Outputs:
-//   Lworld = surface->light direction in WORLD
-//   atten  = distance * cone attenuation
-// Notes:
-//   - Inverse-square is physically plausible.
-//   - Range uses a smooth window (gentle, avoids killing lights early).
 // ------------------------------------------------------------
 const uint GPU_LIGHT_DIRECTIONAL = 0u;
 const uint GPU_LIGHT_POINT       = 1u;
@@ -317,13 +303,13 @@ void main()
     // --------------------------------------------------------
     vec3 direct = vec3(0.0);
 
-    uint lightCount = min(uLights.info.x, 64u);
+    uint lightCount = min(Lights.count, 64u);
 
     for (uint i = 0u; i < lightCount; ++i)
     {
         vec3  L;
         float atten;
-        evalLight(uLights.lights[i], posW, L, atten);
+        evalLight(Lights.lights[i], posW, L, atten);
 
         float NdotL = saturate(dot(N, L));
         float NdotV = saturate(dot(N, V));
@@ -347,8 +333,8 @@ void main()
 
         const float LIGHT_INTENSITY_SCALE = 5.0; // 2..10
 
-        vec3 radiance = uLights.lights[i].color_intensity.rgb *
-                        (uLights.lights[i].color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
+        vec3 radiance = Lights.lights[i].color_intensity.rgb *
+                        (Lights.lights[i].color_intensity.a * LIGHT_INTENSITY_SCALE * atten);
 
         direct += (diff + spec) * radiance * NdotL;
     }
@@ -356,7 +342,7 @@ void main()
     // --------------------------------------------------------
     // Indirect (viewport IBL) - conservative
     // --------------------------------------------------------
-    float hasSceneLights = (uLights.info.x > 1u) ? 1.0 : 0.0;
+    float hasSceneLights = (Lights.count > 1u) ? 1.0 : 0.0;
     float iblScale = mix(1.0, 0.20, hasSceneLights);
 
     vec3  Fv   = fresnelSchlick(saturate(dot(N, V)), F0);
@@ -378,7 +364,7 @@ void main()
 
     vec3 ambientFill = vec3(0.0);
     if (USE_AMBIENT_FILL)
-        ambientFill = uLights.ambient.rgb * albedo * ao;
+        ambientFill = Lights.ambient * albedo * ao;
 
     vec3 colorLinear = direct + diffIBL + specIBL + floorFill + emissive + ambientFill;
 
@@ -389,7 +375,8 @@ void main()
 
     if (USE_UBO_EXPOSURE)
     {
-        float t = saturate(uLights.ambient.a);               // UI 0..1
+        // Interpret Lights.exposure as a 0..1 control, like before.
+        float t = saturate(Lights.exposure);
         float exposureEV = mix(EXPOSURE_EV_MIN, EXPOSURE_EV_MAX, t);
         exposure = exp2(exposureEV);
     }
