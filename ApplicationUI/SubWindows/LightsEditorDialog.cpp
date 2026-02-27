@@ -35,6 +35,11 @@ namespace
     {
         return std::max(lo, std::min(hi, v));
     }
+
+    // Maximum intensity that the UI slider is designed to represent.
+    // Slider range is [0..200], so this gives 5.0 intensity units per tick.
+    constexpr float kMaxIntensityUi = 1000.0f;
+
 } // namespace
 
 LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
@@ -143,7 +148,7 @@ LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
     if (ui->castShadowsCheckBox)
         connect(ui->castShadowsCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onCastShadowsToggled);
 
-    // For now disable them untill I pass them to the Renderer/Shaders
+    // For now disable them until they are passed to the Renderer/Shaders
     if (ui->affectRasterCheckBox)
         ui->affectRasterCheckBox->setEnabled(false);
     if (ui->affectRtCheckBox)
@@ -430,17 +435,19 @@ void LightsEditorDialog::updateColorSwatch(const QColor& c)
     ui->colorSwatch->setStyleSheet(css);
 }
 
+// Intensity mapping: slider [0..200] <-> intensity [0..kMaxIntensityUi]
 int LightsEditorDialog::intensityToUi(float v) noexcept
 {
-    // Map [0..10] -> [0..200] by default (0.05 per tick)
-    const float clamped = clamp_f(v, 0.0f, 10.0f);
-    return clamp_i(static_cast<int>(std::lround(clamped * 20.0f)), 0, 200);
+    const float clamped = clamp_f(v, 0.0f, kMaxIntensityUi);
+    const float scale   = 200.0f / kMaxIntensityUi;
+    return clamp_i(static_cast<int>(std::lround(clamped * scale)), 0, 200);
 }
 
 float LightsEditorDialog::intensityFromUi(int v) noexcept
 {
-    const int iv = clamp_i(v, 0, 200);
-    return static_cast<float>(iv) / 20.0f;
+    const int   iv    = clamp_i(v, 0, 200);
+    const float scale = kMaxIntensityUi / 200.0f;
+    return static_cast<float>(iv) * scale;
 }
 
 int LightsEditorDialog::rangeToUi(float v) noexcept
@@ -515,7 +522,7 @@ void LightsEditorDialog::loadLightToUi(const SceneLight* l)
     ui->spotInnerSlider->setValue(coneToUi(l->spotInnerConeRad()));
     ui->spotOuterSlider->setValue(coneToUi(l->spotOuterConeRad()));
 
-    // NEW: Flags (assumes SceneLight exposes these accessors)
+    // Flags
     if (ui->affectRasterCheckBox)
         ui->affectRasterCheckBox->setChecked(l->affectRaster());
     if (ui->affectRtCheckBox)
@@ -678,7 +685,7 @@ void LightsEditorDialog::onSpotOuterChanged(int v)
 }
 
 // ------------------------------------------------------------
-// NEW: Flags slots -> model
+// Flags slots -> model
 // ------------------------------------------------------------
 
 void LightsEditorDialog::onAffectRasterToggled(bool checked)
