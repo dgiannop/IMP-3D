@@ -136,13 +136,20 @@ LightsEditorDialog::LightsEditorDialog(QWidget* parent) :
     if (ui->spotOuterSlider)
         connect(ui->spotOuterSlider, &QSlider::valueChanged, this, &LightsEditorDialog::onSpotOuterChanged);
 
-    // NEW: Flags wiring (must exist on SceneLight / Light storage)
     if (ui->affectRasterCheckBox)
         connect(ui->affectRasterCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onAffectRasterToggled);
     if (ui->affectRtCheckBox)
         connect(ui->affectRtCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onAffectRtToggled);
     if (ui->castShadowsCheckBox)
         connect(ui->castShadowsCheckBox, &QCheckBox::toggled, this, &LightsEditorDialog::onCastShadowsToggled);
+
+    // For now disable them untill I pass them to the Renderer/Shaders
+    if (ui->affectRasterCheckBox)
+        ui->affectRasterCheckBox->setEnabled(false);
+    if (ui->affectRtCheckBox)
+        ui->affectRtCheckBox->setEnabled(false);
+    if (ui->castShadowsCheckBox)
+        ui->castShadowsCheckBox->setEnabled(false);
 
     setRightPanelEnabled(false);
 }
