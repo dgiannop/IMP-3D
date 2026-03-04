@@ -34,19 +34,19 @@ public:
     Image(Image&&) noexcept            = default;
     Image& operator=(Image&&) noexcept = default;
 
-    bool loadFromFile(const std::filesystem::path& path, bool flipY = true);
+    [[nodiscard]] bool loadFromFile(const std::filesystem::path& path, bool flipY = true);
 
-    bool loadFromMemory(const unsigned char* pixels,
-                        int                  width,
-                        int                  height,
-                        int                  channels,
-                        bool                 flipY = true);
+    [[nodiscard]] bool loadFromMemory(const unsigned char* pixels,
+                                      int                  width,
+                                      int                  height,
+                                      int                  channels,
+                                      bool                 flipY = true);
 
-    bool loadFromEncodedMemory(const unsigned char* data,
-                               int                  sizeInBytes,
-                               bool                 flipY);
+    [[nodiscard]] bool loadFromEncodedMemory(const unsigned char* data,
+                                             int                  sizeInBytes,
+                                             bool                 flipY);
 
-    bool valid() const noexcept
+    [[nodiscard]] bool valid() const noexcept
     {
         if (m_width > 0 && m_height > 0 && !m_pixels.empty())
             return true;
@@ -60,27 +60,27 @@ public:
     // -------------------------------------------------------------------------
     // Classic pixel image access (stb, or loadFromMemory)
     // -------------------------------------------------------------------------
-    int width() const
+    [[nodiscard]] int width() const noexcept
     {
         return m_width;
     }
 
-    int height() const
+    [[nodiscard]] int height() const noexcept
     {
         return m_height;
     }
 
-    int channels() const
+    [[nodiscard]] int channels() const noexcept
     {
         return m_channels;
     }
 
-    const unsigned char* data() const
+    [[nodiscard]] const unsigned char* data() const noexcept
     {
         return m_pixels.data();
     }
 
-    unsigned char* data() noexcept
+    [[nodiscard]] unsigned char* data() noexcept
     {
         return m_pixels.data();
     }
@@ -88,48 +88,48 @@ public:
     // -------------------------------------------------------------------------
     // KTX/KTX2 access (for Vulkan upload)
     // -------------------------------------------------------------------------
-    bool isKtx() const noexcept
+    [[nodiscard]] bool isKtx() const noexcept
     {
         return m_isKtx;
     }
 
-    VkFormat ktxVkFormat() const noexcept
+    [[nodiscard]] VkFormat ktxVkFormat() const noexcept
     {
         return m_ktxVkFormat;
     }
 
-    uint32_t ktxMipLevels() const noexcept
+    [[nodiscard]] uint32_t ktxMipLevels() const noexcept
     {
         return m_ktxLevels;
     }
 
-    uint32_t ktxLayers() const noexcept
+    [[nodiscard]] uint32_t ktxLayers() const noexcept
     {
         return m_ktxLayers;
     }
 
-    uint32_t ktxFaces() const noexcept
+    [[nodiscard]] uint32_t ktxFaces() const noexcept
     {
         return m_ktxFaces;
     }
 
-    bool ktxNeedsTranscoding() const noexcept
+    [[nodiscard]] bool ktxNeedsTranscoding() const noexcept
     {
         return m_ktxNeedsTranscoding;
     }
 
-    const std::vector<std::uint8_t>& ktxData() const noexcept
+    [[nodiscard]] const std::vector<std::uint8_t>& ktxData() const noexcept
     {
         return m_ktxData;
     }
 
-    const std::vector<KtxMipLevel>& ktxMips() const noexcept
+    [[nodiscard]] const std::vector<KtxMipLevel>& ktxMips() const noexcept
     {
         return m_ktxMips;
     }
 
     // Convenience: return pointer/size for a mip level (layer0/face0 offset is included in mips[i].offset)
-    const std::uint8_t* ktxMipData(uint32_t level, VkDeviceSize* outBytes = nullptr) const noexcept
+    [[nodiscard]] const std::uint8_t* ktxMipData(uint32_t level, VkDeviceSize* outBytes = nullptr) const noexcept
     {
         for (const KtxMipLevel& m : m_ktxMips)
         {
@@ -148,24 +148,24 @@ public:
     // -------------------------------------------------------------------------
     // Name/path
     // -------------------------------------------------------------------------
-    void setName(const std::string& name)
+    void setName(const std::string& name) noexcept
     {
         m_name = name;
     }
 
-    const std::string& name() const noexcept
+    [[nodiscard]] const std::string& name() const noexcept
     {
         return m_name;
     }
 
     /// Sets the image source path (absolute, normalized)
-    void setPath(const std::filesystem::path& p)
+    void setPath(const std::filesystem::path& p) noexcept
     {
         m_path = PathUtil::normalizedPath(p);
     }
 
     /// Gets the image source path (always normalized via PathUtil)
-    const std::filesystem::path& path() const
+    [[nodiscard]] const std::filesystem::path& path() const
     {
         return m_path;
     }
@@ -173,8 +173,8 @@ public:
 private:
     void clear() noexcept;
 
-    bool loadKtxFromFile_(const std::filesystem::path& path);
-    bool loadKtxFromMemory_(const unsigned char* data, int sizeInBytes);
+    [[nodiscard]] bool loadKtxFromFile_(const std::filesystem::path& path);
+    [[nodiscard]] bool loadKtxFromMemory_(const unsigned char* data, int sizeInBytes);
 
 private:
     std::string           m_name;

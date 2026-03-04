@@ -43,9 +43,9 @@ public:
 
     // NOTE: RtRenderer does NOT create set=0 or set=1.
     // It only needs their VkDescriptorSetLayout to build its pipeline layout.
-    bool initDevice(const VulkanContext&  ctx,
-                    VkDescriptorSetLayout set0Layout, // frame globals layout (camera+lights)
-                    VkDescriptorSetLayout set1Layout  // materials layout
+    [[nodiscard]] bool initDevice(const VulkanContext&  ctx,
+                                  VkDescriptorSetLayout set0Layout, // frame globals layout (camera+lights)
+                                  VkDescriptorSetLayout set1Layout  // materials layout
     );
 
     void shutdown() noexcept;
@@ -55,7 +55,7 @@ public:
     // Swapchain lifetime (RT present pipeline depends on render pass)
     // ============================================================
 
-    bool initSwapchain(VkRenderPass renderPass);
+    [[nodiscard]] bool initSwapchain(VkRenderPass renderPass);
     void destroySwapchainResources() noexcept;
 
 public:
@@ -137,20 +137,20 @@ private:
 
     RtViewportState& ensureViewportState(Viewport* vp, uint32_t frameIndex);
 
-    bool ensureRtOutputImages(RtViewportState&          s,
-                              const RenderFrameContext& fc,
-                              uint32_t                  w,
-                              uint32_t                  h);
+    [[nodiscard]] bool ensureRtOutputImages(RtViewportState&          s,
+                                            const RenderFrameContext& fc,
+                                            uint32_t                  w,
+                                            uint32_t                  h);
 
-    bool ensureRtScratch(RtViewportState& s, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
+    [[nodiscard]] bool ensureRtScratch(RtViewportState& s, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
 
 private:
     // ============================================================
     // Pipelines, descriptors, dispatch
     // ============================================================
 
-    bool initRayTracingResources(VkDescriptorSetLayout set0Layout, VkDescriptorSetLayout set1Layout);
-    bool createRtPresentPipeline(VkRenderPass rp);
+    [[nodiscard]] bool initRayTracingResources(VkDescriptorSetLayout set0Layout, VkDescriptorSetLayout set1Layout);
+    [[nodiscard]] bool createRtPresentPipeline(VkRenderPass rp);
     void destroyRtPresentPipeline() noexcept;
 
     void recordTraceRays(Viewport*                 vp,
@@ -192,12 +192,12 @@ private:
         uint64_t buildKey = 0;
     };
 
-    bool ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept;
+    [[nodiscard]] bool ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept;
 
-    bool ensureMeshBlas(Viewport*                           vp,
-                        SceneMesh*                          sm,
-                        const render::geom::RtMeshGeometry& geo,
-                        const RenderFrameContext&           fc) noexcept;
+    [[nodiscard]] bool ensureMeshBlas(Viewport*                           vp,
+                                      SceneMesh*                          sm,
+                                      const render::geom::RtMeshGeometry& geo,
+                                      const RenderFrameContext&           fc) noexcept;
 
     void destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept;
     void destroyAllRtBlas() noexcept;

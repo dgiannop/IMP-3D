@@ -207,28 +207,28 @@ public:
     // ------------------------------------------------------------
 
     /** @brief Request creation of a new document. */
-    bool requestNew() noexcept;
+    [[nodiscard]] bool requestNew() noexcept;
 
     /** @brief Request application exit (with save prompt if needed). */
-    bool requestExit() noexcept;
+    [[nodiscard]] bool requestExit() noexcept;
 
     /** @brief Create a new empty file. */
-    bool newFile();
+    [[nodiscard]] bool newFile();
 
     /** @brief Open a file from disk. */
-    bool openFile(const std::filesystem::path& path);
+    [[nodiscard]] bool openFile(const std::filesystem::path& path);
 
     /** @brief Save the current file. */
-    bool saveFile();
+    [[nodiscard]] bool saveFile();
 
     /** @brief Save the current file to a new path. */
-    bool saveFileAs(const std::filesystem::path& path);
+    [[nodiscard]] bool saveFileAs(const std::filesystem::path& path);
 
     /** @brief Import geometry from file. */
-    bool importFile(const std::filesystem::path& path);
+    [[nodiscard]] bool importFile(const std::filesystem::path& path);
 
     /** @brief Export scene to file. */
-    bool exportFile(const std::filesystem::path& path);
+    [[nodiscard]] bool exportFile(const std::filesystem::path& path);
 
     /**
      * @return Current document file path, or empty if unnamed/unsaved

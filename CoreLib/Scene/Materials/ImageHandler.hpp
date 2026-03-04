@@ -1,6 +1,3 @@
-//============================================================
-// ImageHandler.hpp
-//============================================================
 #pragma once
 
 #include <filesystem>
@@ -22,28 +19,28 @@ public:
     ~ImageHandler() = default;
 
     // Load from file (PNG/JPG). Reuses existing if same normalized path.
-    ImageId loadFromFile(const std::filesystem::path& path,
-                         bool                         flipY = true);
+    [[nodiscard]] ImageId loadFromFile(const std::filesystem::path& path,
+                                       bool                         flipY = true);
 
     // Encoded data in memory (e.g. glTF bufferView containing PNG/JPEG)
-    ImageId loadFromEncodedMemory(std::span<const unsigned char> encodedData,
-                                  const std::string&             nameHint,
-                                  bool                           flipY = true);
+    [[nodiscard]] ImageId loadFromEncodedMemory(std::span<const unsigned char> encodedData,
+                                                const std::string&             nameHint,
+                                                bool                           flipY = true);
 
     // Already-decoded pixels
-    ImageId createFromRaw(const unsigned char* pixels,
-                          int                  width,
-                          int                  height,
-                          int                  channels,
-                          const std::string&   nameHint,
-                          bool                 flipY = false);
+    [[nodiscard]] ImageId createFromRaw(const unsigned char* pixels,
+                                        int                  width,
+                                        int                  height,
+                                        int                  channels,
+                                        const std::string&   nameHint,
+                                        bool                 flipY = false);
 
     // Access
-    const Image* get(ImageId id) const noexcept;
-    Image*       get(ImageId id) noexcept;
+    [[nodiscard]] const Image* get(ImageId id) const noexcept;
+    [[nodiscard]] Image*       get(ImageId id) noexcept;
 
     // For UI: enumerate all images
-    const std::vector<Image>& images() const noexcept
+    [[nodiscard]] const std::vector<Image>& images() const noexcept
     {
         return m_images;
     }
@@ -51,7 +48,7 @@ public:
     // Simple lifetime management
     void clear() noexcept;
 
-    SysCounterPtr changeCounter() const noexcept;
+    [[nodiscard]] SysCounterPtr changeCounter() const noexcept;
 
 private:
     std::vector<Image>                       m_images;

@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <glm/vec3.hpp>
 #include <string>
-#include <type_traits>
 
 #include "ImageHandler.hpp" // ImageId, kInvalidImageId
 #include "SysCounter.hpp"

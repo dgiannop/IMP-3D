@@ -486,7 +486,7 @@ void MainWindow::handleAction()
                 // Discard -> continue
             }
 
-            m_core->newFile();
+            (void)m_core->newFile();
         }
 
         // ------------------------------------------------------------
@@ -530,7 +530,7 @@ void MainWindow::handleAction()
                 return;
 
             BusyCursorGuard busy;
-            m_core->openFile(fileName.toStdString());
+            (void)m_core->openFile(fileName.toStdString());
         }
 
         // ------------------------------------------------------------
@@ -552,7 +552,7 @@ void MainWindow::handleAction()
 
                 BusyCursorGuard busy;
                 savePath = ensureImpExtension(savePath);
-                m_core->saveFileAs(savePath.toStdString());
+                (void)m_core->saveFileAs(savePath.toStdString());
             }
         }
 
@@ -572,7 +572,7 @@ void MainWindow::handleAction()
 
             BusyCursorGuard busy;
             savePath = ensureImpExtension(savePath);
-            m_core->saveFileAs(savePath.toStdString());
+            (void)m_core->saveFileAs(savePath.toStdString());
         }
 
         // ------------------------------------------------------------
@@ -590,7 +590,7 @@ void MainWindow::handleAction()
                 return;
 
             BusyCursorGuard busy;
-            m_core->importFile(fileName.toStdString());
+            (void)m_core->importFile(fileName.toStdString());
         }
 
         // ------------------------------------------------------------
@@ -608,7 +608,7 @@ void MainWindow::handleAction()
                 return;
 
             BusyCursorGuard busy;
-            m_core->exportFile(fileName.toStdString());
+            (void)m_core->exportFile(fileName.toStdString());
         }
 
         // ------------------------------------------------------------

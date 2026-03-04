@@ -58,8 +58,8 @@ public:
     // Lifetime / frame hooks
     // ============================================================
 
-    bool initDevice(const VulkanContext& ctx);
-    bool initSwapchain(VkRenderPass renderPass);
+    [[nodiscard]] bool initDevice(const VulkanContext& ctx);
+    [[nodiscard]] bool initSwapchain(VkRenderPass renderPass);
     void destroySwapchainResources() noexcept;
     void shutdown() noexcept;
 
@@ -72,7 +72,8 @@ public:
     // Lighting settings
     // ============================================================
 
-    void                                  setLightingSettings(const LightingSettings& settings) noexcept;
+    void setLightingSettings(const LightingSettings& settings) noexcept;
+
     [[nodiscard]] const LightingSettings& lightingSettings() const noexcept;
 
 public:
@@ -147,10 +148,10 @@ private:
     // Raster helpers
     // ============================================================
 
-    bool createPipelineLayout() noexcept;
+    [[nodiscard]] bool createPipelineLayout() noexcept;
 
-    bool createDescriptors(uint32_t framesInFlight);
-    bool createPipelines(VkRenderPass renderPass);
+    [[nodiscard]] bool createDescriptors(uint32_t framesInFlight);
+    [[nodiscard]] bool createPipelines(VkRenderPass renderPass);
     void destroyPipelines() noexcept;
 
     ViewportUboState& ensureViewportUboState(Viewport* vp, uint32_t frameIndex);
