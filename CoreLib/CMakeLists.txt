@@ -169,6 +169,8 @@ set(SHADERS
     RtShadow.rmiss
     RtShadow.rchit
     RtShadow.rahit
+    RtDenoiseCopy.comp
+    RtDenoiseAtrous.comp
 )
 
 # Prefer Vulkan SDK glslangValidator if available, otherwise fail fast.

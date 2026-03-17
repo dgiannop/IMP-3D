@@ -40,7 +40,7 @@ public:
                                       int                  width,
                                       int                  height,
                                       int                  channels,
-                                      bool                 flipY = true);
+                                      bool                 flipY = false);
 
     [[nodiscard]] bool loadFromEncodedMemory(const unsigned char* data,
                                              int                  sizeInBytes,

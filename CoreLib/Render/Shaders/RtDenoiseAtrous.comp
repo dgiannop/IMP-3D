@@ -1,0 +1,74 @@
+#version 460
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_colorIn;
+layout(set = 0, binding = 1) uniform sampler2D u_normalIn;
+layout(set = 0, binding = 2) uniform sampler2D u_depthIn;
+layout(set = 0, binding = 3) uniform sampler2D u_albedoIn;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D u_outImage;
+
+layout(push_constant) uniform DenoisePC
+{
+    uint  width;
+    uint  height;
+    uint  stepWidth;
+    float colorPhi;
+    float normalPhi;
+    float depthPhi;
+    float albedoPhi;
+} pc;
+
+float saturate(float x) { return clamp(x, 0.0, 1.0); }
+float luminance(vec3 c)  { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+vec3  fetchColor (ivec2 p, ivec2 sz) { p = clamp(p, ivec2(0), sz-1); return texelFetch(u_colorIn,  p, 0).rgb; }
+vec3  fetchNormal(ivec2 p, ivec2 sz) { p = clamp(p, ivec2(0), sz-1); return normalize(texelFetch(u_normalIn, p, 0).rgb * 2.0 - 1.0); }
+float fetchDepth (ivec2 p, ivec2 sz) { p = clamp(p, ivec2(0), sz-1); return texelFetch(u_depthIn,  p, 0).r; }
+vec3  fetchAlbedo(ivec2 p, ivec2 sz) { p = clamp(p, ivec2(0), sz-1); return texelFetch(u_albedoIn, p, 0).rgb; }
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(int(pc.width), int(pc.height));
+    if (px.x >= size.x || px.y >= size.y)
+        return;
+
+    vec3  centerC = fetchColor (px, size);
+    vec3  centerN = fetchNormal(px, size);
+    float centerD = fetchDepth (px, size);
+    vec3  centerA = fetchAlbedo(px, size);
+
+    const ivec2 kernel[5] = ivec2[5](
+        ivec2( 0,  0),
+        ivec2(-1,  0),
+        ivec2( 1,  0),
+        ivec2( 0, -1),
+        ivec2( 0,  1)
+    );
+    const float baseW[5] = float[5](4.0, 1.0, 1.0, 1.0, 1.0);
+
+    vec3  sum  = vec3(0.0);
+    float wsum = 0.0;
+    int   stepW = int(pc.stepWidth);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        ivec2 q = clamp(px + kernel[i] * stepW, ivec2(0), size - 1);
+
+        vec3  sampleC = fetchColor (q, size);
+        vec3  sampleN = fetchNormal(q, size);
+        float sampleD = fetchDepth (q, size);
+        vec3  sampleA = fetchAlbedo(q, size);
+
+        float cW = exp(-pc.colorPhi  * abs(luminance(sampleC) - luminance(centerC)));
+        float nW = pow(saturate(dot(centerN, sampleN)), pc.normalPhi);
+        float dW = exp(-pc.depthPhi  * abs(sampleD - centerD) / max(abs(centerD), 1e-4));
+        float aW = exp(-pc.albedoPhi * length(sampleA - centerA));
+
+        float w   = baseW[i] * cW * nW * dW * aW;
+        sum      += sampleC * w;
+        wsum     += w;
+    }
+
+    imageStore(u_outImage, px, vec4((wsum > 0.0) ? (sum / wsum) : centerC, 1.0));
+}

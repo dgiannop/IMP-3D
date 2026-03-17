@@ -60,8 +60,8 @@ public:
 
     [[nodiscard]] bool initDevice(const VulkanContext& ctx);
     [[nodiscard]] bool initSwapchain(VkRenderPass renderPass);
-    void destroySwapchainResources() noexcept;
-    void shutdown() noexcept;
+    void               destroySwapchainResources() noexcept;
+    void               shutdown() noexcept;
 
     void idle(Scene* scene);
 
@@ -152,7 +152,7 @@ private:
 
     [[nodiscard]] bool createDescriptors(uint32_t framesInFlight);
     [[nodiscard]] bool createPipelines(VkRenderPass renderPass);
-    void destroyPipelines() noexcept;
+    void               destroyPipelines() noexcept;
 
     ViewportUboState& ensureViewportUboState(Viewport* vp, uint32_t frameIndex);
 

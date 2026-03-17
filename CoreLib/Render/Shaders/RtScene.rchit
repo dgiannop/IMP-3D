@@ -39,6 +39,9 @@
 
 layout(location = 0) rayPayloadInEXT vec4 payload;
 layout(location = 1) rayPayloadEXT   uint occFlag; // used only for shadow rays
+layout(set = 2, binding = 4, rgba16f) uniform image2D u_outNormal;
+layout(set = 2, binding = 5, rgba16f) uniform image2D u_outDepth;
+layout(set = 2, binding = 6, rgba16f) uniform image2D u_outAlbedo;
 
 hitAttributeEXT vec2 hitAttr;
 
@@ -726,6 +729,14 @@ void main()
     outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
 #endif
 
+    ivec2 pix = ivec2(gl_LaunchIDEXT.xy);
+
+    vec3 outN = normalize(N) * 0.5 + 0.5;
+    imageStore(u_outNormal, pix, vec4(outN, 1.0));
+
+    imageStore(u_outDepth, pix, vec4(gl_HitTEXT, 0.0, 0.0, 0.0));
+
+    imageStore(u_outAlbedo, pix, vec4(albedo, 1.0));
     // Output:
     // - depth==0: store alpha=1 for your present path
     // - depth>0 : keep payload.w=depth for nested rays

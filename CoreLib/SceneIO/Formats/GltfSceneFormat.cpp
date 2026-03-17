@@ -768,7 +768,7 @@ namespace
                     const ImageId        id = ih->loadFromEncodedMemory(
                         std::span<const unsigned char>(p, size),
                         nameHint,
-                        /*flipY=*/true);
+                        /*flipY=*/false);
 
                     if (id != kInvalidImageId)
                     {

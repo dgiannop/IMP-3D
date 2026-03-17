@@ -44,9 +44,6 @@ bool Renderer::initDevice(const VulkanContext& ctx)
     m_grid = std::make_unique<GridRendererVK>(&m_ctx);
     m_grid->createDeviceResources();
 
-    // ------------------------------------------------------------
-    // RT module init (device lifetime)
-    // ------------------------------------------------------------
     if (rtReady(m_ctx))
     {
         if (!m_rt.initDevice(m_ctx, m_descriptorSetLayout.layout(), m_materialSetLayout.layout()))
@@ -73,9 +70,6 @@ bool Renderer::initSwapchain(VkRenderPass renderPass)
             return false;
     }
 
-    // ------------------------------------------------------------
-    // RT module swapchain init (present pipeline depends on render pass)
-    // ------------------------------------------------------------
     if (rtReady(m_ctx))
     {
         if (!m_rt.initSwapchain(renderPass))
@@ -104,7 +98,6 @@ void Renderer::shutdown() noexcept
 
     destroySwapchainResources();
 
-    // Per-viewport Camera + Lights state
     for (auto& [vp, state] : m_viewportUbos)
     {
         const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
@@ -121,7 +114,6 @@ void Renderer::shutdown() noexcept
     }
     m_viewportUbos.clear();
 
-    // Destroy per-frame material buffers explicitly.
     for (uint32_t i = 0; i < m_framesInFlight; ++i)
     {
         if (m_materialBuffers[i].valid())
@@ -155,9 +147,6 @@ void Renderer::shutdown() noexcept
         m_overlayFillVertexBuffer.destroy();
     m_overlayFillVertexCapacity = 0;
 
-    // ------------------------------------------------------------
-    // RT module shutdown (device lifetime)
-    // ------------------------------------------------------------
     m_rt.shutdown();
 
     m_framesInFlight = 0;
@@ -181,7 +170,6 @@ void Renderer::setLightingSettings(const LightingSettings& settings) noexcept
 {
     m_lightingSettings = settings;
 
-    // Mirror the headlight controls into the renderer headlight.
     m_headlight.enabled   = m_lightingSettings.useHeadlight;
     m_headlight.intensity = m_lightingSettings.headlightIntensity;
 }
@@ -212,7 +200,6 @@ void Renderer::updateViewportFrameGlobals(Viewport* vp, Scene* scene, uint32_t f
     if (!vpUbo.cameraBuffers[frameIndex].valid() || !vpUbo.lightBuffers[frameIndex].valid())
         return;
 
-    // CameraUBO
     {
         CameraUBO ubo{};
 
@@ -241,7 +228,6 @@ void Renderer::updateViewportFrameGlobals(Viewport* vp, Scene* scene, uint32_t f
         vpUbo.cameraBuffers[frameIndex].upload(&ubo, sizeof(ubo));
     }
 
-    // Lights
     {
         GpuLightsUBO lights{};
         buildGpuLightsUBO(
@@ -257,9 +243,6 @@ void Renderer::updateViewportFrameGlobals(Viewport* vp, Scene* scene, uint32_t f
 
 //==================================================================
 // renderPrePass
-//   - runs all MeshGpuResources::update() OUTSIDE render pass
-//   - updates set=0 (Camera+Lights) buffers for this viewport/frame
-//   - dispatches RT trace OUTSIDE render pass via RtRenderer (if enabled)
 //==================================================================
 
 void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
@@ -272,15 +255,12 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
 
     const uint32_t frameIdx = fc.frameIndex;
 
-    // 1) Update ALL MeshGpuResources here (outside render pass)
     forEachVisibleMesh(scene, [&](SceneMesh* /*sm*/, MeshGpuResources* gpu) {
         gpu->update(fc);
     });
 
-    // 2) Update set=0 buffers (Camera+Lights) for this viewport/frame
     updateViewportFrameGlobals(vp, scene, frameIdx);
 
-    // 3) If RT: make sure set=1 materials are ready, then dispatch RT (outside render pass)
     if (vp->drawMode() == DrawMode::RAY_TRACE && rtReady(m_ctx))
     {
         if (scene->materialHandler() && scene->textureHandler())
@@ -308,8 +288,7 @@ void Renderer::renderPrePass(Viewport* vp, Scene* scene, const RenderFrameContex
 }
 
 //==================================================================
-// Render (RT present OR raster)
-//   - INSIDE render pass
+// render
 //==================================================================
 
 void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
@@ -332,6 +311,32 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
     const glm::vec4 solidEdgeColor{0.10f, 0.10f, 0.10f, 0.5f};
     const glm::vec4 wireVisibleColor{0.85f, 0.85f, 0.85f, 1.0f};
     const glm::vec4 wireHiddenColor{0.85f, 0.85f, 0.85f, 0.25f};
+
+    // --------------------------------------------------------
+    // Update materials BEFORE binding any descriptor sets.
+    // Writing a descriptor set while it is already bound in a
+    // recording command buffer invalidates the command buffer.
+    // This must happen before the first vkCmdBindDescriptorSets.
+    // --------------------------------------------------------
+    if (vp->drawMode() != DrawMode::RAY_TRACE &&
+        vp->drawMode() != DrawMode::WIREFRAME)
+    {
+        if (scene->materialHandler() && scene->textureHandler())
+        {
+            const uint64_t matCounter =
+                scene->materialHandler()->changeCounter()
+                    ? scene->materialHandler()->changeCounter()->value()
+                    : 0ull;
+
+            if (m_materialCounterPerFrame[frameIdx] != matCounter)
+            {
+                const auto& mats = scene->materialHandler()->materials();
+                uploadMaterialsToGpu(mats, *scene->textureHandler(), frameIdx, fc);
+                updateMaterialTextureTable(*scene->textureHandler(), frameIdx);
+                m_materialCounterPerFrame[frameIdx] = matCounter;
+            }
+        }
+    }
 
     auto bindSet0 = [&]() -> bool {
         ViewportUboState& vpUbo = ensureViewportUboState(vp, frameIdx);
@@ -356,9 +361,9 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         return true;
     };
 
-    // ------------------------------------------------------------
-    // RT PRESENT PATH (inside render pass)
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
+    // RT PRESENT PATH
+    // --------------------------------------------------------
     if (vp->drawMode() == DrawMode::RAY_TRACE)
     {
         if (!rtReady(m_ctx))
@@ -366,10 +371,8 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 
         vkutil::setViewportAndScissor(cmd, w, h);
 
-        // Fullscreen present of the RT output for this viewport+frame
         m_rt.present(cmd, vp, fc);
 
-        // Re-bind set=0 so selection/grid/overlays can render on top
         if (!bindSet0())
             return;
 
@@ -380,38 +383,23 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
         return;
     }
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // NORMAL GRAPHICS PATH
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     if (!bindSet0())
         return;
 
     vkutil::setViewportAndScissor(cmd, w, h);
 
-    // Solid / Shaded
     if (vp->drawMode() != DrawMode::WIREFRAME)
     {
         const bool isShaded = (vp->drawMode() == DrawMode::SHADED);
 
         VkPipeline triPipe = isShaded ? m_shadedPipeline.handle() : m_solidPipeline.handle();
 
-        // Ensure materials (needed for shaded; harmless for solid if shaders ignore)
-        if (scene->materialHandler() && scene->textureHandler())
-        {
-            const uint64_t matCounter =
-                scene->materialHandler()->changeCounter() ? scene->materialHandler()->changeCounter()->value() : 0ull;
-
-            if (m_materialCounterPerFrame[frameIdx] != matCounter)
-            {
-                const auto& mats = scene->materialHandler()->materials();
-                uploadMaterialsToGpu(mats, *scene->textureHandler(), frameIdx, fc);
-                updateMaterialTextureTable(*scene->textureHandler(), frameIdx);
-
-                m_materialCounterPerFrame[frameIdx] = matCounter;
-            }
-        }
-
-        // Bind set=1 (materials + texture table)
+        // Bind set=1 (materials + texture table).
+        // The material data was already uploaded at the top of this
+        // function before any descriptor sets were bound.
         {
             VkDescriptorSet set1 = m_materialSets[frameIdx].set();
             vkCmdBindDescriptorSets(cmd,
@@ -482,10 +470,8 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
             });
         }
     }
-    // Wireframe mode (hidden-line)
     else
     {
-        // 1) depth-only triangles
         if (m_depthOnlyPipeline.valid())
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_depthOnlyPipeline.handle());
@@ -556,7 +542,7 @@ void Renderer::render(Viewport* vp, Scene* scene, const RenderFrameContext& fc)
 }
 
 //==================================================================
-// drawOverlays / drawSelection / drawSceneGrid / ensureOverlayVertexCapacity
+// drawOverlays
 //==================================================================
 
 void Renderer::drawOverlays(VkCommandBuffer cmd, Viewport* vp, const OverlayHandler& overlays)
@@ -906,7 +892,7 @@ void Renderer::drawSceneGrid(VkCommandBuffer cmd, Viewport* vp, Scene* scene)
 }
 
 //==================================================================
-// Pipeline destruction (swapchain-level)
+// Pipeline destruction
 //==================================================================
 
 void Renderer::destroyPipelines() noexcept
@@ -938,7 +924,7 @@ void Renderer::destroyPipelines() noexcept
 }
 
 //==================================================================
-// Descriptors + pipeline layout (device-level)
+// Descriptors + pipeline layout
 //==================================================================
 
 bool Renderer::createDescriptors(uint32_t framesInFlight)
@@ -956,7 +942,6 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
     m_descriptorSetLayout.destroy();
     m_materialSetLayout.destroy();
 
-    // set = 0 : Frame globals
     {
         DescriptorBindingInfo uboBindings[2] = {};
 
@@ -982,7 +967,6 @@ bool Renderer::createDescriptors(uint32_t framesInFlight)
         }
     }
 
-    // set = 1 : Materials + texture table
     {
         DescriptorBindingInfo matBindings[2] = {};
 
@@ -1066,7 +1050,10 @@ bool Renderer::createPipelineLayout() noexcept
 // Materials
 //==================================================================
 
-void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials, TextureHandler& texHandler, uint32_t frameIndex, const RenderFrameContext& fc)
+void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials,
+                                    TextureHandler&              texHandler,
+                                    uint32_t                     frameIndex,
+                                    const RenderFrameContext&    fc)
 {
     if (frameIndex >= m_framesInFlight)
         return;
@@ -1075,7 +1062,11 @@ void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials, Text
     {
         if (m_materialBuffers[frameIndex].valid())
         {
-            m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device, 0, m_materialBuffers[frameIndex].buffer(), 0, 0);
+            m_materialSets[frameIndex].writeStorageBuffer(m_ctx.device,
+                                                          0,
+                                                          m_materialBuffers[frameIndex].buffer(),
+                                                          0,
+                                                          0);
         }
         return;
     }
@@ -1104,7 +1095,7 @@ void Renderer::uploadMaterialsToGpu(const std::vector<Material>& materials, Text
             }
         }
 
-        buf = {}; // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+        buf = {};
         buf.create(m_ctx.device,
                    m_ctx.physicalDevice,
                    sizeBytes,
@@ -1174,7 +1165,7 @@ void Renderer::updateMaterialTextureTable(const TextureHandler& textureHandler, 
 }
 
 //==================================================================
-// Pipelines (swapchain-level)
+// Pipelines
 //==================================================================
 
 bool Renderer::createPipelines(VkRenderPass renderPass)
@@ -1299,9 +1290,6 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         return false;
     }
 
-    // ------------------------------------------------------------
-    // Selection pipelines (unchanged)
-    // ------------------------------------------------------------
     const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
     ShaderStage selVert     = vkutil::loadStage(m_ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);

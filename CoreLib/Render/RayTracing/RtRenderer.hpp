@@ -11,10 +11,12 @@
 #include "DescriptorSet.hpp"
 #include "DescriptorSetLayout.hpp"
 #include "GpuBuffer.hpp"
+#include "RtDenoiser.hpp"
 #include "RtPipeline.hpp"
 #include "RtPresentPipeline.hpp"
 #include "RtSbt.hpp"
 #include "VulkanContext.hpp"
+#include "VulkanImage.hpp"
 
 class Scene;
 class SceneMesh;
@@ -37,58 +39,27 @@ public:
     RtRenderer& operator=(const RtRenderer&) = delete;
 
 public:
-    // ============================================================
-    // Device lifetime
-    // ============================================================
-
-    // NOTE: RtRenderer does NOT create set=0 or set=1.
-    // It only needs their VkDescriptorSetLayout to build its pipeline layout.
     [[nodiscard]] bool initDevice(const VulkanContext&  ctx,
-                                  VkDescriptorSetLayout set0Layout, // frame globals layout (camera+lights)
-                                  VkDescriptorSetLayout set1Layout  // materials layout
-    );
+                                  VkDescriptorSetLayout set0Layout,
+                                  VkDescriptorSetLayout set1Layout);
 
     void shutdown() noexcept;
 
 public:
-    // ============================================================
-    // Swapchain lifetime (RT present pipeline depends on render pass)
-    // ============================================================
-
     [[nodiscard]] bool initSwapchain(VkRenderPass renderPass);
-    void destroySwapchainResources() noexcept;
+    void               destroySwapchainResources() noexcept;
 
 public:
-    // ============================================================
-    // Frame hooks
-    // ============================================================
-
-    // OUTSIDE render pass:
-    // - build/update BLAS/TLAS as needed
-    // - ensure RT output image (per viewport, per frame)
-    // - vkCmdTraceRaysKHR
-    //
-    // Renderer passes the already-built descriptor sets:
-    //   set=0 : camera+lights
-    //   set=1 : materials+texture table
     void renderPrePass(Viewport*                 vp,
                        Scene*                    scene,
                        const RenderFrameContext& fc,
                        VkDescriptorSet           set0FrameGlobals,
                        VkDescriptorSet           set1Materials);
 
-    // Inside render pass:
-    // fullscreen present of the RT output for this viewport+frame
     void present(VkCommandBuffer cmd, Viewport* vp, const RenderFrameContext& fc);
-
-    // TLAS invalidation
     void idle(Scene* scene);
 
 public:
-    // ============================================================
-    // Shared RT SSBO element layout (std430) — shader-visible
-    // ============================================================
-
     struct alignas(8) RtInstanceData
     {
         uint64_t posAdr   = 0;
@@ -106,25 +77,21 @@ public:
     static_assert(alignof(RtInstanceData) == 8);
 
 private:
-    // ============================================================
-    // Per-viewport/per-frame RT buckets
-    // ============================================================
-
-    struct RtImagePerFrame
-    {
-        VkImage        image     = VK_NULL_HANDLE;
-        VkDeviceMemory memory    = VK_NULL_HANDLE;
-        VkImageView    view      = VK_NULL_HANDLE;
-        uint32_t       width     = 0;
-        uint32_t       height    = 0;
-        bool           needsInit = true;
-    };
+    // ---------------------------------------------------------
+    // Per-viewport, per-frame state
+    // ---------------------------------------------------------
 
     struct RtViewportState
     {
-        std::array<DescriptorSet, vkcfg::kMaxFramesInFlight>   sets                = {}; // set=2
-        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>       instanceDataBuffers = {};
-        std::array<RtImagePerFrame, vkcfg::kMaxFramesInFlight> images              = {};
+        std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> rtSets              = {};
+        std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> presentSets         = {};
+        std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     instanceDataBuffers = {};
+
+        /// AOV images written by the ray-tracing pipeline each frame.
+        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> radianceImages = {};
+        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> normalImages   = {};
+        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> depthImages    = {};
+        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> albedoImages   = {};
 
         std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>    scratchBuffers = {};
         std::array<VkDeviceSize, vkcfg::kMaxFramesInFlight> scratchSizes   = {};
@@ -132,7 +99,7 @@ private:
         uint32_t cachedW = 0;
         uint32_t cachedH = 0;
 
-        void destroyDeviceResources(const VulkanContext& ctx, uint32_t framesInFlight) noexcept;
+        void destroyDeviceResources(uint32_t framesInFlight) noexcept;
     };
 
     RtViewportState& ensureViewportState(Viewport* vp, uint32_t frameIndex);
@@ -142,41 +109,29 @@ private:
                                             uint32_t                  w,
                                             uint32_t                  h);
 
-    [[nodiscard]] bool ensureRtScratch(RtViewportState& s, const RenderFrameContext& fc, VkDeviceSize bytes) noexcept;
+    [[nodiscard]] bool ensureRtScratch(RtViewportState&          s,
+                                       const RenderFrameContext& fc,
+                                       VkDeviceSize              bytes) noexcept;
 
 private:
-    // ============================================================
-    // Pipelines, descriptors, dispatch
-    // ============================================================
-
-    [[nodiscard]] bool initRayTracingResources(VkDescriptorSetLayout set0Layout, VkDescriptorSetLayout set1Layout);
-    [[nodiscard]] bool createRtPresentPipeline(VkRenderPass rp);
-    void destroyRtPresentPipeline() noexcept;
-
     void recordTraceRays(Viewport*                 vp,
                          Scene*                    scene,
                          const RenderFrameContext& fc,
                          VkDescriptorSet           set0FrameGlobals,
                          VkDescriptorSet           set1Materials);
 
-    // set=2 writing helpers
     void writeRtImageDescriptors(RtViewportState& s, uint32_t frameIndex) noexcept;
+    void writeRtPresentImageDescriptor(RtViewportState& s, uint32_t frameIndex, VkImageView view) noexcept;
     void writeRtTlasDescriptor(RtViewportState& s, uint32_t frameIndex) noexcept;
     void clearRtTlasDescriptor(RtViewportState& s, uint32_t frameIndex) noexcept;
 
 private:
-    // ============================================================
-    // Acceleration structures (BLAS per mesh, TLAS per frame)
-    // ============================================================
-
     struct RtBlas
     {
-        VkAccelerationStructureKHR as      = VK_NULL_HANDLE;
-        VkDeviceAddress            address = 0;
-
-        GpuBuffer asBuffer = {};
-
-        uint64_t buildKey = 0;
+        VkAccelerationStructureKHR as       = VK_NULL_HANDLE;
+        VkDeviceAddress            address  = 0;
+        GpuBuffer                  asBuffer = {};
+        uint64_t                   buildKey = 0;
     };
 
     struct RtTlasFrame
@@ -206,27 +161,23 @@ private:
     void destroyAllRtTlasFrames() noexcept;
 
 private:
-    // ============================================================
-    // Context / config
-    // ============================================================
-
     VulkanContext m_ctx            = {};
     uint32_t      m_framesInFlight = 1;
 
-    VkFormat  m_rtFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
-    VkSampler m_rtSampler = VK_NULL_HANDLE;
+    VkFormat  m_rtFormat       = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat  m_rtNormalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat  m_rtDepthFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat  m_rtAlbedoFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkSampler m_rtSampler      = VK_NULL_HANDLE;
 
 private:
-    // ============================================================
-    // RT-only descriptors (set=2) + pipeline/SBT + present pipeline
-    // ============================================================
-
-    DescriptorSetLayout m_rtSetLayout = {}; // set=2 layout
-    DescriptorPool      m_rtPool      = {}; // pool for set=2 sets
+    DescriptorSetLayout m_rtSetLayout = {};
+    DescriptorPool      m_rtPool      = {};
 
     vkrt::RtPipeline        m_rtPipeline = {};
     vkrt::RtSbt             m_rtSbt      = {};
     vkrt::RtPresentPipeline m_rtPresent  = {};
+    RtDenoiser              m_denoiser   = {};
 
     VkCommandPool m_rtUploadPool = VK_NULL_HANDLE;
 
@@ -236,10 +187,6 @@ private:
     std::array<RtTlasFrame, vkcfg::kMaxFramesInFlight> m_tlasFrames = {};
 
 private:
-    // ============================================================
-    // TLAS invalidation wiring (optional)
-    // ============================================================
-
     SysCounterPtr                m_tlasChangeCounter;
     SysMonitor                   m_tlasChangeMonitor;
     std::unordered_set<SysMesh*> m_linkedMeshes = {};
