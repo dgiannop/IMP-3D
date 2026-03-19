@@ -70,11 +70,8 @@ qt_add_executable(ApplicationUI
 # Output filename becomes Imp3d.exe (target name remains ApplicationUI)
 set_target_properties(ApplicationUI PROPERTIES OUTPUT_NAME "Imp3d")
 
-# ------------------------------------------------------------------
-# Convenience: copy the built exe to the root of the build directory:
+# Copy the built exe to the root of the build directory:
 #   <build>/Imp3d.exe
-# Works with Visual Studio multi-config generators.
-# ------------------------------------------------------------------
 add_custom_command(TARGET ApplicationUI POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:ApplicationUI>"
@@ -82,15 +79,6 @@ add_custom_command(TARGET ApplicationUI POST_BUILD
     COMMENT "Copying Imp3d.exe to build root"
 )
 
-# Optional: copy PDB too (if generated)
-add_custom_command(TARGET ApplicationUI POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_PDB_FILE:ApplicationUI>"
-        "${CMAKE_BINARY_DIR}/$<TARGET_PDB_FILE_NAME:ApplicationUI>"
-    COMMENT "Copying Imp3d.pdb to build root (if present)"
-)
-
-# Include directories for CoreLib
 target_include_directories(ApplicationUI PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/../CoreLib/Core/include

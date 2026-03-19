@@ -261,7 +261,6 @@ target_compile_features(CoreLib PUBLIC cxx_std_23)
 # Include directories
 target_include_directories(CoreLib PUBLIC
     ${glm_SOURCE_DIR}
-    ${glad_SOURCE_DIR}/include
     ${stb_SOURCE_DIR}
     ${ktx_SOURCE_DIR}/include
     ${ktx_BINARY_DIR}/include

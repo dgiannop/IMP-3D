@@ -328,7 +328,7 @@ void buildGpuLightsUBO(const LightingSettings&  settings,
                        const Scene*             scene,
                        GpuLightsUBO&            out) noexcept
 {
-    constexpr bool kLogSceneLights = true;
+    constexpr bool kLogSceneLights = false;
 
     // Zero everything; then explicitly reset the header fields for clarity.
     out          = {};

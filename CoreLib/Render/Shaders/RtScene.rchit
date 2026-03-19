@@ -69,7 +69,7 @@ hitAttributeEXT vec2 hitAttr;
 #define USE_AMBIENT_FILL      1
 
 // Optional: 1-bounce perfect reflections (no noise, no GI)
-#define ENABLE_SIMPLE_REFLECTIONS  1
+#define ENABLE_SIMPLE_REFLECTIONS  0
 #define MAX_RT_DEPTH               2    // 1=primary only, 2=primary + 1 bounce
 #define REFLECTION_RAY_MIN_T       0.001
 
