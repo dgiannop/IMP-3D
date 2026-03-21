@@ -22,19 +22,25 @@ layout(set = 0, binding = 0, std140) uniform CameraUBO
 
 layout(location = 0) rayPayloadEXT vec4 payload;
 
-// Number of samples per pixel: increase for quality, decrease for speed.
-#define SPP 1
+// 1 = no AA
+// 4 = stable 2x2 primary-ray AA
+#define SPP 4
 
-vec2 hash2(uvec2 p, uint s)
+vec2 sampleOffset(int s)
 {
-    uvec3 q = uvec3(p.x, p.y, s);
-    q = (q ^ (q >> 16u)) * 0x7feb352du;
-    q = (q ^ (q >> 15u)) * 0x846ca68bu;
-    q = (q ^ (q >> 16u));
-    uint mx = q.x ^ q.y ^ q.z;
-    uint my = (q.x * 1664525u) ^ q.y ^ q.z;
-    return vec2(float(mx) / 4294967295.0,
-                float(my) / 4294967295.0);
+#if SPP == 1
+    return vec2(0.5, 0.5);
+#elif SPP == 4
+    const vec2 offsets[4] = vec2[4](
+        vec2(0.25, 0.25),
+        vec2(0.75, 0.25),
+        vec2(0.25, 0.75),
+        vec2(0.75, 0.75)
+    );
+    return offsets[s];
+#else
+    return vec2(0.5, 0.5);
+#endif
 }
 
 void main()
@@ -46,12 +52,9 @@ void main()
 
     for (int s = 0; s < SPP; ++s)
     {
-        // Sub-pixel jitter: random offset within the pixel footprint.
-        // hash2 produces a different pair per sample index s, so each
-        // of the SPP rays covers a different part of the pixel.
-        vec2 jitter = hash2(uvec2(pix), uint(s)) - vec2(0.5);
+        vec2 sub = sampleOffset(s);
 
-        vec2 uv  = (vec2(pix) + vec2(0.5) + jitter) / vec2(size);
+        vec2 uv  = (vec2(pix) + sub) / vec2(size);
         vec2 ndc = uv * 2.0 - 1.0;
 
         vec4 p0h = uCamera.invViewProj * vec4(ndc, 0.0, 1.0);
@@ -79,9 +82,5 @@ void main()
         accumulated += payload;
     }
 
-    // Average all samples and write to the radiance AOV.
-    // The hit shader still writes normals/depth/albedo on each ray —
-    // the last sample wins for those AOVs which is fine since all
-    // samples hit roughly the same surface point.
     imageStore(u_outRadiance, pix, accumulated / float(SPP));
 }

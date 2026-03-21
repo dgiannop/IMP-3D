@@ -681,7 +681,7 @@ bool HeMesh::vertValid(VertId v) const noexcept
 {
     return m_data &&
            v >= 0 &&
-           v < static_cast<VertId>(m_data->verts.capacity()) &&
+           v < static_cast<VertId>(m_data->verts.slot_count()) &&
            !m_data->verts[v].removed;
 }
 
@@ -689,7 +689,7 @@ bool HeMesh::edgeValid(EdgeId e) const noexcept
 {
     return m_data &&
            e >= 0 &&
-           e < static_cast<EdgeId>(m_data->edges.capacity()) &&
+           e < static_cast<EdgeId>(m_data->edges.slot_count()) &&
            !m_data->edges[e].removed;
 }
 
@@ -697,7 +697,7 @@ bool HeMesh::polyValid(PolyId p) const noexcept
 {
     return m_data &&
            p >= 0 &&
-           p < static_cast<PolyId>(m_data->polys.capacity()) &&
+           p < static_cast<PolyId>(m_data->polys.slot_count()) &&
            !m_data->polys[p].removed;
 }
 
@@ -705,7 +705,7 @@ bool HeMesh::loopValid(LoopId l) const noexcept
 {
     return m_data &&
            l >= 0 &&
-           l < static_cast<LoopId>(m_data->loops.capacity()) &&
+           l < static_cast<LoopId>(m_data->loops.slot_count()) &&
            !m_data->loops[l].removed;
 }
 
@@ -955,7 +955,7 @@ void HeMesh::removeUnusedEdges()
     if (!m_data)
         return;
 
-    const int32_t cap = static_cast<int32_t>(m_data->edges.capacity());
+    const int32_t cap = static_cast<int32_t>(m_data->edges.slot_count());
 
     for (EdgeId e = 0; e < cap; ++e)
     {
@@ -978,7 +978,7 @@ void HeMesh::removeUnusedEdges()
                 LoopId found = kInvalidLoop;
 
                 // Walk the loop storage (capacity scan); cheap enough for tools.
-                const int32_t lcap = static_cast<int32_t>(m_data->loops.capacity());
+                const int32_t lcap = static_cast<int32_t>(m_data->loops.slot_count());
                 for (LoopId li = 0; li < lcap; ++li)
                 {
                     if (!loopValid(li))
@@ -1012,7 +1012,7 @@ void HeMesh::removeIsolatedVerts()
     if (!m_data)
         return;
 
-    const int32_t cap = static_cast<int32_t>(m_data->verts.capacity());
+    const int32_t cap = static_cast<int32_t>(m_data->verts.slot_count());
 
     for (VertId v = 0; v < cap; ++v)
     {
@@ -1931,10 +1931,10 @@ void HeMesh::debugPrint() const
     cerr << "         HEMesh Dump         \n";
     cerr << "=============================\n";
 
-    auto capVerts = m_data->verts.capacity();
-    auto capEdges = m_data->edges.capacity();
-    auto capPolys = m_data->polys.capacity();
-    auto capLoops = m_data->loops.capacity();
+    auto capVerts = m_data->verts.slot_count();
+    auto capEdges = m_data->edges.slot_count();
+    auto capPolys = m_data->polys.slot_count();
+    auto capLoops = m_data->loops.slot_count();
 
     cerr << "Verts: " << vertCount() << " (capacity: " << capVerts << ")\n";
     cerr << "Edges: " << edgeCount() << " (capacity: " << capEdges << ")\n";
@@ -2023,10 +2023,10 @@ bool HeMesh::validate() const
     cerr << "=============================\n";
 
     // Use capacities, not counts, to scan all possible IDs.
-    const int vSlots = static_cast<int>(m_data->verts.capacity());
-    const int eSlots = static_cast<int>(m_data->edges.capacity());
-    const int pSlots = static_cast<int>(m_data->polys.capacity());
-    const int lSlots = static_cast<int>(m_data->loops.capacity());
+    const int vSlots = static_cast<int>(m_data->verts.slot_count());
+    const int eSlots = static_cast<int>(m_data->edges.slot_count());
+    const int pSlots = static_cast<int>(m_data->polys.slot_count());
+    const int lSlots = static_cast<int>(m_data->loops.slot_count());
 
     int liveVerts = 0, deadVerts = 0;
     int liveEdges = 0, deadEdges = 0;

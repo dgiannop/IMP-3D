@@ -91,7 +91,7 @@ uint32_t SysMesh::num_verts() const noexcept
 
 uint32_t SysMesh::vert_buffer_size() const noexcept
 {
-    return data->verts.capacity();
+    return data->verts.slot_count();
 }
 
 int32_t SysMesh::create_vert(const glm::vec3& pos) noexcept
@@ -405,7 +405,7 @@ uint32_t SysMesh::num_polys() const noexcept
 
 uint32_t SysMesh::poly_buffer_size() const noexcept
 {
-    return data->polys.capacity();
+    return data->polys.slot_count();
 }
 
 int32_t SysMesh::create_poly(const SysPolyVerts& verts, uint32_t material_id) noexcept
@@ -415,13 +415,13 @@ int32_t SysMesh::create_poly(const SysPolyVerts& verts, uint32_t material_id) no
     new_poly.material_id     = material_id;
     const int32_t poly_index = data->polys.insert(new_poly);
 
-    if (poly_index == data->polys.capacity() - 1)
+    if (poly_index == data->polys.slot_count() - 1)
     {
         for (int32_t i = 0; i < data->mesh_maps.size(); ++i)
         {
             if (data->mesh_maps[i])
             {
-                data->mesh_maps[i]->polys.resize(data->polys.capacity());
+                data->mesh_maps[i]->polys.resize(data->polys.slot_count());
             }
         }
     }
@@ -606,7 +606,7 @@ int32_t SysMesh::map_create(int32_t id, int32_t type, int32_t dim) noexcept
     new_map->dim  = dim;
 
     // Make the number of polygons in the map match the mesh.
-    new_map->polys.resize(data->polys.capacity(), SysMapPoly());
+    new_map->polys.resize(data->polys.slot_count(), SysMapPoly());
 
     int32_t index = data->mesh_maps.insert(new_map);
 
