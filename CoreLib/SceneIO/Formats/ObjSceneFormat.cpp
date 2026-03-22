@@ -17,6 +17,16 @@
 #include "SceneMesh.hpp"
 #include "SceneMtlUtils.hpp"
 
+// ------------------------------------------------------------
+// Heuristic initial reserve for OBJ files.
+// OBJ has no header counts so we can't know exact sizes upfront.
+// These values eliminate most incremental reallocations for
+// small-to-medium meshes at negligible memory cost.
+// For large meshes (100k+ verts) the vectors will grow a few
+// times — unavoidable without a pre-pass.
+// ------------------------------------------------------------
+static constexpr int32_t kObjReserveVerts = 2048;
+
 bool ObjSceneFormat::load(Scene*                       scene,
                           const std::filesystem::path& filePath,
                           const LoadOptions&           options,
@@ -28,7 +38,7 @@ bool ObjSceneFormat::load(Scene*                       scene,
     if (scene == nullptr)
     {
         report.error("SceneFormatOBJ::load: scene is null");
-        report.status = SceneIOStatus::InvalidScene; // adjust if you don't have this enum
+        report.status = SceneIOStatus::InvalidScene;
         return false;
     }
 
@@ -70,29 +80,45 @@ bool ObjSceneFormat::load(Scene*                       scene,
     std::vector<glm::vec3> normals;
     std::vector<glm::vec2> texcoords;
 
+    // Heuristic pre-reserve for global attribute arrays.
+    positions.reserve(kObjReserveVerts);
+    normals.reserve(kObjReserveVerts);
+    texcoords.reserve(kObjReserveVerts);
+
     std::string line;
     std::string matlib;
 
-    std::uint32_t matIndex        = 0;
-    int           normMap         = -1;
-    int           texMap          = -1;
-    bool          seenFirstObject = false;
+    std::uint32_t matIndex = 0;
+    int           normMap  = -1;
+    int           texMap   = -1;
 
-    // Fallback mesh in case "o" never appears
-    SceneMesh* sceneMesh   = scene->createSceneMesh("Default");
-    SysMesh*   currentMesh = sceneMesh->sysMesh();
-    normMap                = currentMesh->map_create(0, 0, 3);
-    texMap                 = currentMesh->map_create(1, 0, 2);
+    // Default mesh is created lazily — only when geometry is encountered
+    // without a preceding "o" block, avoiding an empty orphan SceneMesh.
+    SceneMesh* sceneMesh   = nullptr;
+    SysMesh*   currentMesh = nullptr;
 
     std::unordered_map<int, int> globalToLocal;
+
+    // Ensures a current mesh exists. Called before any geometry write.
+    // If no "o" block was seen, creates a "Default" mesh on first use.
+    auto ensureDefaultMesh = [&]() {
+        if (currentMesh)
+            return;
+        sceneMesh   = scene->createSceneMesh("Default");
+        currentMesh = sceneMesh->sysMesh();
+        currentMesh->reserve(kObjReserveVerts);
+        normMap = currentMesh->map_create(/*MESH_MAP_NORMALS*/ 0, 0, 3);
+        texMap  = currentMesh->map_create(/*MESH_MAP_UV0*/ 1, 0, 2);
+        globalToLocal.clear();
+    };
 
     auto startNewMesh = [&](const std::string& name) {
         sceneMesh   = scene->createSceneMesh(name);
         currentMesh = sceneMesh->sysMesh();
-        normMap     = currentMesh->map_create(0, 0, 3);
-        texMap      = currentMesh->map_create(1, 0, 2);
+        currentMesh->reserve(kObjReserveVerts);
+        normMap = currentMesh->map_create(/*MESH_MAP_NORMALS*/ 0, 0, 3);
+        texMap  = currentMesh->map_create(/*MESH_MAP_UV0*/ 1, 0, 2);
         globalToLocal.clear();
-        seenFirstObject = true;
     };
 
     while (std::getline(file, line))
@@ -106,13 +132,10 @@ bool ObjSceneFormat::load(Scene*                       scene,
 
         if (prefix == "mtllib")
         {
-            // Allow spaces in mtllib
+            // Allow spaces in mtllib filename
             std::getline(iss >> std::ws, matlib);
-
-            // trim trailing CR (Windows line endings)
             if (!matlib.empty() && matlib.back() == '\r')
                 matlib.pop_back();
-            // iss >> matlib; //old
         }
         else if (prefix == "usemtl")
         {
@@ -146,11 +169,8 @@ bool ObjSceneFormat::load(Scene*                       scene,
         }
         else if (prefix == "f")
         {
-            // if (!seenFirstObject && sceneMesh->name() == "Default")
-            // {
-            //     // Optional: warning if no "o" blocks
-            //     // report.warning("OBJ file does not use 'o' object blocks. Geometry will be loaded into 'Default'.");
-            // }
+            // Ensure we have a mesh to write into even if no "o" was seen.
+            ensureDefaultMesh();
 
             struct Idx
             {
@@ -254,13 +274,9 @@ bool ObjSceneFormat::load(Scene*                       scene,
             {
                 const int poly = currentMesh->create_poly(pv, matIndex);
                 if (pn.size() == pv.size())
-                {
                     currentMesh->map_create_poly(normMap, poly, pn);
-                }
                 if (pt.size() == pv.size())
-                {
                     currentMesh->map_create_poly(texMap, poly, pt);
-                }
             }
         }
     }
@@ -274,13 +290,6 @@ bool ObjSceneFormat::load(Scene*                       scene,
     {
         const std::filesystem::path mtlPath = filePath.parent_path() / matlib;
         loadMaterialLibrary(scene, mtlPath);
-        // If loadMaterialLibrary can fail and return bool, you can hook it into report here.
-    }
-
-    if (report.status == SceneIOStatus::Ok)
-    {
-        // Optionally add info message
-        // report.info("Successfully loaded OBJ: " + filePath.string());
     }
 
     for (auto m : scene->meshes())
@@ -290,6 +299,7 @@ bool ObjSceneFormat::load(Scene*                       scene,
         std::cerr << "Num polys: = " << m->num_polys() << std::endl;
         std::cerr << "------------------------------------------\n";
     }
+
     return true;
 }
 
@@ -297,11 +307,7 @@ bool ObjSceneFormat::loadMaterialLibrary(Scene* scene, const std::filesystem::pa
 {
     std::ifstream file(filePath);
     if (!file)
-    {
-        // Add this to SceneIOReport later
-        // std::cerr << "Could not open material file: " << filePath << "\n";
         return false;
-    }
 
     MaterialHandler* materialHandler = scene->materialHandler();
     if (materialHandler == nullptr)
@@ -309,14 +315,12 @@ bool ObjSceneFormat::loadMaterialLibrary(Scene* scene, const std::filesystem::pa
 
     int         currentIndex = -1;
     std::string line;
-    MtlFields   cur{}; // assuming default-constructible
+    MtlFields   cur{};
 
     auto commit = [&]() {
         if (currentIndex < 0)
             return;
-
         Material& dst = materialHandler->material(currentIndex);
-        // Fill PBR + textures from parsed MTL fields
         fromMTL(scene, dst, cur, filePath);
     };
 
@@ -331,17 +335,14 @@ bool ObjSceneFormat::loadMaterialLibrary(Scene* scene, const std::filesystem::pa
 
         if (kw == "newmtl")
         {
-            // Finish previous material
             commit();
 
             std::string name;
             iss >> name;
 
-            // Create or re-use by name (your handler enforces uniqueness + defaults)
             currentIndex = materialHandler->createMaterial(name);
-
-            cur      = MtlFields{};
-            cur.name = name;
+            cur          = MtlFields{};
+            cur.name     = name;
         }
         else if (currentIndex >= 0)
         {
@@ -378,7 +379,6 @@ bool ObjSceneFormat::loadMaterialLibrary(Scene* scene, const std::filesystem::pa
         }
     }
 
-    // Commit the last material
     commit();
     return true;
 }
@@ -401,8 +401,7 @@ bool ObjSceneFormat::save(const Scene*                 scene,
     std::ofstream out(filePath);
     if (!out)
     {
-        std::string msg = "SceneFormatOBJ::save: failed to open OBJ file for writing: " + filePath.string();
-        report.error(msg);
+        report.error("SceneFormatOBJ::save: failed to open OBJ file for writing: " + filePath.string());
         report.status = SceneIOStatus::WriteError;
         return false;
     }
@@ -426,7 +425,7 @@ bool ObjSceneFormat::save(const Scene*                 scene,
         return false;
     }
 
-    const auto& materials = materialHandler->materials(); // vector<Material or SceneMaterial>
+    const auto& materials = materialHandler->materials();
 
     // ---------------------------------------------------------------------
     // Iterate over scene meshes
@@ -437,15 +436,12 @@ bool ObjSceneFormat::save(const Scene*                 scene,
 
     int unnamedCounter = 1;
 
-    const auto& sceneMeshes = scene->sceneMeshes(); // whatever container of SceneMesh*
+    const auto& sceneMeshes = scene->sceneMeshes();
 
     for (const SceneMesh* sm : sceneMeshes)
     {
         if (!sm)
             continue;
-
-        // If you later want "selectedOnly", you can check here:
-        // if (options.selectedOnly && !sMesh->isSelected()) continue;
 
         const SysMesh* mesh = sm->sysMesh();
         if (!mesh)
@@ -458,8 +454,8 @@ bool ObjSceneFormat::save(const Scene*                 scene,
         out << "# OriginalName: " << name << "\n";
         out << "o " << sanitizeName(name) << "\n";
 
-        const int normalMap = mesh->map_find(0); // consistent with load(): 0 = normal map
-        const int texMap    = mesh->map_find(1); // 1 = texcoord map
+        const int normalMap = mesh->map_find(/*MESH_MAP_NORMALS*/ 0);
+        const int texMap    = mesh->map_find(/*MESH_MAP_UV0*/ 1);
 
         // -----------------------------------------------------------------
         // Write vertex positions (v)
@@ -513,13 +509,11 @@ bool ObjSceneFormat::save(const Scene*                 scene,
         }
 
         // -----------------------------------------------------------------
-        // Emit vt / vn in face-varying domain and build remaps
-        // mapVertId -> OBJ index (1-based)
+        // Emit vt / vn and build remaps (mapVertId -> OBJ 1-based index)
         // -----------------------------------------------------------------
-        std::unordered_map<int32_t, int32_t> texcoordRemap; // mapVertId -> vt index
-        std::unordered_map<int32_t, int32_t> normalRemap;   // mapVertId -> vn index
+        std::unordered_map<int32_t, int32_t> texcoordRemap;
+        std::unordered_map<int32_t, int32_t> normalRemap;
 
-        // vt
         if (texMap != -1)
         {
             int written = 0;
@@ -533,7 +527,6 @@ bool ObjSceneFormat::save(const Scene*                 scene,
             texBase += written;
         }
 
-        // vn
         if (normalMap != -1)
         {
             int written = 0;
@@ -578,23 +571,19 @@ bool ObjSceneFormat::save(const Scene*                 scene,
                 out << "f";
                 for (size_t i = 0; i < verts.size(); ++i)
                 {
-                    const int vIdx = vertBase + verts[i]; // OBJ vertex index (1-based)
+                    const int vIdx = vertBase + verts[i];
 
                     if (hasUV && hasN)
                     {
-                        const int vtIdx = texcoordRemap.at(pt[i]);
-                        const int vnIdx = normalRemap.at(pn[i]);
-                        out << " " << vIdx << "/" << vtIdx << "/" << vnIdx;
+                        out << " " << vIdx << "/" << texcoordRemap.at(pt[i]) << "/" << normalRemap.at(pn[i]);
                     }
                     else if (hasUV)
                     {
-                        const int vtIdx = texcoordRemap.at(pt[i]);
-                        out << " " << vIdx << "/" << vtIdx;
+                        out << " " << vIdx << "/" << texcoordRemap.at(pt[i]);
                     }
                     else if (hasN)
                     {
-                        const int vnIdx = normalRemap.at(pn[i]);
-                        out << " " << vIdx << "//" << vnIdx;
+                        out << " " << vIdx << "//" << normalRemap.at(pn[i]);
                     }
                     else
                     {
@@ -605,7 +594,6 @@ bool ObjSceneFormat::save(const Scene*                 scene,
             }
         }
 
-        // Bump vertex base for next object
         vertBase += mesh->num_verts();
     }
 
@@ -618,27 +606,23 @@ bool ObjSceneFormat::save(const Scene*                 scene,
     }
 
     // ---------------------------------------------------------------------
-    // Save MTL library next to OBJ
+    // Save MTL library
     // ---------------------------------------------------------------------
     if (!saveMaterialLibrary(scene, mtlPath))
     {
-        // We keep OBJ as "saved" but flag that MTL failed.
         if (report.status == SceneIOStatus::Ok)
             report.status = SceneIOStatus::WriteError;
 
         report.error("SceneFormatOBJ::save: failed to write MTL file: " + mtlPath.string());
-        return false; // or 'true' if you want OBJ-only to count as success
+        return false;
     }
-
-    if (report.status == SceneIOStatus::Ok)
-        report.status = SceneIOStatus::Ok; // explicitly
 
     return true;
 }
 
 bool ObjSceneFormat::saveMaterialLibrary(const Scene* scene, const std::filesystem::path& filePath)
 {
-    const auto&   materials = scene->materialHandler()->materials(); // vector<SceneMaterial>
+    const auto&   materials = scene->materialHandler()->materials();
     std::ofstream out(filePath);
     if (!out)
     {
@@ -663,7 +647,6 @@ bool ObjSceneFormat::saveMaterialLibrary(const Scene* scene, const std::filesyst
         out << "Ni " << mtl.Ni << "\n";
         out << "d " << mtl.d << "\n";
 
-        // Relative, sanitized paths
         const auto dir = filePath.parent_path();
         if (!mtl.map_Kd.empty())
             out << "map_Kd " << PathUtil::relativeSanitized(mtl.map_Kd, dir) << "\n";
@@ -671,7 +654,6 @@ bool ObjSceneFormat::saveMaterialLibrary(const Scene* scene, const std::filesyst
             out << "map_bump " << PathUtil::relativeSanitized(mtl.map_bump, dir) << "\n";
         if (!mtl.map_Ke.empty())
             out << "map_Ke " << PathUtil::relativeSanitized(mtl.map_Ke, dir) << "\n";
-        // Optional: map_Ks/map_Ka/map_Tr
 
         out << "\n";
     }
