@@ -1692,19 +1692,38 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
 void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& fc) noexcept
 {
     if (!sc || !m_qvk || !m_device || !sc->swapchain || !fc.frame)
+    {
+        // Can't safely advance frameIndex without a valid sc, but if sc is
+        // valid we must always advance to avoid reusing a busy frame slot.
+        if (sc)
+            sc->frameIndex = (sc->frameIndex + 1) % m_framesInFlight;
         return;
+    }
 
     QVulkanDeviceFunctions* df = devFns(m_qvk, m_device);
-    if (!df)
+    if (!df || !m_vkQueuePresentKHR)
+    {
+        sc->frameIndex = (sc->frameIndex + 1) % m_framesInFlight;
         return;
+    }
 
-    if (!m_vkQueuePresentKHR)
+    // End command buffer recording. On failure we still submit nothing but
+    // must advance frameIndex and reset the fence so the slot is reusable.
+    const VkResult endResult = df->vkEndCommandBuffer(fc.frame->cmd);
+    if (endResult != VK_SUCCESS)
+    {
+        std::cerr << "VulkanBackend::endFrame: vkEndCommandBuffer failed (" << endResult << ")\n";
+        // Reset fence so next wait on this slot doesn't block forever.
+        df->vkResetFences(m_device, 1, &fc.frame->fence);
+        sc->frameIndex    = (sc->frameIndex + 1) % m_framesInFlight;
+        sc->needsRecreate = true;
         return;
+    }
 
-    if (df->vkEndCommandBuffer(fc.frame->cmd) != VK_SUCCESS)
-        return;
-
-    // Reset the fence ONLY when we are actually going to submit work that will signal it.
+    // Reset fence immediately before submit — the only point where we know
+    // we are definitely going to signal it. Never reset it earlier (e.g. in
+    // beginFrame) because an early return there would leave the fence
+    // permanently unsignaled and the next wait would block forever.
     df->vkResetFences(m_device, 1, &fc.frame->fence);
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1719,8 +1738,20 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &fc.frame->renderFinished;
 
-    if (df->vkQueueSubmit(m_graphicsQueue, 1, &si, fc.frame->fence) != VK_SUCCESS)
+    const VkResult submitResult = df->vkQueueSubmit(m_graphicsQueue, 1, &si, fc.frame->fence);
+    if (submitResult != VK_SUCCESS)
+    {
+        std::cerr << "VulkanBackend::endFrame: vkQueueSubmit failed (" << submitResult << ")\n";
+        // Fence was reset but never signaled — re-signal it manually so the
+        // next vkWaitForFences on this slot returns immediately.
+        // We do this by submitting an empty batch that just signals the fence.
+        VkSubmitInfo empty = {};
+        empty.sType        = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        df->vkQueueSubmit(m_graphicsQueue, 0, nullptr, fc.frame->fence);
+        sc->frameIndex    = (sc->frameIndex + 1) % m_framesInFlight;
+        sc->needsRecreate = true;
         return;
+    }
 
     VkPresentInfoKHR pi   = {};
     pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -1730,11 +1761,16 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
     pi.pSwapchains        = &sc->swapchain;
     pi.pImageIndices      = &fc.imageIndex;
 
-    VkResult pres = m_vkQueuePresentKHR(m_presentQueue, &pi);
+    const VkResult presResult = m_vkQueuePresentKHR(m_presentQueue, &pi);
 
-    if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR)
+    if (presResult == VK_ERROR_OUT_OF_DATE_KHR || presResult == VK_SUBOPTIMAL_KHR)
         sc->needsRecreate = true;
+    else if (presResult != VK_SUCCESS)
+        std::cerr << "VulkanBackend::endFrame: vkQueuePresentKHR failed (" << presResult << ")\n";
 
+    // ALWAYS advance — unconditionally, after every possible path.
+    // This is the single most important invariant in the frame loop:
+    // frameIndex must advance exactly once per beginFrame/endFrame pair.
     sc->frameIndex = (sc->frameIndex + 1) % m_framesInFlight;
 }
 

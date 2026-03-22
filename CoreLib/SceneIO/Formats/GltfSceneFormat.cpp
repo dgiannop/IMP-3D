@@ -112,6 +112,30 @@ namespace
     }
 
     // ------------------------------------------------------------
+    // Pre-pass: count total unique vertices across all primitives
+    // of a glTF mesh so we can call SysMesh::reserve() once before
+    // any geometry is created, avoiding incremental reallocations.
+    // ------------------------------------------------------------
+    static int32_t countMeshVertices(const tinygltf::Model& model,
+                                     const tinygltf::Mesh&  gm)
+    {
+        int32_t total = 0;
+        for (const tinygltf::Primitive& prim : gm.primitives)
+        {
+            auto itPos = prim.attributes.find("POSITION");
+            if (itPos == prim.attributes.end())
+                continue;
+
+            const int accIdx = itPos->second;
+            if (accIdx < 0 || accIdx >= static_cast<int>(model.accessors.size()))
+                continue;
+
+            total += static_cast<int32_t>(model.accessors[accIdx].count);
+        }
+        return total;
+    }
+
+    // ------------------------------------------------------------
     // TinyGLTF image loader override:
     // Store encoded bytes (PNG/JPG/KTX2/etc) and do NOT stb-decode.
     // ------------------------------------------------------------
@@ -626,15 +650,12 @@ namespace
             l.enabled          = true;
 
             {
-                // Keep “normal” editor-style intensities as-is (e.g. 1..500).
-                // Only rescale when glTF gives photometric-looking values (thousands+).
-                constexpr float kPhotometricThreshold       = 2000.0f; // tweak: 1000..5000
-                constexpr float kGltfToEditorIntensityScale = 0.0005f; // used only above threshold
-                constexpr float kMaxImportedIntensity       = 50.0f;   // final safety cap (editor units)
+                constexpr float kPhotometricThreshold       = 2000.0f;
+                constexpr float kGltfToEditorIntensityScale = 0.0005f;
+                constexpr float kMaxImportedIntensity       = 50.0f;
 
-                const float srcIntensity = d.intensity;
-
-                float finalIntensity = srcIntensity;
+                const float srcIntensity   = d.intensity;
+                float       finalIntensity = srcIntensity;
 
                 if (srcIntensity > kPhotometricThreshold)
                 {
@@ -667,8 +688,6 @@ namespace
             if (sl)
             {
                 ++created;
-
-                // If you want to log the stable LightId, SceneLight exposes it:
                 report.info(
                     "glTF: Node[" + std::to_string(nodeIdx) + "] '" + nodeName +
                     "' references Light[" + std::to_string(li) +
@@ -938,7 +957,6 @@ namespace
                 if (mrId == kInvalidImageId)
                 {
                     // dst.mraoTexture(aoId);
-                    // report.warning("glTF: material '" + dst.name() + "' has occlusionTexture but no metallicRoughnessTexture; using AO texture in MRAO slot.");
                 }
                 else if (gm.occlusionTexture.index != pbr.metallicRoughnessTexture.index)
                 {
@@ -1026,9 +1044,8 @@ bool GltfSceneFormat::load(Scene*                       scene,
     std::string        err;
     std::string        warn;
 
-    // IMPORTANT:
     // Override TinyGLTF image decoding so stb isn't used (stb can't decode KTX2).
-    // We store encoded image bytes and decode ourselves via ImageHandler (stb + libktx).
+    // We store encoded image bytes and decode ourselves via ImageHandler.
     loader.SetImageLoader(storeEncodedImageLoader, nullptr);
 
     bool ok = false;
@@ -1109,14 +1126,13 @@ bool GltfSceneFormat::load(Scene*                       scene,
     std::vector<uint32_t> matCache;
     GltfTextureCache      texCache;
 
+    // If you flip images at load time (we do: flipY=true), usually you do NOT flip UVs.
+    const bool flipUvY = false;
+
     // ---------------------------------------------------------
     // Import nodes that reference meshes
     // ---------------------------------------------------------
     int importedMeshCount = 0;
-
-    // If you flip images at load time (we do: flipY=true), usually you do NOT flip UVs.
-    // If textures are upside-down, set this to true.
-    const bool flipUvY = false;
 
     for (size_t nodeIdx = 0; nodeIdx < model.nodes.size(); ++nodeIdx)
     {
@@ -1146,9 +1162,19 @@ bool GltfSceneFormat::load(Scene*                       scene,
             return false;
         }
 
-        // Create face-varying maps (match your OBJ loader convention)
-        const int normMap = mesh->map_create(0, 0, 3);
-        const int texMap  = mesh->map_create(1, 0, 2);
+        // Reserve before any geometry is created. glTF gives us exact vertex counts
+        // from the accessors, so we can pre-allocate all internal buffers in one shot
+        // and avoid incremental reallocations during the import loop below.
+        {
+            const int32_t vertCount = countMeshVertices(model, gm);
+            if (vertCount > 0)
+                mesh->reserve(vertCount);
+        }
+
+        // Create face-varying maps (match OBJ loader convention).
+        // map_create() is idempotent and returns existing slots if already present.
+        const int normMap = mesh->map_create(/*MESH_MAP_NORMALS*/ 0, 0, 3);
+        const int texMap  = mesh->map_create(/*MESH_MAP_UV0*/ 1, 0, 2);
 
         // Bake node transform into vertices/normals
         const glm::mat4 M = world[nodeIdx];
@@ -1283,7 +1309,7 @@ bool GltfSceneFormat::load(Scene*                       scene,
                 return glm::normalize(v);
             };
 
-            // Emit triangles as polys, attach face-varying normal/uv (if present)
+            // Emit triangles as polys, attach face-varying normal/uv
             for (size_t t = 0; t < tri.size(); t += 3u)
             {
                 const uint32_t i0 = tri[t + 0u];

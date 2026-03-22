@@ -15,10 +15,22 @@
 #include "SysHistoryActions.hpp"
 #include "SysMeshData.hpp"
 
+// --------------------------------------------------------------------------
+// Construction / destruction
+// --------------------------------------------------------------------------
+
 SysMesh::SysMesh() : data{std::make_shared<SysMeshData>()}
 {
     data->history_busy = false;
     data->history      = std::make_unique<History>(this, &data->history_busy);
+
+    // Create the two permanent default maps under a busy guard so they never
+    // appear in the undo stack. Every SysMesh always has these — tools can
+    // rely on MESH_MAP_NORMALS (0) and MESH_MAP_UV0 (1) without map_find().
+    data->history_busy = true;
+    map_create(MESH_MAP_NORMALS, /*type=*/0, /*dim=*/3); // slot 0 — per-vertex normals
+    map_create(MESH_MAP_UV0, /*type=*/1, /*dim=*/2);     // slot 1 — UV channel 0
+    data->history_busy = false;
 }
 
 SysMesh::SysMesh(SysMesh&& other) noexcept
@@ -37,30 +49,72 @@ SysMesh::~SysMesh() = default;
 
 void SysMesh::clear()
 {
-    // Geometry and topology
+    // Geometry and topology.
     data->verts.clear();
     data->polys.clear();
 
-    // Maps
-    data->mesh_maps.clear();
+    // Remove all non-default maps, then empty the default slots.
+    // Default maps (MESH_MAP_NORMALS, MESH_MAP_UV0) are permanent — they
+    // survive clear() so tools never need to check for their existence.
+    for (int32_t i = data->mesh_maps.slot_count() - 1; i > MESH_MAP_UV0; --i)
+    {
+        if (data->mesh_maps.is_valid(i))
+            data->mesh_maps.remove(i);
+    }
+    for (int32_t i = MESH_MAP_NORMALS; i <= MESH_MAP_UV0; ++i)
+    {
+        if (data->mesh_maps.is_valid(i) && data->mesh_maps[i])
+        {
+            data->mesh_maps[i]->verts.clear();
+            data->mesh_maps[i]->polys.clear();
+            data->mesh_maps[i]->selection.clear();
+        }
+    }
 
-    // Selections
+    // Selections.
     data->edge_selection.clear();
     data->edge_selection_set.clear();
     data->vert_selection.clear();
     data->poly_selection.clear();
 
-    // History
+    // History.
     if (data->history)
-    {
-        // Safe and fast way to release all undoable actions
         data->history->freeze();
-    }
 
-    // Invalidate counters
-    data->topology_counter->change(); // mesh structure changed
-    data->deform_counter->change();   // vertex positions cleared
-    data->select_counter->change();   // selections cleared
+    // Invalidate counters.
+    data->topology_counter->change();
+    data->deform_counter->change();
+    data->select_counter->change();
+}
+
+// --------------------------------------------------------------------------
+// reserve() — call before bulk import with the expected vertex count.
+// Polygon, edge, and selection buffer sizes are derived automatically.
+// --------------------------------------------------------------------------
+void SysMesh::reserve(int32_t vert_count) noexcept
+{
+    // Euler estimate: for a closed quad mesh F ≈ V, for tris F ≈ 2V.
+    // vert_count is a safe upper bound for polys in the quad case.
+    const int32_t poly_estimate = vert_count;
+    const int32_t edge_estimate = vert_count * 2;
+
+    data->verts.reserve(vert_count);
+    data->polys.reserve(poly_estimate);
+
+    data->vert_selection.reserve(vert_count);
+    data->poly_selection.reserve(poly_estimate);
+    data->edge_selection.reserve(edge_estimate);
+    // data->edge_selection_set.reserve(edge_estimate); //TODO
+
+    // Reserve the two default maps — always present so safe to access directly.
+    for (int32_t i = MESH_MAP_NORMALS; i <= MESH_MAP_UV0; ++i)
+    {
+        if (data->mesh_maps.is_valid(i) && data->mesh_maps[i])
+        {
+            data->mesh_maps[i]->verts.reserve(vert_count);
+            data->mesh_maps[i]->polys.reserve(poly_estimate);
+        }
+    }
 }
 
 History* SysMesh::history() const noexcept
@@ -70,26 +124,26 @@ History* SysMesh::history() const noexcept
 
 std::unique_ptr<History> SysMesh::release_history()
 {
-    // Move out the current history (transaction so far)
     std::unique_ptr<History> h = std::move(data->history);
-
-    // Replace with a fresh one wired to the same busy guard
-    data->history = std::make_unique<History>(this, &data->history_busy);
-
+    data->history              = std::make_unique<History>(this, &data->history_busy);
     return h;
 }
+
+// --------------------------------------------------------------------------
+// Vertices
+// --------------------------------------------------------------------------
 
 const std::vector<int32_t>& SysMesh::all_verts() const noexcept
 {
     return data->verts.valid_indices();
 }
 
-uint32_t SysMesh::num_verts() const noexcept
+int32_t SysMesh::num_verts() const noexcept
 {
     return data->verts.size();
 }
 
-uint32_t SysMesh::vert_buffer_size() const noexcept
+int32_t SysMesh::vert_buffer_size() const noexcept
 {
     return data->verts.slot_count();
 }
@@ -97,10 +151,9 @@ uint32_t SysMesh::vert_buffer_size() const noexcept
 int32_t SysMesh::create_vert(const glm::vec3& pos) noexcept
 {
     SysVert new_vert{};
-    new_vert.pos         = pos;
-    const int vert_index = data->verts.insert(new_vert);
+    new_vert.pos             = pos;
+    const int32_t vert_index = data->verts.insert(new_vert);
 
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo        = std::make_unique<UndoCreateVertex>();
@@ -109,7 +162,6 @@ int32_t SysMesh::create_vert(const glm::vec3& pos) noexcept
         data->history->insert(std::move(undo));
     }
 
-    // Increment change counter.
     data->topology_counter->change();
     return vert_index;
 }
@@ -118,9 +170,7 @@ int32_t SysMesh::clone_vert(int32_t vert_index, const glm::vec3& pos) noexcept
 {
     const int32_t new_vert = create_vert(pos);
     if (data->verts[vert_index].selected)
-    {
         select_vert(new_vert, true);
-    }
     return new_vert;
 }
 
@@ -129,7 +179,6 @@ void SysMesh::remove_vert(int32_t vert_index) noexcept
     assert(vert_valid(vert_index) && "Invalid vertex index!");
     assert(!data->verts[vert_index].removed && "Vertex has already been removed!");
 
-    // Remove selection so history can record it consistently.
     select_vert(vert_index, false);
 
     // ---------------------------------------------------------
@@ -150,22 +199,19 @@ void SysMesh::remove_vert(int32_t vert_index) noexcept
             assert(poly_valid(poly_index) && "Affected poly is not valid!");
             assert(!data->polys[poly_index].removed);
 
-            // Capture base polygon (full snapshot)
             SysFullPoly full_poly;
             full_poly.index = poly_index;
             full_poly.data  = data->polys[poly_index];
 
-            // If SysPoly stores verts in a SmallList, ensure we snapshot the verts too.
             full_poly.data.verts.clear();
             for (int32_t v : data->polys[poly_index].verts)
                 full_poly.data.verts.push_back(v);
 
             undo->polys.push_back(full_poly);
 
-            // Capture map polygons (snapshot ONLY — no per-map history action)
-            for (int32_t map = 0; map < static_cast<int32_t>(data->mesh_maps.size()); ++map)
+            for (int32_t map = 0; map < data->mesh_maps.slot_count(); ++map)
             {
-                if (!data->mesh_maps[map])
+                if (!data->mesh_maps.is_valid(map) || !data->mesh_maps[map])
                     continue;
 
                 if (!map_poly_valid(map, poly_index))
@@ -175,7 +221,7 @@ void SysMesh::remove_vert(int32_t vert_index) noexcept
                 fmp.map        = map;
                 fmp.index      = poly_index;
                 fmp.data       = data->mesh_maps[map]->polys[poly_index];
-                fmp.data.verts = data->mesh_maps[map]->polys[poly_index].verts; // snapshot verts
+                fmp.data.verts = data->mesh_maps[map]->polys[poly_index].verts;
                 undo->map_polys.push_back(fmp);
             }
         }
@@ -186,7 +232,6 @@ void SysMesh::remove_vert(int32_t vert_index) noexcept
     // ---------------------------------------------------------
     // Mutate mesh
     // ---------------------------------------------------------
-    // Copy for safe iteration (remove_poly can change adjacency)
     const SysVertPolys affected_polys = data->verts[vert_index].polys;
 
     for (int32_t poly_index : affected_polys)
@@ -194,20 +239,16 @@ void SysMesh::remove_vert(int32_t vert_index) noexcept
         if (!poly_valid(poly_index))
             continue;
 
-        // Find local index of the vertex in this polygon
         const int32_t face_index = data->polys[poly_index].verts.find_index(vert_index);
-        // find_index(data->polys[poly_index].verts, vert_index);
         if (face_index < 0)
             continue;
 
-        // Remove from base polygon
         SysPolyVerts& pv = data->polys[poly_index].verts;
         pv.erase(pv.begin() + face_index);
 
-        // Remove from each map polygon (same face_index)
-        for (int32_t map = 0; map < static_cast<int32_t>(data->mesh_maps.size()); ++map)
+        for (int32_t map = 0; map < data->mesh_maps.slot_count(); ++map)
         {
-            if (!data->mesh_maps[map])
+            if (!data->mesh_maps.is_valid(map) || !data->mesh_maps[map])
                 continue;
 
             if (!map_poly_valid(map, poly_index))
@@ -215,29 +256,24 @@ void SysMesh::remove_vert(int32_t vert_index) noexcept
 
             SysPolyVerts& map_pv = data->mesh_maps[map]->polys[poly_index].verts;
 
-            // Defensive: map poly should match base poly size BEFORE erase
-            if (face_index < 0 || face_index >= static_cast<int32_t>(map_pv.size()))
+            if (face_index >= static_cast<int32_t>(map_pv.size()))
                 continue;
 
             map_vert_select(map, map_pv[face_index], false);
             map_pv.erase(map_pv.begin() + face_index);
         }
 
-        // If polygon now degenerate, remove it (this should also handle map polys as appropriate)
         if (data->polys[poly_index].verts.size() <= 2)
             remove_poly(poly_index);
     }
 
-    // Remove the vertex
     data->verts[vert_index].removed = true;
     data->verts.remove(vert_index);
-
     data->topology_counter->change();
 }
 
 void SysMesh::move_vert(int32_t vert_index, const glm::vec3& new_pos) noexcept
 {
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo        = std::make_unique<UndoMoveVertex>();
@@ -246,11 +282,8 @@ void SysMesh::move_vert(int32_t vert_index, const glm::vec3& new_pos) noexcept
         data->history->insert(std::move(undo));
     }
 
-    // Update position and mark dirty.
     data->verts[vert_index].pos      = new_pos;
     data->verts[vert_index].modified = true;
-
-    // Increment change counter.
     data->deform_counter->change();
 }
 
@@ -268,28 +301,18 @@ SysVertEdges SysMesh::vert_edges(int32_t vert_index) const noexcept
 {
     SysVertEdges result = {};
     for (int32_t poly : vert_polys(vert_index))
-    {
         for (IndexPair edge : poly_edges(poly))
-        {
             if (edge.first == vert_index || edge.second == vert_index)
-            {
-                // Keep face winding direction; do NOT sort here.
                 result.insert_unique(edge);
-            }
-        }
-    }
     return result;
 }
 
 bool SysMesh::boundary_vert(int32_t vert_index) const noexcept
 {
-    // boundary if any incident undirected edge has only one adjacent poly
     SysVertEdges undirected = {};
     for (IndexPair e : vert_edges(vert_index))
         undirected.insert_unique(sort_edge(e));
 
-    // Each internal undirected edge incident to this vert should have 2 adjacent polys.
-    // So boundary exists if any has < 2.
     for (IndexPair e : undirected)
         if (edge_polys(e).size() < 2)
             return true;
@@ -300,23 +323,24 @@ bool SysMesh::boundary_vert(int32_t vert_index) const noexcept
 bool SysMesh::outline_vert(int32_t vert_index) const noexcept
 {
     for (int32_t poly_index : vert_polys(vert_index))
-    {
         if (!poly_selected(poly_index))
-        {
             return true;
-        }
-    }
     return false;
 }
 
-/// -------------------------------------------------------
-/// Edges
-/// -------------------------------------------------------
+bool SysMesh::vert_valid(int32_t vert_index) const noexcept
+{
+    return vert_index >= 0 && data->verts.is_valid(vert_index) && !data->verts[vert_index].removed;
+}
+
+// --------------------------------------------------------------------------
+// Edges
+// --------------------------------------------------------------------------
 
 std::vector<IndexPair> SysMesh::all_edges() const noexcept
 {
     std::vector<IndexPair> edges;
-    edges.reserve(static_cast<size_t>(num_polys()) * 4);
+    edges.reserve(static_cast<std::size_t>(num_polys()) * 4);
 
     for (int32_t poly_index : all_polys())
     {
@@ -324,21 +348,19 @@ std::vector<IndexPair> SysMesh::all_edges() const noexcept
         {
             if (e.first > e.second)
                 std::swap(e.first, e.second);
-
             edges.push_back(e);
         }
     }
 
     std::sort(edges.begin(), edges.end());
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
-
     return edges;
 }
 
-uint32_t SysMesh::num_edges() const noexcept
+int32_t SysMesh::num_edges() const noexcept
 {
     std::vector<IndexPair> edges;
-    edges.reserve(static_cast<size_t>(num_polys()) * 4);
+    edges.reserve(static_cast<std::size_t>(num_polys()) * 4);
 
     for (int32_t poly : all_polys())
     {
@@ -346,21 +368,19 @@ uint32_t SysMesh::num_edges() const noexcept
         {
             if (e.first > e.second)
                 std::swap(e.first, e.second);
-
             edges.push_back(e);
         }
     }
 
     std::sort(edges.begin(), edges.end());
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
-
-    return static_cast<uint32_t>(edges.size());
+    return static_cast<int32_t>(edges.size());
 }
 
 SysEdgePolys SysMesh::edge_polys(const IndexPair& edge) const noexcept
 {
     SysEdgePolys   results = {};
-    const SysVert& vert    = data->verts[edge.first]; // use edge.first as given
+    const SysVert& vert    = data->verts[edge.first];
 
     for (int32_t poly_index : vert.polys)
         if (poly_has_edge(poly_index, edge))
@@ -381,29 +401,29 @@ bool SysMesh::outline_edge(const IndexPair& edgeIn) const noexcept
     if (!vert_valid(edge.first) || !vert_valid(edge.second))
         return false;
 
-    int count = 0;
-    for (int pid : edge_polys(edge))
+    int32_t count = 0;
+    for (int32_t pid : edge_polys(edge))
         if (poly_valid(pid) && poly_selected(pid))
             ++count;
 
     return count == 1;
 }
 
-/// -------------------------------------------------------
-/// Polys
-/// -------------------------------------------------------
+// --------------------------------------------------------------------------
+// Polygons
+// --------------------------------------------------------------------------
 
 const std::vector<int32_t>& SysMesh::all_polys() const noexcept
 {
     return data->polys.valid_indices();
 }
 
-uint32_t SysMesh::num_polys() const noexcept
+int32_t SysMesh::num_polys() const noexcept
 {
     return data->polys.size();
 }
 
-uint32_t SysMesh::poly_buffer_size() const noexcept
+int32_t SysMesh::poly_buffer_size() const noexcept
 {
     return data->polys.slot_count();
 }
@@ -411,24 +431,24 @@ uint32_t SysMesh::poly_buffer_size() const noexcept
 int32_t SysMesh::create_poly(const SysPolyVerts& verts, uint32_t material_id) noexcept
 {
     SysPoly new_poly{};
-    new_poly.verts           = verts;
-    new_poly.material_id     = material_id;
+    new_poly.verts       = verts;
+    new_poly.material_id = material_id;
+
     const int32_t poly_index = data->polys.insert(new_poly);
 
+    // If a new slot was appended (not a reused hole), extend all map poly arrays.
     if (poly_index == data->polys.slot_count() - 1)
     {
-        for (int32_t i = 0; i < data->mesh_maps.size(); ++i)
+        for (int32_t i = 0; i < data->mesh_maps.slot_count(); ++i)
         {
-            if (data->mesh_maps[i])
-            {
-                data->mesh_maps[i]->polys.resize(data->polys.slot_count());
-            }
+            if (data->mesh_maps.is_valid(i) && data->mesh_maps[i])
+                data->mesh_maps[i]->polys.resize(
+                    static_cast<std::size_t>(data->polys.slot_count()));
         }
     }
 
     assert(!data->polys[poly_index].removed);
 
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo        = std::make_unique<UndoCreatePoly>();
@@ -437,11 +457,8 @@ int32_t SysMesh::create_poly(const SysPolyVerts& verts, uint32_t material_id) no
         data->history->insert(std::move(undo));
     }
 
-    // Add the new polygon to its vertices.
     for (int32_t vert_index : verts)
-    {
         data->verts[vert_index].polys.insert_unique(poly_index);
-    }
 
     data->topology_counter->change();
     return poly_index;
@@ -451,9 +468,7 @@ int32_t SysMesh::clone_poly(int32_t poly_index, const SysPolyVerts& new_verts) n
 {
     int32_t new_poly = create_poly(new_verts, data->polys[poly_index].material_id);
     if (data->polys[poly_index].selected)
-    {
         select_poly(new_poly, true);
-    }
     return new_poly;
 }
 
@@ -463,29 +478,16 @@ void SysMesh::remove_poly(int32_t poly_index) noexcept
 
     select_poly(poly_index, false);
 
-    auto remove_edge_data = [&](IndexPair& edge) {
-        select_edge(edge, false);
-    };
-
-    // If any of the polygon's edges only have this polygon connected, then
-    // such edges are also about to be removed. Deselect any edge data for
-    // such prior to removing the polygon so that the history will record it.
     for (IndexPair edge : poly_edges(poly_index))
-    {
         if (edge_polys(edge).size() == 1)
-        {
-            remove_edge_data(edge);
-        }
-    }
+            select_edge(edge, false);
 
-    // Remove mapped polygons.
-    for (int j = 0; j < data->mesh_maps.size(); ++j)
+    for (int32_t j = 0; j < data->mesh_maps.slot_count(); ++j)
     {
-        if (data->mesh_maps[j] && map_poly_valid(j, poly_index))
+        if (data->mesh_maps.is_valid(j) && data->mesh_maps[j] && map_poly_valid(j, poly_index))
             map_remove_poly(j, poly_index);
     }
 
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo        = std::make_unique<UndoRemovePoly>();
@@ -494,11 +496,8 @@ void SysMesh::remove_poly(int32_t poly_index) noexcept
         data->history->insert(std::move(undo));
     }
 
-    // Remove polygon from its vertices.
     for (int32_t vert_index : data->polys[poly_index].verts)
-    {
         data->verts[vert_index].polys.erase_element(poly_index);
-    }
 
     data->polys[poly_index].removed = true;
     data->polys.remove(poly_index);
@@ -512,7 +511,6 @@ uint32_t SysMesh::poly_material(int32_t poly_index) const noexcept
 
 void SysMesh::set_poly_material(int32_t poly_index, uint32_t material_id) noexcept
 {
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo          = std::make_unique<UndoSetPolyMaterial>();
@@ -527,19 +525,16 @@ void SysMesh::set_poly_material(int32_t poly_index, uint32_t material_id) noexce
 
 bool SysMesh::poly_has_edge(int32_t poly_index, const IndexPair& edge) const noexcept
 {
-    const SysPoly&      poly = data->polys[poly_index];
-    const SysPolyVerts& pv   = poly.verts;
+    const SysPolyVerts& pv = data->polys[poly_index].verts;
 
     for (int32_t i = 0; i < pv.size(); ++i)
     {
-        int a = pv[i];
-        int b = pv[(i + 1) % pv.size()];
+        const int32_t a = pv[i];
+        const int32_t b = pv[(i + 1) % pv.size()];
 
         if ((a == edge.first && b == edge.second) ||
             (a == edge.second && b == edge.first))
-        {
             return true;
-        }
     }
     return false;
 }
@@ -554,7 +549,9 @@ SysPolyEdges SysMesh::poly_edges(int32_t poly_index) const noexcept
 {
     SysPolyEdges   results;
     const SysPoly& poly = data->polys[poly_index];
-    for (int prev = poly.verts.size() - 1, next = 0; next < poly.verts.size(); prev = next++)
+    for (int32_t prev = poly.verts.size() - 1, next = 0;
+         next < poly.verts.size();
+         prev = next++)
     {
         results.push_back(IndexPair(poly.verts[prev], poly.verts[next]));
     }
@@ -566,7 +563,9 @@ glm::vec3 SysMesh::poly_normal(int32_t poly_index) const noexcept
     assert(!data->polys[poly_index].removed && "nth polygon does not exist!");
     const SysPoly& poly = data->polys[poly_index];
     glm::vec3      norm(0.f);
-    for (int prev = poly.verts.size() - 1, next = 0; next < poly.verts.size(); prev = next++)
+    for (int32_t prev = poly.verts.size() - 1, next = 0;
+         next < poly.verts.size();
+         prev = next++)
     {
         const glm::vec3& prev_pos = data->verts[poly.verts[prev]].pos;
         const glm::vec3& next_pos = data->verts[poly.verts[next]].pos;
@@ -574,8 +573,7 @@ glm::vec3 SysMesh::poly_normal(int32_t poly_index) const noexcept
         norm[1] += (prev_pos[2] - next_pos[2]) * (prev_pos[0] + next_pos[0]);
         norm[2] += (prev_pos[0] - next_pos[0]) * (prev_pos[1] + next_pos[1]);
     }
-    // return glm::normalize(norm);
-    // Safe normalize (no NaNs)
+
     const float len2 = glm::dot(norm, norm);
     if (len2 < 1e-20f)
         return glm::vec3(0.0f);
@@ -588,29 +586,33 @@ glm::vec3 SysMesh::poly_center(int32_t poly_index) const noexcept
     const SysPolyVerts& pv = poly_verts(poly_index);
     glm::vec3           pos(0.f);
     for (int32_t i = 0; i < pv.size(); ++i)
-    {
         pos += vert_position(pv[i]);
-    }
     return pos / static_cast<float>(pv.size());
 }
 
-/// -------------------------------------------------------
-/// Maps
-/// -------------------------------------------------------
+bool SysMesh::poly_valid(int32_t poly_index) const noexcept
+{
+    return poly_index >= 0 && data->polys.is_valid(poly_index) && !data->polys[poly_index].removed;
+}
+
+// --------------------------------------------------------------------------
+// Maps
+// --------------------------------------------------------------------------
 
 int32_t SysMesh::map_create(int32_t id, int32_t type, int32_t dim) noexcept
 {
-    auto new_map  = std::make_shared<SysMeshMap>();
-    new_map->id   = id;
-    new_map->type = type;
-    new_map->dim  = dim;
+    // Idempotent: if a map with this id already exists return its slot.
+    const int32_t existing = map_find(id);
+    if (existing != -1)
+        return existing;
 
-    // Make the number of polygons in the map match the mesh.
-    new_map->polys.resize(data->polys.slot_count(), SysMapPoly());
+    auto new_map = std::make_shared<SysMeshMap>(id, type, dim);
 
-    int32_t index = data->mesh_maps.insert(new_map);
+    // Parallel poly array must match current mesh slot count.
+    new_map->polys.resize(static_cast<std::size_t>(data->polys.slot_count()));
 
-    // Add undo entry.
+    const int32_t index = data->mesh_maps.insert(new_map);
+
     if (!data->history->is_busy())
     {
         auto undo   = std::make_unique<UndoMapCreate>();
@@ -627,41 +629,38 @@ int32_t SysMesh::map_create(int32_t id, int32_t type, int32_t dim) noexcept
 
 bool SysMesh::map_remove(int32_t id) noexcept
 {
-    int32_t map = map_find(id);
+    // Default maps are permanent fixtures — they can be cleared but never removed.
+    if (id == MESH_MAP_NORMALS || id == MESH_MAP_UV0)
+        return false;
+
+    const int32_t map = map_find(id);
     if (map == -1)
         return false;
 
-    const bool busy = data->history->is_busy();
-
-    if (!busy)
+    if (!data->history->is_busy())
     {
-        // Record undo so we can put the same map object back later.
         auto undo       = std::make_unique<UndoMapRemove>();
         undo->mesh_data = data.get();
-        undo->mesh_map  = data->mesh_maps[map]; // keep the object alive
+        undo->mesh_map  = data->mesh_maps[map];
         undo->index     = map;
         data->history->insert(std::move(undo));
 
-        // (Optional) clear selection while the object is still valid.
         if (data->mesh_maps[map])
             data->mesh_maps[map]->selection.clear();
     }
     else
     {
-        // During replay: do NOT touch the map after resetting.
         data->mesh_maps[map].reset();
     }
 
-    // Remove the slot from the hole list (marks index free).
     data->mesh_maps.remove(map);
-
     data->topology_counter->change();
     return true;
 }
 
 int32_t SysMesh::map_find(int32_t id) const noexcept
 {
-    for (int32_t i = 0; i < data->mesh_maps.size(); ++i)
+    for (int32_t i : data->mesh_maps.valid_indices())
     {
         if (data->mesh_maps[i] && data->mesh_maps[i]->id == id)
             return i;
@@ -678,11 +677,10 @@ void SysMesh::map_create_poly(int32_t map, int32_t poly_index, const SysPolyVert
 {
     assert(!map_poly_valid(map, poly_index) && "The polygon already exists!");
     assert(data->polys[poly_index].verts.size() == pv.size() &&
-           "The number of vertices for the map polygon must match the mesh polygon!");
+           "Map polygon vert count must match mesh polygon!");
 
     data->mesh_maps[map]->polys[poly_index].verts = pv;
 
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo        = std::make_unique<UndoMapCreatePoly>();
@@ -697,28 +695,18 @@ void SysMesh::map_create_poly(int32_t map, int32_t poly_index, const SysPolyVert
 int32_t SysMesh::map_create_vert(int32_t map, const float* vec) noexcept
 {
     SysMeshMap& mesh_map = *data->mesh_maps[map];
-    SysMapVert  new_vert{};
 
-    memcpy(new_vert.vec, vec, mesh_map.dim * sizeof(float));
+    SysMapVert new_vert{};
+    std::memcpy(new_vert.vec, vec, static_cast<std::size_t>(mesh_map.dim) * sizeof(float));
 
-    int32_t index = static_cast<int32_t>(data->mesh_maps[map]->verts.size());
-    // Check if there is free vert we can use, else add a new one.
-    if (mesh_map.free_verts.empty())
-        mesh_map.verts.push_back(new_vert);
-    else
-    {
-        index = mesh_map.free_verts.back();
-        mesh_map.free_verts.pop_back();
-        data->mesh_maps[map]->verts[index] = new_vert;
-    }
+    const int32_t index = mesh_map.verts.insert(new_vert);
 
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo = std::make_unique<UndoMapCreateVertex>();
-        memcpy(undo->vert.data.vec,
-               data->mesh_maps[map]->verts[index].vec,
-               mesh_map.dim * sizeof(float));
+        std::memcpy(undo->vert.data.vec,
+                    mesh_map.verts[index].vec,
+                    static_cast<std::size_t>(mesh_map.dim) * sizeof(float));
         undo->vert.index = index;
         undo->vert.map   = map;
         data->history->insert(std::move(undo));
@@ -731,43 +719,41 @@ int32_t SysMesh::map_create_vert(int32_t map, const float* vec) noexcept
 void SysMesh::map_remove_vert(int32_t map, int32_t vert_index) noexcept
 {
     SysMeshMap& mesh_map = *data->mesh_maps[map];
-    assert(!mesh_map.verts[vert_index].removed && "Vertex does not exist!");
+    assert(mesh_map.verts.is_valid(vert_index) && "Map vertex does not exist!");
 
     map_vert_select(map, vert_index, false);
 
-    mesh_map.free_verts.push_back(vert_index);
-    mesh_map.verts[vert_index].removed = true;
-
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo = std::make_unique<UndoMapRemoveVertex>();
-        memcpy(undo->vert.data.vec,
-               data->mesh_maps[map]->verts[vert_index].vec,
-               mesh_map.dim * sizeof(float));
+        std::memcpy(undo->vert.data.vec,
+                    mesh_map.verts[vert_index].vec,
+                    static_cast<std::size_t>(mesh_map.dim) * sizeof(float));
         undo->vert.index = vert_index;
         undo->vert.map   = map;
         data->history->insert(std::move(undo));
     }
 
+    mesh_map.verts[vert_index].removed = true; // kept for undo snapshot compat
+    mesh_map.verts.remove(vert_index);
     data->topology_counter->change();
 }
 
 bool SysMesh::map_poly_valid(int32_t map, int32_t poly_index) const noexcept
 {
-    // Bounds / existence checks first.
-    if (map < 0 || map >= static_cast<int32_t>(data->mesh_maps.size()))
+    if (map < 0 || map >= data->mesh_maps.slot_count())
+        return false;
+
+    if (!data->mesh_maps.is_valid(map))
         return false;
 
     const auto& mp = data->mesh_maps[map];
     if (!mp)
         return false;
 
-    // Poly index must be in range and not removed.
     if (!poly_valid(poly_index))
         return false;
 
-    // Map polys array must contain this slot (no resizing in a const query).
     if (poly_index < 0 || poly_index >= static_cast<int32_t>(mp->polys.size()))
         return false;
 
@@ -777,11 +763,8 @@ bool SysMesh::map_poly_valid(int32_t map, int32_t poly_index) const noexcept
 void SysMesh::map_remove_poly(int32_t map, int32_t poly_index)
 {
     for (int32_t vert_index : data->mesh_maps[map]->polys[poly_index].verts)
-    {
         map_vert_select(map, vert_index, false);
-    }
 
-    // Add undo entry.
     if (!data->history->is_busy())
     {
         auto undo        = std::make_unique<UndoMapRemovePoly>();
@@ -792,7 +775,6 @@ void SysMesh::map_remove_poly(int32_t map, int32_t poly_index)
     }
 
     assert(map_poly_valid(map, poly_index) && "Trying to remove an invalid polygon!");
-
     data->mesh_maps[map]->polys[poly_index].verts.clear();
     data->topology_counter->change();
 }
@@ -804,7 +786,7 @@ void SysMesh::map_vertex_move(int32_t map, int32_t vert_index, const float* new_
         auto undo = std::make_unique<UndoMapMoveVertex>();
         std::memcpy(undo->vert.data.vec,
                     data->mesh_maps[map]->verts[vert_index].vec,
-                    data->mesh_maps[map]->dim * sizeof(float));
+                    static_cast<std::size_t>(data->mesh_maps[map]->dim) * sizeof(float));
         undo->vert.index = vert_index;
         undo->vert.map   = map;
         data->history->insert(std::move(undo));
@@ -812,7 +794,7 @@ void SysMesh::map_vertex_move(int32_t map, int32_t vert_index, const float* new_
 
     std::memcpy(data->mesh_maps[map]->verts[vert_index].vec,
                 new_vec,
-                data->mesh_maps[map]->dim * sizeof(float));
+                static_cast<std::size_t>(data->mesh_maps[map]->dim) * sizeof(float));
     data->deform_counter->change();
 }
 
@@ -827,20 +809,19 @@ const float* SysMesh::map_vert_position(int32_t map, int32_t n) const noexcept
     return data->mesh_maps[map]->verts[n].vec;
 }
 
-uint32_t SysMesh::map_buffer_size(int32_t map) const noexcept
+int32_t SysMesh::map_buffer_size(int32_t map) const noexcept
 {
-    return static_cast<uint32_t>(data->mesh_maps[map]->verts.size());
+    return data->mesh_maps[map]->verts.slot_count();
 }
 
-/// -------------------------------------------------------
-/// Selection
-/// -------------------------------------------------------
+// --------------------------------------------------------------------------
+// Selection
+// --------------------------------------------------------------------------
 
 bool SysMesh::select_vert(int32_t vert_index, bool select) noexcept
 {
     if (data->verts[vert_index].selected != select)
     {
-        // Add undo entry.
         if (!data->history->is_busy())
         {
             auto undo    = std::make_unique<UndoSelectVert>();
@@ -857,11 +838,11 @@ bool SysMesh::select_vert(int32_t vert_index, bool select) noexcept
         }
         else
         {
-            auto it = std::find(data->vert_selection.begin(), data->vert_selection.end(), vert_index);
+            auto it = std::find(data->vert_selection.begin(),
+                                data->vert_selection.end(),
+                                vert_index);
             if (it != data->vert_selection.end())
-            {
                 data->vert_selection.erase(it);
-            }
         }
 
         data->select_counter->change();
@@ -884,7 +865,6 @@ void SysMesh::clear_selected_verts() noexcept
 {
     if (!data->vert_selection.empty())
     {
-        // Add undo entry.
         if (!data->history->is_busy())
         {
             auto undo = std::make_unique<UndoClearVertSel>();
@@ -893,9 +873,8 @@ void SysMesh::clear_selected_verts() noexcept
         }
 
         for (int32_t vert_index : data->vert_selection)
-        {
             data->verts[vert_index].selected = false;
-        }
+
         data->vert_selection.clear();
         data->select_counter->change();
     }
@@ -905,7 +884,6 @@ bool SysMesh::select_poly(int poly_index, bool select) noexcept
 {
     if (data->polys[poly_index].selected != select)
     {
-        // Add undo entry.
         if (!data->history->is_busy())
         {
             auto undo    = std::make_unique<UndoSelectPoly>();
@@ -922,11 +900,11 @@ bool SysMesh::select_poly(int poly_index, bool select) noexcept
         }
         else
         {
-            auto it = std::find(data->poly_selection.begin(), data->poly_selection.end(), poly_index);
+            auto it = std::find(data->poly_selection.begin(),
+                                data->poly_selection.end(),
+                                poly_index);
             if (it != data->poly_selection.end())
-            {
                 data->poly_selection.erase(it);
-            }
         }
 
         data->select_counter->change();
@@ -949,17 +927,16 @@ void SysMesh::clear_selected_polys() noexcept
 {
     if (!data->poly_selection.empty())
     {
-        // Add undo entry.
         if (!data->history->is_busy())
         {
             auto undo = std::make_unique<UndoClearPolySel>();
             undo->sel = data->poly_selection;
             data->history->insert(std::move(undo));
         }
+
         for (int32_t poly_index : data->poly_selection)
-        {
             data->polys[poly_index].selected = false;
-        }
+
         data->poly_selection.clear();
         data->select_counter->change();
     }
@@ -975,7 +952,7 @@ bool SysMesh::select_edge(const IndexPair& edgeIn, bool select) noexcept
         if (!data->history->is_busy())
         {
             auto undo    = std::make_unique<UndoSelectEdge>();
-            undo->edge   = edge; // store normalized
+            undo->edge   = edge;
             undo->select = select;
             data->history->insert(std::move(undo));
         }
@@ -1012,7 +989,6 @@ void SysMesh::clear_selected_edges() noexcept
 {
     if (!data->edge_selection_set.empty())
     {
-        // Add undo entry.
         if (!data->history->is_busy())
         {
             auto undo = std::make_unique<UndoClearEdgeSel>();
@@ -1027,9 +1003,12 @@ void SysMesh::clear_selected_edges() noexcept
 
 void SysMesh::map_vert_select(int32_t map, int32_t vert_index, bool select) noexcept
 {
+    // Guard: skip if slot is a hole (can happen during remove_vert).
+    if (!data->mesh_maps[map]->verts.is_valid(vert_index))
+        return;
+
     if (data->mesh_maps[map]->verts[vert_index].selected != select)
     {
-        // Add undo entry.
         if (!data->history->is_busy())
         {
             auto undo    = std::make_unique<UndoSelectMapVert>();
@@ -1040,15 +1019,15 @@ void SysMesh::map_vert_select(int32_t map, int32_t vert_index, bool select) noex
         }
 
         data->mesh_maps[map]->verts[vert_index].selected = select;
+
         if (select)
         {
             data->mesh_maps[map]->selection.push_back(vert_index);
         }
         else
         {
-            std::erase_if(data->mesh_maps[map]->selection, [&vert_index](int32_t v) {
-                return (v == vert_index);
-            });
+            std::erase_if(data->mesh_maps[map]->selection,
+                          [vert_index](int32_t v) { return v == vert_index; });
         }
 
         data->select_counter->change();
@@ -1067,37 +1046,27 @@ const std::vector<int32_t>& SysMesh::selected_map_verts(int32_t map) const noexc
 
 void SysMesh::map_clear_selected_verts(int32_t map) noexcept
 {
-    // Undo??
     for (int32_t vert_index : data->mesh_maps[map]->selection)
-    {
         data->mesh_maps[map]->verts[vert_index].selected = false;
-    }
     data->mesh_maps[map]->selection.clear();
 }
 
-// -------------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// Change counters
+// --------------------------------------------------------------------------
 
 const SysCounterPtr& SysMesh::change_counter() const noexcept
 {
     return data->change_counter;
 }
-
-// -------------------------------------------------------------------------------
-
 const SysCounterPtr& SysMesh::topology_counter() const noexcept
 {
     return data->topology_counter;
 }
-
-// -------------------------------------------------------------------------------
-
 const SysCounterPtr& SysMesh::deform_counter() const noexcept
 {
     return data->deform_counter;
 }
-
-// -------------------------------------------------------------------------------
-
 const SysCounterPtr& SysMesh::select_counter() const noexcept
 {
     return data->select_counter;
@@ -1108,17 +1077,9 @@ IndexPair SysMesh::sort_edge(const IndexPair& edge) noexcept
     return (edge.first < edge.second) ? edge : IndexPair{edge.second, edge.first};
 }
 
-bool SysMesh::poly_valid(int32_t poly_index) const noexcept
-{
-    return poly_index >= 0 && !data->polys[poly_index].removed;
-}
-
-bool SysMesh::vert_valid(int32_t vert_index) const noexcept
-{
-    return vert_index >= 0 && !data->verts[vert_index].removed;
-}
-
-/// Topology Traversal -------------------------------
+// --------------------------------------------------------------------------
+// Topology traversal
+// --------------------------------------------------------------------------
 
 namespace
 {
@@ -1126,38 +1087,10 @@ namespace
     {
         size_t operator()(const IndexPair& p) const noexcept
         {
-            // 64-bit mix (stable across platforms)
             const uint64_t a = static_cast<uint32_t>(p.first);
             const uint64_t b = static_cast<uint32_t>(p.second);
             return static_cast<size_t>((a << 32) ^ b);
         }
-    };
-
-    struct DirEdge
-    {
-        int32_t a{};
-        int32_t b{};
-
-        bool operator==(const DirEdge& o) const noexcept
-        {
-            return a == o.a && b == o.b;
-        }
-    };
-
-    struct DirEdgeHash
-    {
-        size_t operator()(const DirEdge& e) const noexcept
-        {
-            const uint64_t a = static_cast<uint32_t>(e.a);
-            const uint64_t b = static_cast<uint32_t>(e.b);
-            return static_cast<size_t>((a << 32) ^ b);
-        }
-    };
-
-    struct HalfRec
-    {
-        int32_t poly{};
-        int32_t next{}; // for directed (a->b), next is the vertex after b in that poly
     };
 } // namespace
 
@@ -1185,8 +1118,6 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
         return out;
     };
 
-    // In quad p, return the other edge in p that touches vertex v (besides cur).
-    // If p not quad or cur not in p or v not on cur, returns {-1,-1}.
     auto face_adjacent_edge_at_vert = [&](int32_t p, const IndexPair& cur, int32_t v) -> IndexPair {
         if (!poly_valid(p))
             return IndexPair{-1, -1};
@@ -1195,7 +1126,6 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
         if (pv.size() != 4)
             return IndexPair{-1, -1};
 
-        // Find cur as an undirected edge in this face (as consecutive verts).
         int32_t cur_i = -1;
         for (int32_t i = 0; i < 4; ++i)
         {
@@ -1210,16 +1140,12 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
         if (cur_i < 0)
             return IndexPair{-1, -1};
 
-        // cur is between pv[cur_i] and pv[cur_i+1]
         const int32_t a = pv[cur_i];
         const int32_t b = pv[(cur_i + 1) & 3];
 
         if (v != a && v != b)
             return IndexPair{-1, -1};
 
-        // The face-adjacent edge at vertex v is:
-        // - if v == a, then edge (pv[cur_i-1], a)
-        // - if v == b, then edge (b, pv[cur_i+2])
         if (v == a)
         {
             const int32_t prev = pv[(cur_i + 3) & 3];
@@ -1232,16 +1158,12 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
         }
     };
 
-    // Advance one step from current edge cur, walking at vertex "at".
-    // Returns next undirected edge, or {-1,-1} to stop.
     auto next_edge_at_vertex = [&](const IndexPair& cur, int32_t at) -> IndexPair {
         if (!vert_valid(at))
             return IndexPair{-1, -1};
 
-        // Need incident edges at vertex.
         const SysVertEdges inc = undirected_edges_at_vert(at);
 
-        // Must contain current edge.
         bool hasCur = false;
         for (const IndexPair& e : inc)
             if (e == cur)
@@ -1249,12 +1171,9 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
         if (!hasCur)
             return IndexPair{-1, -1};
 
-        // Determine "turn" edges: in each adjacent quad, the edge adjacent to cur at 'at'.
         std::unordered_set<IndexPair, PairHash> turn = {};
 
         const SysEdgePolys polys = edge_polys(cur);
-        // If non-manifold (>2) or boundary (<2), we still *can* try, but ambiguity is likely.
-        // We'll be conservative and require exactly 2 adjacent polys for a clean quad-loop.
         if (polys.size() != 2)
             return IndexPair{-1, -1};
 
@@ -1265,61 +1184,40 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
                 turn.insert(adj);
         }
 
-        // Candidates = incident - cur - turnEdges
         IndexPair candidate{-1, -1};
         int32_t   count = 0;
 
         for (const IndexPair& e : inc)
         {
-            if (e == cur)
+            if (e == cur || turn.contains(e))
                 continue;
-            if (turn.contains(e))
-                continue;
-
             candidate = e;
-            ++count;
-            if (count > 1)
+            if (++count > 1)
                 break;
         }
 
-        // Exactly one "straight" edge => continue.
-        if (count == 1)
-            return candidate;
-
-        // Otherwise ambiguous (pole/extraordinary, non-quad topology around vertex, etc.)
-        return IndexPair{-1, -1};
+        return (count == 1) ? candidate : IndexPair{-1, -1};
     };
 
-    // Walk in one direction: starting from edge cur, we advance from 'from' -> 'to'
-    // meaning we consider the "front" vertex as 'to'.
     auto walk = [&](int32_t from, int32_t to) -> std::vector<IndexPair> {
         std::vector<IndexPair> out;
         out.reserve(64);
 
         std::unordered_set<IndexPair, PairHash> visited;
-
-        IndexPair cur = sort_edge(IndexPair{from, to});
-
-        // Track the advancing vertex each step.
-        int32_t at = to;
+        IndexPair                               cur = sort_edge(IndexPair{from, to});
+        int32_t                                 at  = to;
 
         for (;;)
         {
             if (!visited.insert(cur).second)
-                break; // loop closed/cycle
-
+                break;
             out.push_back(cur);
 
             const IndexPair nxt = next_edge_at_vertex(cur, at);
             if (nxt.first < 0)
                 break;
 
-            // Update advancing vertex:
-            // nxt shares 'at' with cur; the other endpoint becomes the new 'at'.
-            const int32_t a = nxt.first;
-            const int32_t b = nxt.second;
-            at              = (a == at) ? b : a;
-
+            at  = (nxt.first == at) ? nxt.second : nxt.first;
             cur = nxt;
         }
 
@@ -1332,12 +1230,11 @@ std::vector<IndexPair> SysMesh::edge_loop(const IndexPair& seedIn) const
     if (fwd.empty() && bwd.empty())
         return {};
 
-    // Merge bidirectionally around seed.
     std::vector<IndexPair> result;
     result.reserve(bwd.size() + fwd.size());
 
     for (int32_t i = static_cast<int32_t>(bwd.size()) - 1; i >= 0; --i)
-        result.push_back(bwd[static_cast<size_t>(i)]);
+        result.push_back(bwd[static_cast<std::size_t>(i)]);
 
     if (!result.empty() && !fwd.empty() && result.back() == fwd.front())
         result.pop_back();
@@ -1364,17 +1261,17 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
         return poly_valid(p) && (poly_verts(p).size() == 4);
     };
 
-    auto find_edge_index_in_quad = [&, this](int32_t p, const IndexPair& e, int32_t& outI) noexcept -> bool {
+    auto find_edge_index_in_quad = [&](int32_t p, const IndexPair& e, int32_t& outI) noexcept -> bool {
         if (!poly_is_quad(p))
             return false;
 
         const SysPolyVerts& pv = poly_verts(p);
-        // quad edges are (0-1),(1-2),(2-3),(3-0)
         for (int32_t i = 0; i < 4; ++i)
         {
             const int32_t a = pv[i];
             const int32_t b = pv[(i + 1) & 3];
-            if ((a == e.first && b == e.second) || (a == e.second && b == e.first))
+            if ((a == e.first && b == e.second) ||
+                (a == e.second && b == e.first))
             {
                 outI = i;
                 return true;
@@ -1386,9 +1283,7 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
     auto opposite_edge_in_quad = [this](int32_t p, int32_t edgeIndex) noexcept -> IndexPair {
         const SysPolyVerts& pv = poly_verts(p);
         const int32_t       i2 = (edgeIndex + 2) & 3;
-        const int32_t       a  = pv[i2];
-        const int32_t       b  = pv[(i2 + 1) & 3];
-        return sort_edge(IndexPair{a, b});
+        return sort_edge(IndexPair{pv[i2], pv[(i2 + 1) & 3]});
     };
 
     auto walk = [&](int32_t startPoly, const IndexPair& startEdge) -> std::vector<IndexPair> {
@@ -1401,7 +1296,6 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
         IndexPair curEdge = sort_edge(startEdge);
         int32_t   curPoly = startPoly;
 
-        // include seed
         out.push_back(curEdge);
         visited.insert(curEdge);
 
@@ -1420,18 +1314,14 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
 
             out.push_back(opp);
 
-            // Step across the opposite edge to the neighboring quad poly, then continue.
             const SysEdgePolys oppPolys = edge_polys(opp);
-
-            // Require exactly 2 incident polys for manifold interior stepping.
             if (oppPolys.size() != 2)
                 break;
 
-            int32_t nextPoly = (oppPolys[0] == curPoly) ? oppPolys[1] : oppPolys[0];
+            const int32_t nextPoly = (oppPolys[0] == curPoly) ? oppPolys[1] : oppPolys[0];
             if (!poly_is_quad(nextPoly))
                 break;
 
-            // Advance: now the "current edge" is opp in nextPoly
             curEdge = opp;
             curPoly = nextPoly;
         }
@@ -1439,7 +1329,6 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
         return out;
     };
 
-    // Choose a deterministic starting poly for the seed (quad-only).
     int32_t seedPoly = -1;
     for (int32_t p : seedPolys)
     {
@@ -1452,12 +1341,9 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
     if (seedPoly < 0)
         return result;
 
-    // Walk both directions by starting from the two possible seed-adjacent quads (if present).
-    // For a manifold interior seed, this gives the complete ring on both sides.
     std::vector<IndexPair> aSide = walk(seedPoly, seed);
-
-    // Try the other incident quad, if any, and merge uniquely.
     std::vector<IndexPair> bSide;
+
     for (int32_t p : seedPolys)
     {
         if (p != seedPoly && poly_is_quad(p))
@@ -1469,11 +1355,12 @@ std::vector<IndexPair> SysMesh::edge_ring(const IndexPair& seedIn) const
 
     std::unordered_set<IndexPair, PairHash> seen;
     seen.reserve((aSide.size() + bSide.size()) * 2);
-
     result.reserve(aSide.size() + bSide.size());
+
     for (const IndexPair& e : aSide)
         if (seen.insert(sort_edge(e)).second)
             result.push_back(sort_edge(e));
+
     for (const IndexPair& e : bSide)
         if (seen.insert(sort_edge(e)).second)
             result.push_back(sort_edge(e));
