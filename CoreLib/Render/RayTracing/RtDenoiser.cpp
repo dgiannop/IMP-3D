@@ -31,18 +31,19 @@ void RtDenoiser::ViewportState::destroyDeviceResources(uint32_t framesInFlight) 
         filterSetsB[i] = {};
         filterSetsC[i] = {};
         copySets[i]    = {};
-
-        pingImages[i].destroy();
-        pongImages[i].destroy();
-        outImages[i].destroy();
     }
+
+    // Single images — destroy once
+    pingImage.destroy();
+    pongImage.destroy();
+    outImage.destroy();
 
     cachedW = 0;
     cachedH = 0;
 }
 
 // =========================================================
-// initDevice
+// initDevice  (unchanged)
 // =========================================================
 
 bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
@@ -55,7 +56,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
 
     m_framesInFlight = std::max(1u, std::min(ctx.framesInFlight, vkcfg::kMaxFramesInFlight));
 
-    // ---- Filter set layout: set 0 — 4 samplers + 1 storage image ----
     {
         DescriptorBindingInfo bindings[5] = {};
 
@@ -92,7 +92,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         }
     }
 
-    // ---- Copy set layout: set 0 — 1 sampler + 1 storage image ----
     {
         DescriptorBindingInfo bindings[2] = {};
 
@@ -114,7 +113,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         }
     }
 
-    // 3 filter sets (A,B,C) + 1 copy set per frame per viewport.
     constexpr uint32_t kMaxViewports  = 8;
     const uint32_t     filterSetCount = m_framesInFlight * kMaxViewports * 3u;
     const uint32_t     copySetCount   = m_framesInFlight * kMaxViewports;
@@ -150,7 +148,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         }
     }
 
-    // ---- Filter pipeline layout: set 0 = filter layout ----
     if (m_filterPipelineLayout != VK_NULL_HANDLE)
     {
         vkDestroyPipelineLayout(m_ctx.device, m_filterPipelineLayout, nullptr);
@@ -177,7 +174,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         }
     }
 
-    // ---- Copy pipeline layout: set 0 = copy layout ----
     if (m_copyPipelineLayout != VK_NULL_HANDLE)
     {
         vkDestroyPipelineLayout(m_ctx.device, m_copyPipelineLayout, nullptr);
@@ -204,7 +200,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         }
     }
 
-    // ---- Filter pipeline ----
     if (m_filterPipeline != VK_NULL_HANDLE)
     {
         vkDestroyPipeline(m_ctx.device, m_filterPipeline, nullptr);
@@ -232,7 +227,6 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         }
     }
 
-    // ---- Copy pipeline ----
     if (m_copyPipeline != VK_NULL_HANDLE)
     {
         vkDestroyPipeline(m_ctx.device, m_copyPipeline, nullptr);
@@ -369,20 +363,15 @@ bool RtDenoiser::ensureImages(ViewportState&            s,
     if (width == 0 || height == 0)
         return false;
 
-    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-    if (fc.frameIndex >= fi)
-        return false;
-
     constexpr VkImageUsageFlags kUsage =
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
-    const uint32_t fi2 = fc.frameIndex;
-
-    if (!s.pingImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, width, height, m_colorFormat, kUsage, fc))
+    // Single images — no per-frame index needed
+    if (!s.pingImage.ensure(m_ctx.device, m_ctx.physicalDevice, width, height, m_colorFormat, kUsage, fc))
         return false;
-    if (!s.pongImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, width, height, m_colorFormat, kUsage, fc))
+    if (!s.pongImage.ensure(m_ctx.device, m_ctx.physicalDevice, width, height, m_colorFormat, kUsage, fc))
         return false;
-    if (!s.outImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, width, height, m_colorFormat, kUsage, fc))
+    if (!s.outImage.ensure(m_ctx.device, m_ctx.physicalDevice, width, height, m_colorFormat, kUsage, fc))
         return false;
 
     s.cachedW = width;
@@ -391,7 +380,7 @@ bool RtDenoiser::ensureImages(ViewportState&            s,
 }
 
 // =========================================================
-// Descriptor writes
+// Descriptor writes  (unchanged)
 // =========================================================
 
 void RtDenoiser::writeFilterDescriptors(DescriptorSet& set,
@@ -457,9 +446,9 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
     if (!ensureImages(state, fc, width, height))
         return false;
 
-    VulkanImage& ping = state.pingImages[fc.frameIndex];
-    VulkanImage& pong = state.pongImages[fc.frameIndex];
-    VulkanImage& out  = state.outImages[fc.frameIndex];
+    VulkanImage& ping = state.pingImage;
+    VulkanImage& pong = state.pongImage;
+    VulkanImage& out  = state.outImage;
 
     if (!ping.valid() || !pong.valid() || !out.valid())
         return false;
@@ -467,22 +456,7 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
     const uint32_t gx = (width + kGroupSizeX - 1u) / kGroupSizeX;
     const uint32_t gy = (height + kGroupSizeY - 1u) / kGroupSizeY;
 
-    // ----------------------------------------------------------
-    // Ordering rule applied to every pass:
-    //   1. writeDescriptors  — host call, set not yet bound
-    //   2. vkCmdBindDescriptorSets — replaces previous binding
-    //   3. transition output image to GENERAL
-    //   4. vkCmdPushConstants + vkCmdDispatch
-    //   5. transitionToShaderRead on output
-    //
-    // Binding before transitioning ensures the validator does not
-    // track the previous pass's set as bound when an image changes
-    // layout, which would cause a spurious layout mismatch error.
-    // ----------------------------------------------------------
-
-    // ----------------------------------------------------------
     // Pass 1: radiance -> ping
-    // ----------------------------------------------------------
     writeFilterDescriptors(state.filterSetsA[fc.frameIndex],
                            radianceView,
                            normalView,
@@ -504,14 +478,12 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
         pc.normalPhi = 96.0f;
         pc.depthPhi  = 2.5f;
         pc.albedoPhi = 12.0f;
-        vkCmdPushConstants(fc.cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(FilterPushConstants), &pc);
+        vkCmdPushConstants(fc.cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(fc.cmd, gx, gy, 1);
     }
     ping.transitionToShaderRead(fc.cmd, kComputeStage, kComputeStage);
 
-    // ----------------------------------------------------------
     // Pass 2: ping -> pong
-    // ----------------------------------------------------------
     writeFilterDescriptors(state.filterSetsB[fc.frameIndex],
                            ping.view(),
                            normalView,
@@ -533,14 +505,12 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
         pc.normalPhi = 96.0f;
         pc.depthPhi  = 2.5f;
         pc.albedoPhi = 10.0f;
-        vkCmdPushConstants(fc.cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(FilterPushConstants), &pc);
+        vkCmdPushConstants(fc.cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(fc.cmd, gx, gy, 1);
     }
     pong.transitionToShaderRead(fc.cmd, kComputeStage, kComputeStage);
 
-    // ----------------------------------------------------------
     // Pass 3: pong -> ping
-    // ----------------------------------------------------------
     writeFilterDescriptors(state.filterSetsC[fc.frameIndex],
                            pong.view(),
                            normalView,
@@ -562,16 +532,12 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
         pc.normalPhi = 96.0f;
         pc.depthPhi  = 2.5f;
         pc.albedoPhi = 8.0f;
-        vkCmdPushConstants(fc.cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(FilterPushConstants), &pc);
+        vkCmdPushConstants(fc.cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(fc.cmd, gx, gy, 1);
     }
     ping.transitionToShaderRead(fc.cmd, kComputeStage, kComputeStage);
 
-    // ----------------------------------------------------------
-    // Pass 4: ping -> out  (copy)
-    // ping is SHADER_READ_ONLY_OPTIMAL — correct for copy input.
-    // Copy set not yet bound — safe to write now.
-    // ----------------------------------------------------------
+    // Pass 4: ping -> out (copy)
     writeCopyDescriptors(state.copySets[fc.frameIndex], ping.view(), out.view());
     {
         VkDescriptorSet set = state.copySets[fc.frameIndex].set();
@@ -583,7 +549,7 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
         CopyPushConstants pc{};
         pc.width  = width;
         pc.height = height;
-        vkCmdPushConstants(fc.cmd, m_copyPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CopyPushConstants), &pc);
+        vkCmdPushConstants(fc.cmd, m_copyPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(fc.cmd, gx, gy, 1);
     }
     out.transitionToShaderRead(fc.cmd, kComputeStage, kComputeStage);
@@ -597,24 +563,22 @@ bool RtDenoiser::dispatch(Viewport*                 vp,
 
 VkImageView RtDenoiser::outputView(Viewport* vp, uint32_t frameIndex) const noexcept
 {
+    (void)frameIndex; // no longer per-frame
+
     auto it = m_viewports.find(vp);
     if (it == m_viewports.end())
         return VK_NULL_HANDLE;
 
-    if (frameIndex >= vkcfg::kMaxFramesInFlight)
-        return VK_NULL_HANDLE;
-
-    return it->second.outImages[frameIndex].view();
+    return it->second.outImage.view();
 }
 
 VkImage RtDenoiser::outputImage(Viewport* vp, uint32_t frameIndex) const noexcept
 {
+    (void)frameIndex; // no longer per-frame
+
     auto it = m_viewports.find(vp);
     if (it == m_viewports.end())
         return VK_NULL_HANDLE;
 
-    if (frameIndex >= vkcfg::kMaxFramesInFlight)
-        return VK_NULL_HANDLE;
-
-    return it->second.outImages[frameIndex].image();
+    return it->second.outImage.image();
 }

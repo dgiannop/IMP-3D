@@ -1,4 +1,4 @@
-// RtRenderer.cpp — only the changed functions are meaningfully different; everything else (BLAS, TLAS, SBT, init, shutdown) is untouched so it's included in full for a clean drop-in:
+// RtRenderer.cpp
 
 #include "RtRenderer.hpp"
 
@@ -28,8 +28,6 @@ RtRenderer::RtRenderer() noexcept
 // RtViewportState
 // =========================================================
 
-// The VulkanContext parameter is gone — VulkanImage::destroy() holds its
-// own device handle, so no external context is needed here.
 void RtRenderer::RtViewportState::destroyDeviceResources(uint32_t framesInFlight) noexcept
 {
     const uint32_t fi = std::min(framesInFlight, vkcfg::kMaxFramesInFlight);
@@ -46,19 +44,21 @@ void RtRenderer::RtViewportState::destroyDeviceResources(uint32_t framesInFlight
         rtSets[i]      = {};
         presentSets[i] = {};
 
-        // VulkanImage::destroy() handles view + image + memory.
-        radianceImages[i].destroy();
-        normalImages[i].destroy();
-        depthImages[i].destroy();
-        albedoImages[i].destroy();
+        presentDescriptorReady[i] = false;
     }
+
+    // Single AOV images — destroy once
+    radianceImage.destroy();
+    normalImage.destroy();
+    depthImage.destroy();
+    albedoImage.destroy();
 
     cachedW = 0;
     cachedH = 0;
 }
 
 // =========================================================
-// initDevice  (unchanged except denoiser init call)
+// initDevice  (unchanged)
 // =========================================================
 
 bool RtRenderer::initDevice(const VulkanContext&  ctx,
@@ -240,7 +240,7 @@ void RtRenderer::shutdown() noexcept
 }
 
 // =========================================================
-// initSwapchain / destroySwapchainResources  (unchanged)
+// initSwapchain / destroySwapchainResources
 // =========================================================
 
 bool RtRenderer::initSwapchain(VkRenderPass renderPass)
@@ -277,7 +277,7 @@ void RtRenderer::destroySwapchainResources() noexcept
 }
 
 // =========================================================
-// ensureViewportState  (unchanged)
+// ensureViewportState
 // =========================================================
 
 RtRenderer::RtViewportState& RtRenderer::ensureViewportState(Viewport* vp, uint32_t frameIndex)
@@ -334,7 +334,7 @@ RtRenderer::RtViewportState& RtRenderer::ensureViewportState(Viewport* vp, uint3
 }
 
 // =========================================================
-// ensureRtOutputImages  (simplified — delegates to VulkanImage::ensure)
+// ensureRtOutputImages
 // =========================================================
 
 bool RtRenderer::ensureRtOutputImages(RtViewportState&          s,
@@ -348,43 +348,29 @@ bool RtRenderer::ensureRtOutputImages(RtViewportState&          s,
     if (w == 0 || h == 0)
         return false;
 
-    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-    if (fc.frameIndex >= fi)
-        return false;
-
     constexpr VkImageUsageFlags kRtUsage =
         VK_IMAGE_USAGE_STORAGE_BIT |
         VK_IMAGE_USAGE_SAMPLED_BIT |
         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-    const uint32_t fi2 = fc.frameIndex;
-
-    const bool radianceResized = !s.radianceImages[fi2].valid() ||
-                                 s.radianceImages[fi2].width() != w ||
-                                 s.radianceImages[fi2].height() != h;
-
-    if (!s.radianceImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtFormat, kRtUsage, fc))
+    // Single images — no per-frame index needed
+    if (!s.radianceImage.ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtFormat, kRtUsage, fc))
         return false;
-    if (!s.normalImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtNormalFormat, kRtUsage, fc))
+    if (!s.normalImage.ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtNormalFormat, kRtUsage, fc))
         return false;
-    if (!s.depthImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtDepthFormat, kRtUsage, fc))
+    if (!s.depthImage.ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtDepthFormat, kRtUsage, fc))
         return false;
-    if (!s.albedoImages[fi2].ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtAlbedoFormat, kRtUsage, fc))
+    if (!s.albedoImage.ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtAlbedoFormat, kRtUsage, fc))
         return false;
 
     s.cachedW = w;
     s.cachedH = h;
 
-    // NOTE: writeRtImageDescriptors is NOT called here.
-    // Descriptor writes must happen in recordTraceRays, immediately
-    // before the sets are bound, never from present() which runs
-    // inside the render pass after the sets may already be bound.
-
     return true;
 }
 
 // =========================================================
-// writeRtImageDescriptors  (views accessed via VulkanImage::view())
+// writeRtImageDescriptors
 // =========================================================
 
 void RtRenderer::writeRtImageDescriptors(RtViewportState& s, uint32_t frameIndex) noexcept
@@ -392,32 +378,21 @@ void RtRenderer::writeRtImageDescriptors(RtViewportState& s, uint32_t frameIndex
     if (!m_ctx.device)
         return;
 
-    const VulkanImage& radiance = s.radianceImages[frameIndex];
-    const VulkanImage& normal   = s.normalImages[frameIndex];
-    const VulkanImage& depth    = s.depthImages[frameIndex];
-    const VulkanImage& albedo   = s.albedoImages[frameIndex];
+    if (s.rtSets[frameIndex].set() == VK_NULL_HANDLE)
+        return;
 
-    // Write RT pipeline storage image bindings (set=2, slots 0,4,5,6).
-    // The present set (slot 1) is intentionally NOT written here —
-    // it is written once at the end of recordTraceRays after the
-    // denoiser has run and the correct output view is known.
-    if (s.rtSets[frameIndex].set() != VK_NULL_HANDLE)
-    {
-        if (radiance.view())
-            s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 0, radiance.view(), VK_IMAGE_LAYOUT_GENERAL);
-        if (normal.view())
-            s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 4, normal.view(), VK_IMAGE_LAYOUT_GENERAL);
-        if (depth.view())
-            s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 5, depth.view(), VK_IMAGE_LAYOUT_GENERAL);
-        if (albedo.view())
-            s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 6, albedo.view(), VK_IMAGE_LAYOUT_GENERAL);
-    }
-
-    // Present set is NOT written here. See writeRtPresentImageDescriptor.
+    if (s.radianceImage.view())
+        s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 0, s.radianceImage.view(), VK_IMAGE_LAYOUT_GENERAL);
+    if (s.normalImage.view())
+        s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 4, s.normalImage.view(), VK_IMAGE_LAYOUT_GENERAL);
+    if (s.depthImage.view())
+        s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 5, s.depthImage.view(), VK_IMAGE_LAYOUT_GENERAL);
+    if (s.albedoImage.view())
+        s.rtSets[frameIndex].writeStorageImage(m_ctx.device, 6, s.albedoImage.view(), VK_IMAGE_LAYOUT_GENERAL);
 }
 
 // =========================================================
-// writeRtPresentImageDescriptor  (unchanged)
+// writeRtPresentImageDescriptor
 // =========================================================
 
 void RtRenderer::writeRtPresentImageDescriptor(RtViewportState& s,
@@ -438,7 +413,7 @@ void RtRenderer::writeRtPresentImageDescriptor(RtViewportState& s,
 }
 
 // =========================================================
-// ensureRtScratch  (unchanged)
+// ensureRtScratch
 // =========================================================
 
 bool RtRenderer::ensureRtScratch(RtViewportState&          s,
@@ -499,7 +474,7 @@ bool RtRenderer::ensureRtScratch(RtViewportState&          s,
 }
 
 // =========================================================
-// recordTraceRays  (transition lambdas replaced by VulkanImage methods)
+// recordTraceRays
 // =========================================================
 
 void RtRenderer::recordTraceRays(Viewport*                 vp,
@@ -520,15 +495,12 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
     if (!ensureRtOutputImages(rtv, fc, w, h))
         return;
 
-    // Write RT storage image descriptors immediately before binding.
-    // ensureRtOutputImages no longer calls this — it must be called
-    // here, once, before the first vkCmdBindDescriptorSets for rtSets.
     writeRtImageDescriptors(rtv, frameIdx);
 
-    VulkanImage& radiance = rtv.radianceImages[frameIdx];
-    VulkanImage& normal   = rtv.normalImages[frameIdx];
-    VulkanImage& depth    = rtv.depthImages[frameIdx];
-    VulkanImage& albedo   = rtv.albedoImages[frameIdx];
+    VulkanImage& radiance = rtv.radianceImage;
+    VulkanImage& normal   = rtv.normalImage;
+    VulkanImage& depth    = rtv.depthImage;
+    VulkanImage& albedo   = rtv.albedoImage;
 
     if (!radiance.valid() || !normal.valid() || !depth.valid() || !albedo.valid())
         return;
@@ -536,7 +508,6 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
     if (rtv.rtSets[frameIdx].set() == VK_NULL_HANDLE)
         return;
 
-    // Transition all AOV images to GENERAL and clear them.
     const VkImageSubresourceRange fullRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     const VkClearColorValue       clearBlack{};
 
@@ -546,7 +517,6 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
         vkCmdClearColorImage(fc.cmd, img->image(), VK_IMAGE_LAYOUT_GENERAL, &clearBlack, 1, &fullRange);
     }
 
-    // Build / update BLAS for all visible meshes.
     for (SceneMesh* sm : scene->sceneMeshes())
     {
         if (!sm || !sm->visible())
@@ -571,7 +541,6 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
 
     writeRtTlasDescriptor(rtv, frameIdx);
 
-    // Upload per-instance shader data.
     {
         std::vector<RtInstanceData> instData;
         instData.reserve(scene->sceneMeshes().size());
@@ -619,7 +588,6 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
         if (!instData.empty())
             rtv.instanceDataBuffers[frameIdx].upload(instData.data(), bytes);
 
-        // Write instance data buffer descriptor — rtSets not yet bound, safe to update.
         rtv.rtSets[frameIdx].writeStorageBuffer(m_ctx.device,
                                                 3,
                                                 rtv.instanceDataBuffers[frameIdx].buffer(),
@@ -627,7 +595,6 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
                                                 0);
     }
 
-    // Bind pipeline and dispatch.
     vkCmdBindPipeline(fc.cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline.pipeline());
 
     VkDescriptorSet sets[3] = {set0FrameGlobals, set1Materials, rtv.rtSets[frameIdx].set()};
@@ -644,11 +611,9 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
     m_rtSbt.regions(m_ctx, rgen, miss, hit, call);
     m_ctx.rtDispatch->vkCmdTraceRaysKHR(fc.cmd, &rgen, &miss, &hit, &call, w, h, 1);
 
-    // Transition AOV images to SHADER_READ_ONLY for denoiser / present.
     for (VulkanImage* img : {&radiance, &normal, &depth, &albedo})
         img->transitionToShaderRead(fc.cmd);
 
-    // Hand off to denoiser or fall back to raw radiance for present.
     if (m_denoiser.dispatch(vp, fc, radiance.view(), normal.view(), depth.view(), albedo.view(), w, h))
     {
         const VkImageView denoisedView = m_denoiser.outputView(vp, frameIdx);
@@ -658,10 +623,12 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
     {
         writeRtPresentImageDescriptor(rtv, frameIdx, radiance.view());
     }
+
+    rtv.presentDescriptorReady[frameIdx] = true;
 }
 
 // =========================================================
-// renderPrePass / present / idle  (unchanged)
+// renderPrePass
 // =========================================================
 
 void RtRenderer::renderPrePass(Viewport*                 vp,
@@ -689,6 +656,10 @@ void RtRenderer::renderPrePass(Viewport*                 vp,
     recordTraceRays(vp, scene, fc, set0FrameGlobals, set1Materials);
 }
 
+// =========================================================
+// present
+// =========================================================
+
 void RtRenderer::present(VkCommandBuffer cmd, Viewport* vp, const RenderFrameContext& fc)
 {
     if (!rtReady(m_ctx) || !m_ctx.rtDispatch)
@@ -713,12 +684,10 @@ void RtRenderer::present(VkCommandBuffer cmd, Viewport* vp, const RenderFrameCon
 
     RtViewportState& rtv = ensureViewportState(vp, frameIdx);
 
-    // Do NOT call ensureRtOutputImages here — it was already called
-    // in renderPrePass/recordTraceRays and calling it again would
-    // invoke writeRtImageDescriptors which updates rtSets[frameIdx]
-    // while it is still considered bound from the trace rays dispatch.
-    // Simply check the images are valid before proceeding.
-    if (!rtv.radianceImages[frameIdx].valid())
+    if (!rtv.presentDescriptorReady[frameIdx])
+        return;
+
+    if (!rtv.radianceImage.valid())
         return;
 
     vkutil::setViewportAndScissor(cmd, w, h);
@@ -740,6 +709,10 @@ void RtRenderer::present(VkCommandBuffer cmd, Viewport* vp, const RenderFrameCon
 
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
+
+// =========================================================
+// idle
+// =========================================================
 
 void RtRenderer::idle(Scene* scene)
 {
@@ -773,7 +746,7 @@ void RtRenderer::idle(Scene* scene)
 }
 
 // =========================================================
-// writeRtTlasDescriptor / clearRtTlasDescriptor  (unchanged)
+// writeRtTlasDescriptor / clearRtTlasDescriptor
 // =========================================================
 
 void RtRenderer::writeRtTlasDescriptor(RtViewportState& s, uint32_t frameIndex) noexcept
@@ -794,7 +767,7 @@ void RtRenderer::clearRtTlasDescriptor(RtViewportState& /*s*/, uint32_t /*frameI
 }
 
 // =========================================================
-// BLAS / TLAS  (unchanged — reproduced verbatim for completeness)
+// BLAS / TLAS
 // =========================================================
 
 void RtRenderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept

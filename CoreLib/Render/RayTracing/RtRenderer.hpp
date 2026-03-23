@@ -77,24 +77,29 @@ public:
     static_assert(alignof(RtInstanceData) == 8);
 
 private:
-    // ---------------------------------------------------------
-    // Per-viewport, per-frame state
-    // ---------------------------------------------------------
-
     struct RtViewportState
     {
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> rtSets              = {};
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> presentSets         = {};
         std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     instanceDataBuffers = {};
 
-        /// AOV images written by the ray-tracing pipeline each frame.
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> radianceImages = {};
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> normalImages   = {};
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> depthImages    = {};
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> albedoImages   = {};
+        // AOV images are NOT per-frame. renderPrePass and present() run in the
+        // same command buffer in the same frame (single renderOnce() call), so
+        // there is no overlap between writing and reading these images.
+        // Using single instances saves (framesInFlight-1) * 4 * ~50MB = ~200MB
+        // on large scenes like Sponza.
+        VulkanImage radianceImage = {};
+        VulkanImage normalImage   = {};
+        VulkanImage depthImage    = {};
+        VulkanImage albedoImage   = {};
 
         std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>    scratchBuffers = {};
         std::array<VkDeviceSize, vkcfg::kMaxFramesInFlight> scratchSizes   = {};
+
+        // Set to true once recordTraceRays has written the present descriptor
+        // for this frame slot. present() skips drawing until this is true to
+        // avoid binding an uninitialized combined image sampler descriptor.
+        std::array<bool, vkcfg::kMaxFramesInFlight> presentDescriptorReady = {};
 
         uint32_t cachedW = 0;
         uint32_t cachedH = 0;

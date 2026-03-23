@@ -44,14 +44,21 @@ public:
 private:
     struct ViewportState
     {
+        // Descriptor sets remain per-frame since they may be written while
+        // a previous frame's GPU work is still in flight.
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> filterSetsA = {};
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> filterSetsB = {};
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> filterSetsC = {};
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> copySets    = {};
 
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> pingImages = {};
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> pongImages = {};
-        std::array<VulkanImage, vkcfg::kMaxFramesInFlight> outImages  = {};
+        // Denoiser intermediate and output images are NOT per-frame.
+        // dispatch() and outputView() are called within the same renderOnce()
+        // call (single command buffer, single submission), so there is no
+        // overlap between writing and reading these images across frames.
+        // Using single instances saves (framesInFlight-1) * 3 * ~50MB.
+        VulkanImage pingImage = {};
+        VulkanImage pongImage = {};
+        VulkanImage outImage  = {};
 
         uint32_t cachedW = 0;
         uint32_t cachedH = 0;
