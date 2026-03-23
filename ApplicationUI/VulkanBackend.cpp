@@ -137,15 +137,17 @@ bool VulkanBackend::loadKhrEntryPoints() noexcept
     // Optional RT entry points (only if RT was enabled in createDevice)
     // ------------------------------------------------------------
     // Reset first (safe if re-init)
-    m_vkGetBufferDeviceAddressKHR                = nullptr;
-    m_vkCreateAccelerationStructureKHR           = nullptr;
-    m_vkDestroyAccelerationStructureKHR          = nullptr;
-    m_vkGetAccelerationStructureBuildSizesKHR    = nullptr;
-    m_vkCmdBuildAccelerationStructuresKHR        = nullptr;
-    m_vkGetAccelerationStructureDeviceAddressKHR = nullptr;
-    m_vkCreateRayTracingPipelinesKHR             = nullptr;
-    m_vkGetRayTracingShaderGroupHandlesKHR       = nullptr;
-    m_vkCmdTraceRaysKHR                          = nullptr;
+    m_vkGetBufferDeviceAddressKHR                   = nullptr;
+    m_vkCreateAccelerationStructureKHR              = nullptr;
+    m_vkDestroyAccelerationStructureKHR             = nullptr;
+    m_vkGetAccelerationStructureBuildSizesKHR       = nullptr;
+    m_vkCmdBuildAccelerationStructuresKHR           = nullptr;
+    m_vkCmdCopyAccelerationStructureKHR             = nullptr; // NEW
+    m_vkCmdWriteAccelerationStructuresPropertiesKHR = nullptr; // NEW
+    m_vkGetAccelerationStructureDeviceAddressKHR    = nullptr;
+    m_vkCreateRayTracingPipelinesKHR                = nullptr;
+    m_vkGetRayTracingShaderGroupHandlesKHR          = nullptr;
+    m_vkCmdTraceRaysKHR                             = nullptr;
 
     if (m_supportsRayTracing)
     {
@@ -160,6 +162,11 @@ bool VulkanBackend::loadKhrEntryPoints() noexcept
             reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(loadDevLocal("vkGetAccelerationStructureBuildSizesKHR"));
         m_vkCmdBuildAccelerationStructuresKHR =
             reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(loadDevLocal("vkCmdBuildAccelerationStructuresKHR"));
+        // NEW: load compaction entry points
+        m_vkCmdCopyAccelerationStructureKHR =
+            reinterpret_cast<PFN_vkCmdCopyAccelerationStructureKHR>(loadDevLocal("vkCmdCopyAccelerationStructureKHR"));
+        m_vkCmdWriteAccelerationStructuresPropertiesKHR =
+            reinterpret_cast<PFN_vkCmdWriteAccelerationStructuresPropertiesKHR>(loadDevLocal("vkCmdWriteAccelerationStructuresPropertiesKHR"));
         m_vkGetAccelerationStructureDeviceAddressKHR =
             reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(loadDevLocal("vkGetAccelerationStructureDeviceAddressKHR"));
 
@@ -177,6 +184,8 @@ bool VulkanBackend::loadKhrEntryPoints() noexcept
             (m_vkDestroyAccelerationStructureKHR != nullptr) &&
             (m_vkGetAccelerationStructureBuildSizesKHR != nullptr) &&
             (m_vkCmdBuildAccelerationStructuresKHR != nullptr) &&
+            (m_vkCmdCopyAccelerationStructureKHR != nullptr) &&             // NEW
+            (m_vkCmdWriteAccelerationStructuresPropertiesKHR != nullptr) && // NEW
             (m_vkGetAccelerationStructureDeviceAddressKHR != nullptr) &&
             (m_vkCreateRayTracingPipelinesKHR != nullptr) &&
             (m_vkGetRayTracingShaderGroupHandlesKHR != nullptr) &&
@@ -195,11 +204,13 @@ bool VulkanBackend::loadKhrEntryPoints() noexcept
             m_rtDispatch                             = {};
             m_rtDispatch.vkGetBufferDeviceAddressKHR = m_vkGetBufferDeviceAddressKHR;
 
-            m_rtDispatch.vkCreateAccelerationStructureKHR           = m_vkCreateAccelerationStructureKHR;
-            m_rtDispatch.vkDestroyAccelerationStructureKHR          = m_vkDestroyAccelerationStructureKHR;
-            m_rtDispatch.vkGetAccelerationStructureBuildSizesKHR    = m_vkGetAccelerationStructureBuildSizesKHR;
-            m_rtDispatch.vkCmdBuildAccelerationStructuresKHR        = m_vkCmdBuildAccelerationStructuresKHR;
-            m_rtDispatch.vkGetAccelerationStructureDeviceAddressKHR = m_vkGetAccelerationStructureDeviceAddressKHR;
+            m_rtDispatch.vkCreateAccelerationStructureKHR              = m_vkCreateAccelerationStructureKHR;
+            m_rtDispatch.vkDestroyAccelerationStructureKHR             = m_vkDestroyAccelerationStructureKHR;
+            m_rtDispatch.vkGetAccelerationStructureBuildSizesKHR       = m_vkGetAccelerationStructureBuildSizesKHR;
+            m_rtDispatch.vkCmdBuildAccelerationStructuresKHR           = m_vkCmdBuildAccelerationStructuresKHR;
+            m_rtDispatch.vkCmdCopyAccelerationStructureKHR             = m_vkCmdCopyAccelerationStructureKHR;             // NEW
+            m_rtDispatch.vkCmdWriteAccelerationStructuresPropertiesKHR = m_vkCmdWriteAccelerationStructuresPropertiesKHR; // NEW
+            m_rtDispatch.vkGetAccelerationStructureDeviceAddressKHR    = m_vkGetAccelerationStructureDeviceAddressKHR;
 
             m_rtDispatch.vkCreateRayTracingPipelinesKHR       = m_vkCreateRayTracingPipelinesKHR;
             m_rtDispatch.vkGetRayTracingShaderGroupHandlesKHR = m_vkGetRayTracingShaderGroupHandlesKHR;
@@ -238,12 +249,8 @@ bool VulkanBackend::init(QVulkanInstance* qvk, uint32_t framesInFlight)
 
 void VulkanBackend::shutdown() noexcept
 {
-    // IMPORTANT: We must destroy swapchains BEFORE destroying the device.
-    // Also we must destroy the device BEFORE the QVulkanInstance / VkInstance goes away.
-
     if (!m_device)
     {
-        // Still clear bookkeeping.
         m_swapchains.clear();
         m_qvk      = nullptr;
         m_instance = VK_NULL_HANDLE;
@@ -252,8 +259,6 @@ void VulkanBackend::shutdown() noexcept
         return;
     }
 
-    // If Qt has already destroyed the QVulkanInstance, we cannot safely call QVulkanDeviceFunctions.
-    // So this shutdown MUST be called while m_qvk is still alive.
     if (!m_qvk)
         return;
 
@@ -261,8 +266,6 @@ void VulkanBackend::shutdown() noexcept
     if (df)
         df->vkDeviceWaitIdle(m_device);
 
-    // Destroy any remaining swapchains we created (windows may not have cleaned up in time).
-    // Copy the list because destroyViewportSwapchain will remove from m_swapchains.
     const auto swapchainsCopy = m_swapchains;
     for (ViewportSwapchain* sc : swapchainsCopy)
     {
@@ -271,7 +274,6 @@ void VulkanBackend::shutdown() noexcept
     }
     m_swapchains.clear();
 
-    // Now destroy the device.
     if (df && m_device)
         df->vkDestroyDevice(m_device, nullptr);
 
@@ -293,27 +295,28 @@ void VulkanBackend::shutdown() noexcept
     m_vkQueuePresentKHR                         = nullptr;
 
     // Ray tracing related
-    m_vkGetBufferDeviceAddressKHR                = nullptr;
-    m_vkCreateAccelerationStructureKHR           = nullptr;
-    m_vkDestroyAccelerationStructureKHR          = nullptr;
-    m_vkGetAccelerationStructureBuildSizesKHR    = nullptr;
-    m_vkCmdBuildAccelerationStructuresKHR        = nullptr;
-    m_vkGetAccelerationStructureDeviceAddressKHR = nullptr;
-    m_vkCreateRayTracingPipelinesKHR             = nullptr;
-    m_vkGetRayTracingShaderGroupHandlesKHR       = nullptr;
-    m_vkCmdTraceRaysKHR                          = nullptr;
-    m_rtDispatch                                 = {};
-    m_supportsRayTracing                         = false;
-    m_rtProps                                    = {};
-    m_asProps                                    = {};
+    m_vkGetBufferDeviceAddressKHR                   = nullptr;
+    m_vkCreateAccelerationStructureKHR              = nullptr;
+    m_vkDestroyAccelerationStructureKHR             = nullptr;
+    m_vkGetAccelerationStructureBuildSizesKHR       = nullptr;
+    m_vkCmdBuildAccelerationStructuresKHR           = nullptr;
+    m_vkCmdCopyAccelerationStructureKHR             = nullptr; // NEW
+    m_vkCmdWriteAccelerationStructuresPropertiesKHR = nullptr; // NEW
+    m_vkGetAccelerationStructureDeviceAddressKHR    = nullptr;
+    m_vkCreateRayTracingPipelinesKHR                = nullptr;
+    m_vkGetRayTracingShaderGroupHandlesKHR          = nullptr;
+    m_vkCmdTraceRaysKHR                             = nullptr;
+    m_rtDispatch                                    = {};
+    m_supportsRayTracing                            = false;
+    m_rtProps                                       = {};
+    m_asProps                                       = {};
 
     m_qvk      = nullptr;
     m_instance = VK_NULL_HANDLE;
 
     m_ctx = {};
 
-    // Note: m_deferredDeletion is owned here; nothing special required.
-    vkutil::shutdown(); // just for debug validation names
+    vkutil::shutdown();
 }
 
 bool VulkanBackend::createDevice()
@@ -322,9 +325,6 @@ bool VulkanBackend::createDevice()
     if (!f)
         return false;
 
-    // ------------------------------------------------------------
-    // Enumerate physical devices
-    // ------------------------------------------------------------
     uint32_t devCount = 0;
     f->vkEnumeratePhysicalDevices(m_instance, &devCount, nullptr);
     if (devCount == 0)
@@ -333,9 +333,6 @@ bool VulkanBackend::createDevice()
     std::vector<VkPhysicalDevice> devices(devCount);
     f->vkEnumeratePhysicalDevices(m_instance, &devCount, devices.data());
 
-    // ------------------------------------------------------------
-    // Local helpers (kept inside the function for true drop-in)
-    // ------------------------------------------------------------
     auto versionStr = [](uint32_t v) -> std::string {
         return std::to_string(VK_VERSION_MAJOR(v)) + "." +
                std::to_string(VK_VERSION_MINOR(v)) + "." +
@@ -361,27 +358,21 @@ bool VulkanBackend::createDevice()
     auto queryInstanceVulkanVersion = [&](QVulkanInstance* qvk) noexcept -> uint32_t {
         if (!qvk)
             return VK_API_VERSION_1_0;
-
         auto fp = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
             qvk->getInstanceProcAddr("vkEnumerateInstanceVersion"));
-
         if (!fp)
             return VK_API_VERSION_1_0;
-
         uint32_t v = VK_API_VERSION_1_0;
         if (fp(&v) != VK_SUCCESS)
             return VK_API_VERSION_1_0;
-
         return v;
     };
 
     auto enumerateDeviceExts = [&](VkPhysicalDevice pd, std::vector<VkExtensionProperties>& outExts) -> void {
         uint32_t extCount = 0;
         f->vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, nullptr);
-
         outExts.clear();
         outExts.resize(extCount);
-
         if (extCount)
             f->vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, outExts.data());
     };
@@ -389,26 +380,20 @@ bool VulkanBackend::createDevice()
     auto hasExtInList = [&](const std::vector<VkExtensionProperties>& exts, const char* name) noexcept -> bool {
         if (!name)
             return false;
-
         for (const auto& e : exts)
-        {
             if (std::strcmp(e.extensionName, name) == 0)
                 return true;
-        }
         return false;
     };
 
     auto findGraphicsFamily = [&](VkPhysicalDevice pd, uint32_t& outFamily) noexcept -> bool {
-        outFamily = 0xFFFFFFFFu;
-
+        outFamily            = 0xFFFFFFFFu;
         uint32_t familyCount = 0;
         f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, nullptr);
         if (familyCount == 0)
             return false;
-
         std::vector<VkQueueFamilyProperties> qprops(familyCount);
         f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &familyCount, qprops.data());
-
         for (uint32_t i = 0; i < familyCount; ++i)
         {
             if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
@@ -439,23 +424,16 @@ bool VulkanBackend::createDevice()
 
         enumerateDeviceExts(pd, outExts);
 
-        // Hard requirement: graphics queue
         if (!findGraphicsFamily(pd, outGraphicsFamily))
             return -1;
-
-        // Hard requirement: swapchain extension
         if (!hasExtInList(outExts, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
             return -1;
-
-        // Hard requirement: you said you rely on these (and you enable them below)
         if (!outFeats.geometryShader || !outFeats.samplerAnisotropy)
             return -1;
 
         outMeetsHardReqs = true;
 
         int score = 0;
-
-        // Prefer discrete
         switch (outProps.deviceType)
         {
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
@@ -475,11 +453,9 @@ bool VulkanBackend::createDevice()
                 break;
         }
 
-        // Prefer higher Vulkan API version
         score += int(VK_VERSION_MAJOR(outProps.apiVersion)) * 100;
         score += int(VK_VERSION_MINOR(outProps.apiVersion)) * 10;
 
-        // Prefer more MSAA capability (rough heuristic)
         const VkSampleCountFlags msaa =
             outProps.limits.framebufferColorSampleCounts &
             outProps.limits.framebufferDepthSampleCounts;
@@ -497,15 +473,11 @@ bool VulkanBackend::createDevice()
         else if (msaa & VK_SAMPLE_COUNT_2_BIT)
             score += 10;
 
-        // Prefer bigger texture limits (very rough signal)
         score += int(outProps.limits.maxImageDimension2D / 1024);
 
         return score;
     };
 
-    // ------------------------------------------------------------
-    // Candidate selection
-    // ------------------------------------------------------------
     struct Candidate
     {
         VkPhysicalDevice                   pd = VK_NULL_HANDLE;
@@ -518,7 +490,6 @@ bool VulkanBackend::createDevice()
         bool                               meets          = false;
     };
 
-    // Instance Vulkan version (loader/runtime)
     m_instanceVulkanVersion = queryInstanceVulkanVersion(m_qvk);
 
     std::vector<Candidate> cands;
@@ -531,9 +502,7 @@ bool VulkanBackend::createDevice()
     {
         Candidate c = {};
         c.pd        = pd;
-
-        c.score = scoreDevice(pd, c.props, c.feats, c.supportedCore, c.exts, c.graphicsFamily, c.meets);
-
+        c.score     = scoreDevice(pd, c.props, c.feats, c.supportedCore, c.exts, c.graphicsFamily, c.meets);
         cands.push_back(c);
 
         if (c.meets && c.score >= 0)
@@ -557,11 +526,9 @@ bool VulkanBackend::createDevice()
 
         for (const auto& c : cands)
         {
-            maxDevVulkan = std::max(maxDevVulkan, c.props.apiVersion);
-
+            maxDevVulkan       = std::max(maxDevVulkan, c.props.apiVersion);
             const bool hasSwap = hasExtInList(c.exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
             const bool hasGfx  = (c.graphicsFamily != 0xFFFFFFFFu);
-
             oss << "  - " << c.props.deviceName
                 << " (" << deviceTypeStr(c.props.deviceType) << ")"
                 << " Vulkan " << versionStr(c.props.apiVersion)
@@ -581,24 +548,16 @@ bool VulkanBackend::createDevice()
         return false;
     }
 
-    // ------------------------------------------------------------
-    // Selected physical device
-    // ------------------------------------------------------------
     m_physicalDevice = best.pd;
     m_deviceProps    = best.props;
-
-    // Queue family
     m_graphicsFamily = best.graphicsFamily;
-
-    // Minimal assumption: present = graphics. We validate per-surface on swapchain creation.
-    m_presentFamily = m_graphicsFamily;
+    m_presentFamily  = m_graphicsFamily;
 
     std::cerr
         << "VulkanBackend: Selected device: " << m_deviceProps.deviceName
         << " (" << deviceTypeStr(m_deviceProps.deviceType) << "), Vulkan "
         << versionStr(m_deviceProps.apiVersion) << "\n";
 
-    // Query max MSAA from HW (selected device)
     m_sampleCount = getMaxUsableSampleCount(f, m_physicalDevice);
 
     const float prio = 1.0f;
@@ -609,28 +568,18 @@ bool VulkanBackend::createDevice()
     qci.queueCount              = 1;
     qci.pQueuePriorities        = &prio;
 
-    // ------------------------------------------------------------
-    // Extensions available on the selected device
-    // ------------------------------------------------------------
     const std::vector<VkExtensionProperties>& availExts = best.exts;
 
     auto hasExt = [&](const char* name) noexcept -> bool {
         return hasExtInList(availExts, name);
     };
 
-    const uint32_t apiMajor = VK_VERSION_MAJOR(m_deviceProps.apiVersion);
-    const uint32_t apiMinor = VK_VERSION_MINOR(m_deviceProps.apiVersion);
-    const bool     apiAtLeast12 =
-        (apiMajor > 1) || (apiMajor == 1 && apiMinor >= 2);
+    const uint32_t apiMajor     = VK_VERSION_MAJOR(m_deviceProps.apiVersion);
+    const uint32_t apiMinor     = VK_VERSION_MINOR(m_deviceProps.apiVersion);
+    const bool     apiAtLeast12 = (apiMajor > 1) || (apiMajor == 1 && apiMinor >= 2);
 
-    // ------------------------------------------------------------
-    // Query core features (ALWAYS)
-    // ------------------------------------------------------------
     VkPhysicalDeviceFeatures2 supportedCore = best.supportedCore;
 
-    // ------------------------------------------------------------
-    // Query Vulkan 1.2 features (single query)
-    // ------------------------------------------------------------
     VkPhysicalDeviceVulkan12Features supported12 = {};
     supported12.sType                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 
@@ -642,15 +591,9 @@ bool VulkanBackend::createDevice()
         f->vkGetPhysicalDeviceFeatures2(m_physicalDevice, &q);
     }
 
-    // ------------------------------------------------------------
-    // Enabled extensions (always)
-    // ------------------------------------------------------------
     std::vector<const char*> enabledExts;
     enabledExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
-    // ------------------------------------------------------------
-    // Optional ray tracing extension bundle (KHR)
-    // ------------------------------------------------------------
     const bool rtExtsOk =
         hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
         hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
@@ -661,30 +604,24 @@ bool VulkanBackend::createDevice()
 
     m_supportsRayTracing = rtExtsOk;
 
-    // Production-safe simplification: require Vulkan 1.2+ for RT in this backend.
     if (m_supportsRayTracing && !apiAtLeast12)
     {
         std::cerr << "VulkanBackend: RT requires Vulkan 1.2+ in this backend; disabling RT.\n";
         m_supportsRayTracing = false;
     }
 
-    // RT shaders require Int64 capability.
     if (m_supportsRayTracing && !supportedCore.features.shaderInt64)
     {
         std::cerr << "VulkanBackend: shaderInt64 not supported; disabling ray tracing.\n";
         m_supportsRayTracing = false;
     }
 
-    // Buffer Device Address is required for RT path (device addresses).
     if (m_supportsRayTracing && supported12.bufferDeviceAddress != VK_TRUE)
     {
         std::cerr << "VulkanBackend: bufferDeviceAddress not supported; disabling ray tracing.\n";
         m_supportsRayTracing = false;
     }
 
-    // ------------------------------------------------------------
-    // Query KHR feature support for RT (only if extension bundle exists + basic requirements met)
-    // ------------------------------------------------------------
     VkPhysicalDeviceFeatures2 supported = {};
     supported.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
@@ -723,27 +660,18 @@ bool VulkanBackend::createDevice()
         std::cerr << "VulkanBackend: Ray tracing not available; RT draw mode will be disabled.\n";
     }
 
-    // ------------------------------------------------------------
-    // Build enabled feature chain (Features2 + Vulkan12 + optional KHR RT features)
-    // ------------------------------------------------------------
     VkPhysicalDeviceFeatures2 feats2 = {};
     feats2.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
     feats2.features.geometryShader    = VK_TRUE;
     feats2.features.samplerAnisotropy = VK_TRUE;
-
-    // Enable if supported (needed for RT; harmless otherwise).
-    feats2.features.shaderInt64 = supportedCore.features.shaderInt64 ? VK_TRUE : VK_FALSE;
+    feats2.features.shaderInt64       = supportedCore.features.shaderInt64 ? VK_TRUE : VK_FALSE;
 
     VkPhysicalDeviceVulkan12Features feat12 = {};
     feat12.sType                            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 
-    // If ever need it later:
-    //   - set this true only if supported12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE
-    //   - and shaders actually use nonuniformEXT() indexing into sampler arrays.
     constexpr bool kEnableNonUniformSamplerIndexing = true;
 
-    // If your RT shaders use GL_EXT_scalar_block_layout, this should be enabled when supported.
     const bool scalarBlockLayoutOk = apiAtLeast12 && (supported12.scalarBlockLayout == VK_TRUE);
     const bool timelineOk          = apiAtLeast12 && (supported12.timelineSemaphore == VK_TRUE);
 
@@ -779,13 +707,11 @@ bool VulkanBackend::createDevice()
             else
             {
                 std::cerr << "VulkanBackend: shaderSampledImageArrayNonUniformIndexing NOT supported; shaders requiring it cannot load.\n";
-                // return false; ?
             }
         }
 
         if (m_supportsRayTracing)
         {
-            // Required for RT device addresses.
             feat12.bufferDeviceAddress = VK_TRUE;
             std::cerr << "VulkanBackend: Enabled Vulkan12 bufferDeviceAddress (for RT).\n";
         }
@@ -803,7 +729,6 @@ bool VulkanBackend::createDevice()
         pNextChain = &s;
     };
 
-    // Chain KHR RT features (if enabled)
     if (m_supportsRayTracing)
     {
         asFeat.accelerationStructure = VK_TRUE;
@@ -812,15 +737,11 @@ bool VulkanBackend::createDevice()
         chain(asFeat);
     }
 
-    // Always chain Vulkan 1.2 features when we queried them
     if (apiAtLeast12)
         chain(feat12);
 
     feats2.pNext = pNextChain;
 
-    // ------------------------------------------------------------
-    // Create device
-    // ------------------------------------------------------------
     VkDeviceCreateInfo dci      = {};
     dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     dci.pNext                   = &feats2;
@@ -828,7 +749,7 @@ bool VulkanBackend::createDevice()
     dci.pQueueCreateInfos       = &qci;
     dci.enabledExtensionCount   = uint32_t(enabledExts.size());
     dci.ppEnabledExtensionNames = enabledExts.data();
-    dci.pEnabledFeatures        = nullptr; // MUST be null when using Features2
+    dci.pEnabledFeatures        = nullptr;
 
     if (f->vkCreateDevice(m_physicalDevice, &dci, nullptr, &m_device) != VK_SUCCESS)
         return false;
@@ -840,9 +761,6 @@ bool VulkanBackend::createDevice()
     df->vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
     df->vkGetDeviceQueue(m_device, m_presentFamily, 0, &m_presentQueue);
 
-    // ------------------------------------------------------------
-    // Query RT properties (SBT alignments, recursion limits, etc.)
-    // ------------------------------------------------------------
     m_rtProps = {};
     m_asProps = {};
 
@@ -868,10 +786,6 @@ bool VulkanBackend::createDevice()
 
     return true;
 }
-
-// ============================================================
-// VulkanBackend.cpp (add ensureContext(), remove fillContext usage)
-// ============================================================
 
 void VulkanBackend::ensureContext() noexcept
 {
@@ -926,7 +840,6 @@ ViewportSwapchain* VulkanBackend::createViewportSwapchain(QWindow* window)
         return nullptr;
     }
 
-    // Track it so shutdown() can clean up even if windows die out-of-order.
     m_swapchains.push_back(sc);
 
     return sc;
@@ -937,7 +850,6 @@ void VulkanBackend::destroyViewportSwapchain(ViewportSwapchain* sc) noexcept
     if (!sc)
         return;
 
-    // Remove from tracking list first (idempotent).
     if (!m_swapchains.empty())
     {
         auto it = std::find(m_swapchains.begin(), m_swapchains.end(), sc);
@@ -947,8 +859,6 @@ void VulkanBackend::destroyViewportSwapchain(ViewportSwapchain* sc) noexcept
 
     if (!m_qvk || !m_device)
     {
-        // If we cannot safely destroy Vulkan objects (Qt instance already gone),
-        // we must not call into Vulkan here. But ideally shutdown order prevents this.
         delete sc;
         return;
     }
@@ -959,7 +869,6 @@ void VulkanBackend::destroyViewportSwapchain(ViewportSwapchain* sc) noexcept
 
     destroySwapchainObjects(sc);
 
-    // Surface is managed by Qt when created via surfaceForWindow().
     delete sc;
 }
 
@@ -979,19 +888,15 @@ VkSurfaceFormatKHR VulkanBackend::chooseSurfaceFormat(const std::vector<VkSurfac
 {
     auto pick = [&](VkFormat fmt) -> bool {
         for (const auto& f : formats)
-        {
             if (f.format == fmt && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
                 return true;
-        }
         return false;
     };
 
     auto get = [&](VkFormat fmt) -> VkSurfaceFormatKHR {
         for (const auto& f : formats)
-        {
             if (f.format == fmt && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
                 return f;
-        }
         return {};
     };
 
@@ -1004,14 +909,10 @@ VkSurfaceFormatKHR VulkanBackend::chooseSurfaceFormat(const std::vector<VkSurfac
     if (pick(VK_FORMAT_R8G8B8A8_UNORM))
         return get(VK_FORMAT_R8G8B8A8_UNORM);
 
-    // Fallback: prefer SRGB_NONLINEAR colorspace even if format isn't our favorite.
     for (const auto& f : formats)
-    {
         if (f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             return f;
-    }
 
-    // Final fallback.
     if (!formats.empty())
         return formats[0];
 
@@ -1024,11 +925,9 @@ VkSurfaceFormatKHR VulkanBackend::chooseSurfaceFormat(const std::vector<VkSurfac
 VkPresentModeKHR VulkanBackend::choosePresentMode(const std::vector<VkPresentModeKHR>& modes) const noexcept
 {
     for (auto m : modes)
-    {
         if (m == VK_PRESENT_MODE_MAILBOX_KHR)
             return m;
-    }
-    return VK_PRESENT_MODE_FIFO_KHR; // always available
+    return VK_PRESENT_MODE_FIFO_KHR;
 }
 
 VkExtent2D VulkanBackend::chooseExtent(const VkSurfaceCapabilitiesKHR& caps, const QSize& pixelSize) const noexcept
@@ -1052,10 +951,8 @@ uint32_t VulkanBackend::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags 
     f->vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &mp);
 
     for (uint32_t i = 0; i < mp.memoryTypeCount; ++i)
-    {
         if ((typeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & flags) == flags)
             return i;
-    }
     return 0;
 }
 
@@ -1075,13 +972,8 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
         return false;
     }
 
-    // If caller is recreating, it should have already destroyed old objects.
-    // We'll still be defensive and wipe anything that might be dangling.
     destroySwapchainObjects(sc);
 
-    // ------------------------------------------------------------
-    // Helpers (local)
-    // ------------------------------------------------------------
     auto createImage2D = [&](VkFormat              format,
                              VkImageUsageFlags     usage,
                              VkImageAspectFlags    aspect,
@@ -1159,10 +1051,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
         return df->vkCreateImageView(m_device, &vci, nullptr, &outView) == VK_SUCCESS;
     };
 
-    // ------------------------------------------------------------
-    // Choose surface details
-    // ------------------------------------------------------------
-    // Store what this swapchain was created with.
     sc->sampleCount = m_sampleCount;
 
     VkSurfaceCapabilitiesKHR caps = {};
@@ -1191,9 +1079,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
     if (caps.maxImageCount > 0)
         imageCount = std::min(imageCount, caps.maxImageCount);
 
-    // ------------------------------------------------------------
-    // Create swapchain
-    // ------------------------------------------------------------
     VkSwapchainCreateInfoKHR ci = {};
     ci.sType                    = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     ci.surface                  = sc->surface;
@@ -1218,9 +1103,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
     sc->colorFormat = sf.format;
     sc->extent      = ex;
 
-    // ------------------------------------------------------------
-    // Get swapchain images + create views
-    // ------------------------------------------------------------
     uint32_t imgCount = 0;
     m_vkGetSwapchainImagesKHR(m_device, sc->swapchain, &imgCount, nullptr);
     if (imgCount == 0)
@@ -1240,18 +1122,11 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
             destroySwapchainObjects(sc);
             return false;
         }
-
-        // Note: swapchain VkImage objects are not "owned" images we created,
-        // so many tools won't show names for them; naming their views is enough.
         vkutil::name(m_device, sc->views[i], "Viewport.SwapchainView", int32_t(i));
     }
 
-    // ------------------------------------------------------------
-    // Render pass (MSAA color + MSAA depth + resolve)
-    // ------------------------------------------------------------
     VkAttachmentDescription attachments[3] = {};
 
-    // 0) MSAA color
     attachments[0].format         = sc->colorFormat;
     attachments[0].samples        = sc->sampleCount;
     attachments[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -1261,7 +1136,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
     attachments[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[0].finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    // 1) MSAA depth
     constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     attachments[1].format           = kDepthFormat;
     attachments[1].samples          = sc->sampleCount;
@@ -1272,7 +1146,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
     attachments[1].initialLayout    = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[1].finalLayout      = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    // 2) Resolve (swapchain)
     attachments[2].format         = sc->colorFormat;
     attachments[2].samples        = VK_SAMPLE_COUNT_1_BIT;
     attachments[2].loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1282,17 +1155,9 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
     attachments[2].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[2].finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-    VkAttachmentReference colorRef = {};
-    colorRef.attachment            = 0;
-    colorRef.layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference depthRef = {};
-    depthRef.attachment            = 1;
-    depthRef.layout                = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference resolveRef = {};
-    resolveRef.attachment            = 2;
-    resolveRef.layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference colorRef   = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef   = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference resolveRef = {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription sub    = {};
     sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -1316,13 +1181,9 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
 
     vkutil::name(m_device, sc->renderPass, "Viewport.RenderPass");
 
-    // ------------------------------------------------------------
-    // Per-swapchain-image MSAA color + depth
-    // ------------------------------------------------------------
     sc->msaaColorImages.resize(imgCount, VK_NULL_HANDLE);
     sc->msaaColorMems.resize(imgCount, VK_NULL_HANDLE);
     sc->msaaColorViews.resize(imgCount, VK_NULL_HANDLE);
-
     sc->depthImages.resize(imgCount, VK_NULL_HANDLE);
     sc->depthMems.resize(imgCount, VK_NULL_HANDLE);
     sc->depthViews.resize(imgCount, VK_NULL_HANDLE);
@@ -1362,9 +1223,6 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
         vkutil::name(m_device, sc->depthMems[i], "Viewport.DepthMem", int32_t(i));
     }
 
-    // ------------------------------------------------------------
-    // Command pool
-    // ------------------------------------------------------------
     VkCommandPoolCreateInfo cpci = {};
     cpci.sType                   = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cpci.queueFamilyIndex        = m_graphicsFamily;
@@ -1378,15 +1236,8 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
 
     vkutil::name(m_device, sc->cmdPool, "Viewport.CmdPool");
 
-    // ------------------------------------------------------------
-    // Frames in flight (cmd + sync)
-    // ------------------------------------------------------------
     sc->frames.resize(m_framesInFlight);
-
     sc->deferred.init(uint32_t(sc->frames.size()));
-
-    // NOTE: Deferred deletion is now global (m_deferredDeletion) and keyed by Viewport*.
-    // VulkanBackend does NOT flush here because it doesn't know the Viewport* key.
 
     std::vector<VkCommandBuffer> cmds(m_framesInFlight, VK_NULL_HANDLE);
 
@@ -1439,18 +1290,10 @@ bool VulkanBackend::createSwapchain(ViewportSwapchain* sc, const QSize& pixelSiz
         vkutil::name(m_device, sc->frames[i].renderFinished, "Viewport.SemRenderFinished", int32_t(i));
     }
 
-    // ------------------------------------------------------------
-    // Framebuffers (one per swapchain image)
-    // Attachments: [msaaColor, msaaDepth, resolveSwapchain]
-    // ------------------------------------------------------------
     sc->framebuffers.resize(imgCount, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < imgCount; ++i)
     {
-        VkImageView atts[3] =
-            {
-                sc->msaaColorViews[i],
-                sc->depthViews[i],
-                sc->views[i]};
+        VkImageView atts[3] = {sc->msaaColorViews[i], sc->depthViews[i], sc->views[i]};
 
         VkFramebufferCreateInfo fci = {};
         fci.sType                   = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1485,117 +1328,69 @@ void VulkanBackend::destroySwapchainObjects(ViewportSwapchain* sc) noexcept
     if (!df)
         return;
 
-    // ------------------------------------------------------------
-    // Framebuffers (depend on render pass + image views)
-    // ------------------------------------------------------------
     for (VkFramebuffer fb : sc->framebuffers)
-    {
         if (fb)
             df->vkDestroyFramebuffer(m_device, fb, nullptr);
-    }
     sc->framebuffers.clear();
 
-    // ------------------------------------------------------------
-    // Command pool (implicitly frees command buffers allocated from it)
-    // ------------------------------------------------------------
     if (sc->cmdPool)
     {
         df->vkDestroyCommandPool(m_device, sc->cmdPool, nullptr);
         sc->cmdPool = VK_NULL_HANDLE;
     }
 
-    // ------------------------------------------------------------
-    // Per-frame sync objects
-    // ------------------------------------------------------------
     for (auto& fr : sc->frames)
     {
         if (fr.fence)
             df->vkDestroyFence(m_device, fr.fence, nullptr);
-
         if (fr.imageAvailable)
             df->vkDestroySemaphore(m_device, fr.imageAvailable, nullptr);
-
         if (fr.renderFinished)
             df->vkDestroySemaphore(m_device, fr.renderFinished, nullptr);
-
         fr = {};
     }
     sc->frames.clear();
 
-    // ------------------------------------------------------------
-    // MSAA color (one per swapchain image)
-    // ------------------------------------------------------------
     for (VkImageView v : sc->msaaColorViews)
-    {
         if (v)
             df->vkDestroyImageView(m_device, v, nullptr);
-    }
     sc->msaaColorViews.clear();
-
     for (VkImage img : sc->msaaColorImages)
-    {
         if (img)
             df->vkDestroyImage(m_device, img, nullptr);
-    }
     sc->msaaColorImages.clear();
-
     for (VkDeviceMemory mem : sc->msaaColorMems)
-    {
         if (mem)
             df->vkFreeMemory(m_device, mem, nullptr);
-    }
     sc->msaaColorMems.clear();
 
-    // ------------------------------------------------------------
-    // Depth (one per swapchain image)
-    // ------------------------------------------------------------
     for (VkImageView v : sc->depthViews)
-    {
         if (v)
             df->vkDestroyImageView(m_device, v, nullptr);
-    }
     sc->depthViews.clear();
-
     for (VkImage img : sc->depthImages)
-    {
         if (img)
             df->vkDestroyImage(m_device, img, nullptr);
-    }
     sc->depthImages.clear();
-
     for (VkDeviceMemory mem : sc->depthMems)
-    {
         if (mem)
             df->vkFreeMemory(m_device, mem, nullptr);
-    }
     sc->depthMems.clear();
 
-    // ------------------------------------------------------------
-    // Render pass
-    // ------------------------------------------------------------
     if (sc->renderPass)
         df->vkDestroyRenderPass(m_device, sc->renderPass, nullptr);
     sc->renderPass = VK_NULL_HANDLE;
 
-    // ------------------------------------------------------------
-    // Swapchain image views
-    // ------------------------------------------------------------
     for (VkImageView v : sc->views)
-    {
         if (v)
             df->vkDestroyImageView(m_device, v, nullptr);
-    }
     sc->views.clear();
     sc->images.clear();
 
-    // ------------------------------------------------------------
-    // Swapchain
-    // ------------------------------------------------------------
     if (sc->swapchain && m_vkDestroySwapchainKHR)
         m_vkDestroySwapchainKHR(m_device, sc->swapchain, nullptr);
     sc->swapchain = VK_NULL_HANDLE;
 
-    // Reset bookkeeping
     sc->frameIndex       = 0;
     sc->needsRecreate    = false;
     sc->pendingPixelSize = QSize();
@@ -1616,7 +1411,6 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
     if (!m_vkAcquireNextImageKHR)
         return false;
 
-    // Handle resize/recreate requested externally
     if (sc->needsRecreate)
     {
         const QSize px = sc->pendingPixelSize.isValid()
@@ -1639,7 +1433,6 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
     const uint32_t fi = sc->frameIndex % m_framesInFlight;
     ViewportFrame& fr = sc->frames[fi];
 
-    // Wait for this frame slot to be available.
     VkResult wr = df->vkWaitForFences(m_device, 1, &fr.fence, VK_TRUE, 1000000000ull);
     if (wr == VK_TIMEOUT)
     {
@@ -1650,8 +1443,6 @@ bool VulkanBackend::beginFrame(ViewportSwapchain* sc, ViewportFrameContext& out)
     }
 
     out.frameFenceWaited = true;
-    // All work previously submitted for this frame slot is complete.
-    // Now it's safe to destroy resources deferred for this slot (PER-VIEWPORT queue).
     sc->deferred.flush(fi);
 
     uint32_t imageIndex = 0;
@@ -1693,8 +1484,6 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
 {
     if (!sc || !m_qvk || !m_device || !sc->swapchain || !fc.frame)
     {
-        // Can't safely advance frameIndex without a valid sc, but if sc is
-        // valid we must always advance to avoid reusing a busy frame slot.
         if (sc)
             sc->frameIndex = (sc->frameIndex + 1) % m_framesInFlight;
         return;
@@ -1707,23 +1496,16 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
         return;
     }
 
-    // End command buffer recording. On failure we still submit nothing but
-    // must advance frameIndex and reset the fence so the slot is reusable.
     const VkResult endResult = df->vkEndCommandBuffer(fc.frame->cmd);
     if (endResult != VK_SUCCESS)
     {
         std::cerr << "VulkanBackend::endFrame: vkEndCommandBuffer failed (" << endResult << ")\n";
-        // Reset fence so next wait on this slot doesn't block forever.
         df->vkResetFences(m_device, 1, &fc.frame->fence);
         sc->frameIndex    = (sc->frameIndex + 1) % m_framesInFlight;
         sc->needsRecreate = true;
         return;
     }
 
-    // Reset fence immediately before submit — the only point where we know
-    // we are definitely going to signal it. Never reset it earlier (e.g. in
-    // beginFrame) because an early return there would leave the fence
-    // permanently unsignaled and the next wait would block forever.
     df->vkResetFences(m_device, 1, &fc.frame->fence);
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1742,9 +1524,6 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
     if (submitResult != VK_SUCCESS)
     {
         std::cerr << "VulkanBackend::endFrame: vkQueueSubmit failed (" << submitResult << ")\n";
-        // Fence was reset but never signaled — re-signal it manually so the
-        // next vkWaitForFences on this slot returns immediately.
-        // We do this by submitting an empty batch that just signals the fence.
         VkSubmitInfo empty = {};
         empty.sType        = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         df->vkQueueSubmit(m_graphicsQueue, 0, nullptr, fc.frame->fence);
@@ -1768,9 +1547,6 @@ void VulkanBackend::endFrame(ViewportSwapchain* sc, const ViewportFrameContext& 
     else if (presResult != VK_SUCCESS)
         std::cerr << "VulkanBackend::endFrame: vkQueuePresentKHR failed (" << presResult << ")\n";
 
-    // ALWAYS advance — unconditionally, after every possible path.
-    // This is the single most important invariant in the frame loop:
-    // frameIndex must advance exactly once per beginFrame/endFrame pair.
     sc->frameIndex = (sc->frameIndex + 1) % m_framesInFlight;
 }
 
@@ -1789,9 +1565,6 @@ void VulkanBackend::cancelFrame(ViewportSwapchain*          sc,
     if (!df)
         return;
 
-    // We are inside an open command buffer (beginFrame() already vkBeginCommandBuffer'd it).
-    // Optionally record a minimal render pass that clears attachments, so the presented image
-    // is deterministic even when the main renderer bails.
     if (clear)
     {
         VkClearValue clears[3] = {};
@@ -1812,7 +1585,6 @@ void VulkanBackend::cancelFrame(ViewportSwapchain*          sc,
         df->vkCmdEndRenderPass(fc.frame->cmd);
     }
 
-    // Always finalize submit + present.
     endFrame(sc, fc);
 }
 
@@ -1829,10 +1601,6 @@ void VulkanBackend::renderClear(ViewportSwapchain* sc, float r, float g, float b
     if (!beginFrame(sc, fc))
         return;
 
-    // 3 attachments in the MSAA render pass:
-    //  0: MSAA color  (cleared)
-    //  1: MSAA depth  (cleared)
-    //  2: Resolve     (loadOp = DONT_CARE, so clear value is unused but harmless)
     VkClearValue clears[3] = {};
     clears[0].color        = {{r, g, b, a}};
     clears[1].depthStencil = {1.0f, 0};

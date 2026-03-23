@@ -47,7 +47,6 @@ void RtRenderer::RtViewportState::destroyDeviceResources(uint32_t framesInFlight
         presentDescriptorReady[i] = false;
     }
 
-    // Single AOV images — destroy once
     radianceImage.destroy();
     normalImage.destroy();
     depthImage.destroy();
@@ -58,7 +57,7 @@ void RtRenderer::RtViewportState::destroyDeviceResources(uint32_t framesInFlight
 }
 
 // =========================================================
-// initDevice  (unchanged)
+// initDevice
 // =========================================================
 
 bool RtRenderer::initDevice(const VulkanContext&  ctx,
@@ -353,7 +352,6 @@ bool RtRenderer::ensureRtOutputImages(RtViewportState&          s,
         VK_IMAGE_USAGE_SAMPLED_BIT |
         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-    // Single images — no per-frame index needed
     if (!s.radianceImage.ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtFormat, kRtUsage, fc))
         return false;
     if (!s.normalImage.ensure(m_ctx.device, m_ctx.physicalDevice, w, h, m_rtNormalFormat, kRtUsage, fc))
@@ -474,6 +472,140 @@ bool RtRenderer::ensureRtScratch(RtViewportState&          s,
 }
 
 // =========================================================
+// processCompactionQueue
+//
+// Called at the start of each recordTraceRays. For every BLAS in
+// BuiltUncompacted state, tries to read back the compacted size query.
+// If the result is available (VK_SUCCESS, not NOT_READY), performs the
+// compaction copy in the current command buffer and marks the BLAS as
+// Compacted. The original uncompacted resources are deferred-destroyed.
+// =========================================================
+
+void RtRenderer::processCompactionQueue(const RenderFrameContext& fc) noexcept
+{
+    if (!rtReady(m_ctx) || !m_ctx.device || !m_ctx.rtDispatch || !fc.cmd)
+        return;
+
+    for (auto& [sm, b] : m_blas)
+    {
+        if (b.state != BlasState::BuiltUncompacted)
+            continue;
+
+        if (b.queryPool == VK_NULL_HANDLE)
+            continue;
+
+        // Try to read the compacted size. If NOT_READY, skip — we'll retry
+        // next frame. The uncompacted BLAS is still fully usable for tracing.
+        VkDeviceSize   compactedSize = 0;
+        const VkResult qr            = vkGetQueryPoolResults(m_ctx.device,
+                                                  b.queryPool,
+                                                  0,
+                                                  1,
+                                                  sizeof(VkDeviceSize),
+                                                  &compactedSize,
+                                                  sizeof(VkDeviceSize),
+                                                  VK_QUERY_RESULT_64_BIT);
+
+        if (qr == VK_NOT_READY || compactedSize == 0)
+            continue;
+
+        if (qr != VK_SUCCESS)
+        {
+            // Query failed — abandon compaction for this BLAS, destroy pool
+            vkDestroyQueryPool(m_ctx.device, b.queryPool, nullptr);
+            b.queryPool = VK_NULL_HANDLE;
+            b.state     = BlasState::Compacted; // treat as done, no retry
+            continue;
+        }
+
+        // Allocate the compacted AS buffer
+        GpuBuffer compactBuffer;
+        compactBuffer.create(m_ctx.device,
+                             m_ctx.physicalDevice,
+                             compactedSize,
+                             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                             false,
+                             true);
+
+        if (!compactBuffer.valid())
+            continue; // OOM — skip, retry next frame
+
+        // Create the compacted AS
+        VkAccelerationStructureCreateInfoKHR asci{};
+        asci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+        asci.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        asci.size   = compactedSize;
+        asci.buffer = compactBuffer.buffer();
+
+        VkAccelerationStructureKHR compactAs = VK_NULL_HANDLE;
+        if (m_ctx.rtDispatch->vkCreateAccelerationStructureKHR(m_ctx.device, &asci, nullptr, &compactAs) != VK_SUCCESS)
+        {
+            compactBuffer.destroy();
+            continue;
+        }
+
+        // Record the compaction copy
+        VkCopyAccelerationStructureInfoKHR copyInfo{};
+        copyInfo.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+        copyInfo.src   = b.as;
+        copyInfo.dst   = compactAs;
+        copyInfo.mode  = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+
+        m_ctx.rtDispatch->vkCmdCopyAccelerationStructureKHR(fc.cmd, &copyInfo);
+
+        // Get the new device address
+        VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
+        addrInfo.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+        addrInfo.accelerationStructure = compactAs;
+        const VkDeviceAddress newAddr  = m_ctx.rtDispatch->vkGetAccelerationStructureDeviceAddressKHR(m_ctx.device, &addrInfo);
+
+        // Stash the old resources for deferred destruction
+        b.preCompactAs     = b.as;
+        b.preCompactBuffer = std::move(b.asBuffer);
+
+        // Swap in the compacted resources
+        b.as       = compactAs;
+        b.asBuffer = std::move(compactBuffer);
+        b.address  = newAddr;
+        b.state    = BlasState::Compacted;
+
+        // Destroy the query pool — no longer needed
+        vkDestroyQueryPool(m_ctx.device, b.queryPool, nullptr);
+        b.queryPool = VK_NULL_HANDLE;
+
+        // Defer destruction of the uncompacted resources
+        VkAccelerationStructureKHR oldAs      = b.preCompactAs;
+        GpuBuffer                  oldBacking = std::move(b.preCompactBuffer);
+        b.preCompactAs                        = VK_NULL_HANDLE;
+
+        if (fc.deferred)
+        {
+            VkDevice device = m_ctx.device;
+            auto*    rt     = m_ctx.rtDispatch;
+
+            fc.deferred->enqueue(fc.frameIndex,
+                                 [device, rt, oldAs, backing = std::move(oldBacking)]() mutable {
+                                     if (rt && device && oldAs != VK_NULL_HANDLE)
+                                         rt->vkDestroyAccelerationStructureKHR(device, oldAs, nullptr);
+                                     backing.destroy();
+                                 });
+        }
+        else
+        {
+            if (m_ctx.rtDispatch && m_ctx.device && oldAs != VK_NULL_HANDLE)
+                m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, oldAs, nullptr);
+            oldBacking.destroy();
+        }
+
+        // Force TLAS rebuild since this BLAS address changed
+        for (RtTlasFrame& tf : m_tlasFrames)
+            tf.buildKey = 0;
+    }
+}
+
+// =========================================================
 // recordTraceRays
 // =========================================================
 
@@ -494,6 +626,10 @@ void RtRenderer::recordTraceRays(Viewport*                 vp,
 
     if (!ensureRtOutputImages(rtv, fc, w, h))
         return;
+
+    // Process any pending BLAS compactions before building TLAS.
+    // Results from the previous frame's queries are now available.
+    processCompactionQueue(fc);
 
     writeRtImageDescriptors(rtv, frameIdx);
 
@@ -767,7 +903,7 @@ void RtRenderer::clearRtTlasDescriptor(RtViewportState& /*s*/, uint32_t /*frameI
 }
 
 // =========================================================
-// BLAS / TLAS
+// BLAS helpers
 // =========================================================
 
 void RtRenderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept
@@ -780,6 +916,21 @@ void RtRenderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) n
         return;
 
     RtBlas& b = it->second;
+
+    // Clean up query pool if still alive
+    if (b.queryPool != VK_NULL_HANDLE)
+    {
+        vkDestroyQueryPool(m_ctx.device, b.queryPool, nullptr);
+        b.queryPool = VK_NULL_HANDLE;
+    }
+
+    // Clean up any stashed pre-compact resources
+    if (b.preCompactAs != VK_NULL_HANDLE)
+    {
+        m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.preCompactAs, nullptr);
+        b.preCompactAs = VK_NULL_HANDLE;
+    }
+    b.preCompactBuffer.destroy();
 
     if (b.as == VK_NULL_HANDLE && !b.asBuffer.valid())
     {
@@ -794,6 +945,7 @@ void RtRenderer::destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) n
     b.asBuffer = {};
     b.address  = 0;
     b.buildKey = 0;
+    b.state    = BlasState::Empty;
 
     if (fc.deferred)
     {
@@ -825,6 +977,17 @@ void RtRenderer::destroyAllRtBlas() noexcept
     for (auto& [sm, b] : m_blas)
     {
         (void)sm;
+
+        if (b.queryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_ctx.device, b.queryPool, nullptr);
+            b.queryPool = VK_NULL_HANDLE;
+        }
+
+        if (b.preCompactAs != VK_NULL_HANDLE)
+            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.preCompactAs, nullptr);
+        b.preCompactBuffer.destroy();
+
         if (b.as != VK_NULL_HANDLE)
             m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.as, nullptr);
 
@@ -832,39 +995,15 @@ void RtRenderer::destroyAllRtBlas() noexcept
         b.asBuffer.destroy();
         b.address  = 0;
         b.buildKey = 0;
+        b.state    = BlasState::Empty;
     }
 
     m_blas.clear();
 }
 
-void RtRenderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffers) noexcept
-{
-    if (frameIndex >= m_tlasFrames.size())
-        return;
-
-    RtTlasFrame& t = m_tlasFrames[frameIndex];
-
-    if (rtReady(m_ctx) && m_ctx.rtDispatch && m_ctx.device && t.as)
-        m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
-
-    t.as       = VK_NULL_HANDLE;
-    t.address  = 0;
-    t.buildKey = 0;
-    t.buffer.destroy();
-
-    if (destroyInstanceBuffers)
-    {
-        t.instanceBuffer.destroy();
-        t.instanceStaging.destroy();
-    }
-}
-
-void RtRenderer::destroyAllRtTlasFrames() noexcept
-{
-    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
-    for (uint32_t i = 0; i < fi; ++i)
-        destroyRtTlasFrame(i, true);
-}
+// =========================================================
+// ensureMeshBlas  — builds with ALLOW_COMPACTION, writes size query
+// =========================================================
 
 bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
                                 SceneMesh*                          sm,
@@ -895,11 +1034,27 @@ bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
 
     RtBlas& b = m_blas[sm];
 
-    if (b.as != VK_NULL_HANDLE && b.buildKey == key)
+    // Already built and compaction is done (or in progress) — skip rebuild
+    if (b.as != VK_NULL_HANDLE && b.buildKey == key &&
+        (b.state == BlasState::Compacted || b.state == BlasState::BuiltUncompacted))
         return true;
 
+    // Needs rebuild — destroy existing resources first
     if (b.as != VK_NULL_HANDLE || b.asBuffer.valid())
     {
+        if (b.queryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_ctx.device, b.queryPool, nullptr);
+            b.queryPool = VK_NULL_HANDLE;
+        }
+
+        if (b.preCompactAs != VK_NULL_HANDLE)
+        {
+            m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, b.preCompactAs, nullptr);
+            b.preCompactAs = VK_NULL_HANDLE;
+        }
+        b.preCompactBuffer.destroy();
+
         VkAccelerationStructureKHR oldAs      = b.as;
         GpuBuffer                  oldBacking = std::move(b.asBuffer);
 
@@ -928,6 +1083,7 @@ bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
 
     b.address  = 0;
     b.buildKey = 0;
+    b.state    = BlasState::Empty;
 
     const VkDeviceAddress vAdr = vkutil::bufferDeviceAddress(m_ctx.device, geo.buildPosBuffer);
     const VkDeviceAddress iAdr = vkutil::bufferDeviceAddress(m_ctx.device, geo.buildIndexBuffer);
@@ -955,9 +1111,11 @@ bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
         return false;
 
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
-    buildInfo.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-    buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    // Add ALLOW_COMPACTION so the driver writes a compacted size query
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
     buildInfo.mode          = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries   = &asGeom;
@@ -977,7 +1135,8 @@ bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
     b.asBuffer.create(m_ctx.device,
                       m_ctx.physicalDevice,
                       sizeInfo.accelerationStructureSize,
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                       false,
                       true);
@@ -1022,6 +1181,33 @@ bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
 
     vkutil::barrierAsBuildToTrace(fc.cmd);
 
+    // Create a query pool for the compacted size and write the query
+    VkQueryPoolCreateInfo qpci{};
+    qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qpci.queryType  = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    qpci.queryCount = 1;
+
+    if (vkCreateQueryPool(m_ctx.device, &qpci, nullptr, &b.queryPool) == VK_SUCCESS)
+    {
+        vkCmdResetQueryPool(fc.cmd, b.queryPool, 0, 1);
+
+        m_ctx.rtDispatch->vkCmdWriteAccelerationStructuresPropertiesKHR(
+            fc.cmd,
+            1,
+            &b.as,
+            VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+            b.queryPool,
+            0);
+
+        b.state = BlasState::BuiltUncompacted;
+    }
+    else
+    {
+        // Query pool creation failed — continue without compaction
+        b.queryPool = VK_NULL_HANDLE;
+        b.state     = BlasState::Compacted; // skip compaction
+    }
+
     VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
     addrInfo.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
     addrInfo.accelerationStructure = b.as;
@@ -1030,6 +1216,39 @@ bool RtRenderer::ensureMeshBlas(Viewport*                           vp,
     b.buildKey = key;
 
     return (b.address != 0);
+}
+
+// =========================================================
+// TLAS
+// =========================================================
+
+void RtRenderer::destroyRtTlasFrame(uint32_t frameIndex, bool destroyInstanceBuffers) noexcept
+{
+    if (frameIndex >= m_tlasFrames.size())
+        return;
+
+    RtTlasFrame& t = m_tlasFrames[frameIndex];
+
+    if (rtReady(m_ctx) && m_ctx.rtDispatch && m_ctx.device && t.as)
+        m_ctx.rtDispatch->vkDestroyAccelerationStructureKHR(m_ctx.device, t.as, nullptr);
+
+    t.as       = VK_NULL_HANDLE;
+    t.address  = 0;
+    t.buildKey = 0;
+    t.buffer.destroy();
+
+    if (destroyInstanceBuffers)
+    {
+        t.instanceBuffer.destroy();
+        t.instanceStaging.destroy();
+    }
+}
+
+void RtRenderer::destroyAllRtTlasFrames() noexcept
+{
+    const uint32_t fi = std::min(m_framesInFlight, vkcfg::kMaxFramesInFlight);
+    for (uint32_t i = 0; i < fi; ++i)
+        destroyRtTlasFrame(i, true);
 }
 
 bool RtRenderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameContext& fc) noexcept
@@ -1210,7 +1429,8 @@ bool RtRenderer::ensureSceneTlas(Viewport* vp, Scene* scene, const RenderFrameCo
         t.buffer.create(m_ctx.device,
                         m_ctx.physicalDevice,
                         sizeInfo.accelerationStructureSize,
-                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                         false,
                         true);

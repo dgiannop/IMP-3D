@@ -26,7 +26,6 @@ struct ViewportSwapchain
     VkFormat       colorFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D     extent      = {};
 
-    // Store what this swapchain was created with (important!)
     VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
 
     std::vector<VkImage>     images = {};
@@ -34,12 +33,10 @@ struct ViewportSwapchain
 
     VkRenderPass renderPass = VK_NULL_HANDLE;
 
-    // --- MSAA color (one per swapchain image) ---
     std::vector<VkImage>        msaaColorImages = {};
     std::vector<VkDeviceMemory> msaaColorMems   = {};
     std::vector<VkImageView>    msaaColorViews  = {};
 
-    // --- Depth (one per swapchain image) ---
     std::vector<VkImage>        depthImages = {};
     std::vector<VkDeviceMemory> depthMems   = {};
     std::vector<VkImageView>    depthViews  = {};
@@ -54,14 +51,14 @@ struct ViewportSwapchain
 
     std::vector<VkFramebuffer> framebuffers = {};
 
-    DeferredDeletion deferred = {}; // per-viewport deferred destruction
+    DeferredDeletion deferred = {};
 };
 
 struct ViewportFrameContext
 {
-    ViewportFrame* frame            = nullptr; // points into sc->frames[fi]
-    uint32_t       imageIndex       = 0;       // acquired swapchain image
-    uint32_t       frameIndex       = 0;       // fi (frame-in-flight ring index)
+    ViewportFrame* frame            = nullptr;
+    uint32_t       imageIndex       = 0;
+    uint32_t       frameIndex       = 0;
     bool           frameFenceWaited = false;
 };
 
@@ -97,27 +94,11 @@ public:
 
     void renderClear(ViewportSwapchain* sc, float r, float g, float b, float a);
 
-    QVulkanInstance* qvk() const noexcept
-    {
-        return m_qvk;
-    }
+    QVulkanInstance* qvk() const noexcept { return m_qvk; }
+    VkDevice         device() const noexcept { return m_device; }
 
-    VkDevice device() const noexcept
-    {
-        return m_device;
-    }
-
-    // ------------------------------------------------------------
-    // VulkanContext
-    // ------------------------------------------------------------
-    VulkanContext& context() noexcept
-    {
-        return m_ctx;
-    }
-    const VulkanContext& context() const noexcept
-    {
-        return m_ctx;
-    }
+    VulkanContext&       context() noexcept { return m_ctx; }
+    const VulkanContext& context() const noexcept { return m_ctx; }
 
     QVulkanDeviceFunctions* deviceFunctions() const noexcept
     {
@@ -164,23 +145,17 @@ private:
     VkPhysicalDeviceProperties m_deviceProps = {};
 
 private:
-    // ------------------------------------------------------------
-    // Cached VulkanContext (kept up-to-date by init/createDevice/loadKhrEntryPoints/shutdown)
-    // ------------------------------------------------------------
     VulkanContext    m_ctx              = {};
     DeferredDeletion m_deferredDeletion = {};
 
 private:
-    // -------- core loader --------
     PFN_vkGetDeviceProcAddr m_vkGetDeviceProcAddr = nullptr;
 
-    // -------- KHR instance functions --------
     PFN_vkGetPhysicalDeviceSurfaceSupportKHR      m_vkGetPhysicalDeviceSurfaceSupportKHR      = nullptr;
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR m_vkGetPhysicalDeviceSurfaceCapabilitiesKHR = nullptr;
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR      m_vkGetPhysicalDeviceSurfaceFormatsKHR      = nullptr;
     PFN_vkGetPhysicalDeviceSurfacePresentModesKHR m_vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
 
-    // -------- KHR device functions --------
     PFN_vkCreateSwapchainKHR    m_vkCreateSwapchainKHR    = nullptr;
     PFN_vkDestroySwapchainKHR   m_vkDestroySwapchainKHR   = nullptr;
     PFN_vkGetSwapchainImagesKHR m_vkGetSwapchainImagesKHR = nullptr;
@@ -188,21 +163,22 @@ private:
     PFN_vkQueuePresentKHR       m_vkQueuePresentKHR       = nullptr;
 
     // ------------------------------------------------------------
-    // Optional RT capability (device-level only)
+    // Optional RT capability
     // ------------------------------------------------------------
     bool m_supportsRayTracing = false;
 
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR    m_rtProps = {};
     VkPhysicalDeviceAccelerationStructurePropertiesKHR m_asProps = {};
 
-    // -------- optional RT device functions --------
     PFN_vkGetBufferDeviceAddressKHR m_vkGetBufferDeviceAddressKHR = nullptr;
 
-    PFN_vkCreateAccelerationStructureKHR           m_vkCreateAccelerationStructureKHR           = nullptr;
-    PFN_vkDestroyAccelerationStructureKHR          m_vkDestroyAccelerationStructureKHR          = nullptr;
-    PFN_vkGetAccelerationStructureBuildSizesKHR    m_vkGetAccelerationStructureBuildSizesKHR    = nullptr;
-    PFN_vkCmdBuildAccelerationStructuresKHR        m_vkCmdBuildAccelerationStructuresKHR        = nullptr;
-    PFN_vkGetAccelerationStructureDeviceAddressKHR m_vkGetAccelerationStructureDeviceAddressKHR = nullptr;
+    PFN_vkCreateAccelerationStructureKHR              m_vkCreateAccelerationStructureKHR              = nullptr;
+    PFN_vkDestroyAccelerationStructureKHR             m_vkDestroyAccelerationStructureKHR             = nullptr;
+    PFN_vkGetAccelerationStructureBuildSizesKHR       m_vkGetAccelerationStructureBuildSizesKHR       = nullptr;
+    PFN_vkCmdBuildAccelerationStructuresKHR           m_vkCmdBuildAccelerationStructuresKHR           = nullptr;
+    PFN_vkCmdCopyAccelerationStructureKHR             m_vkCmdCopyAccelerationStructureKHR             = nullptr;
+    PFN_vkCmdWriteAccelerationStructuresPropertiesKHR m_vkCmdWriteAccelerationStructuresPropertiesKHR = nullptr;
+    PFN_vkGetAccelerationStructureDeviceAddressKHR    m_vkGetAccelerationStructureDeviceAddressKHR    = nullptr;
 
     PFN_vkCreateRayTracingPipelinesKHR       m_vkCreateRayTracingPipelinesKHR       = nullptr;
     PFN_vkGetRayTracingShaderGroupHandlesKHR m_vkGetRayTracingShaderGroupHandlesKHR = nullptr;

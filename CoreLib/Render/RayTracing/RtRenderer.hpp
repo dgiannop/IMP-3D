@@ -83,11 +83,7 @@ private:
         std::array<DescriptorSet, vkcfg::kMaxFramesInFlight> presentSets         = {};
         std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>     instanceDataBuffers = {};
 
-        // AOV images are NOT per-frame. renderPrePass and present() run in the
-        // same command buffer in the same frame (single renderOnce() call), so
-        // there is no overlap between writing and reading these images.
-        // Using single instances saves (framesInFlight-1) * 4 * ~50MB = ~200MB
-        // on large scenes like Sponza.
+        // AOV images are NOT per-frame — single renderOnce() call, no overlap.
         VulkanImage radianceImage = {};
         VulkanImage normalImage   = {};
         VulkanImage depthImage    = {};
@@ -96,9 +92,6 @@ private:
         std::array<GpuBuffer, vkcfg::kMaxFramesInFlight>    scratchBuffers = {};
         std::array<VkDeviceSize, vkcfg::kMaxFramesInFlight> scratchSizes   = {};
 
-        // Set to true once recordTraceRays has written the present descriptor
-        // for this frame slot. present() skips drawing until this is true to
-        // avoid binding an uninitialized combined image sampler descriptor.
         std::array<bool, vkcfg::kMaxFramesInFlight> presentDescriptorReady = {};
 
         uint32_t cachedW = 0;
@@ -131,12 +124,34 @@ private:
     void clearRtTlasDescriptor(RtViewportState& s, uint32_t frameIndex) noexcept;
 
 private:
+    // ---------------------------------------------------------
+    // BLAS
+    // ---------------------------------------------------------
+
+    enum class BlasState : uint8_t
+    {
+        Empty,            // no AS built yet
+        BuiltUncompacted, // built, compacted size query pending
+        Compacted,        // compaction done, original destroyed
+    };
+
     struct RtBlas
     {
         VkAccelerationStructureKHR as       = VK_NULL_HANDLE;
         VkDeviceAddress            address  = 0;
         GpuBuffer                  asBuffer = {};
         uint64_t                   buildKey = 0;
+
+        BlasState state = BlasState::Empty;
+
+        // Compaction support:
+        // queryPool holds one AS_COMPACTED_SIZE query per BLAS.
+        // queryIndex is the slot within the pool.
+        // preCompactAs / preCompactBuffer are the original uncompacted
+        // resources kept alive until the compaction copy completes.
+        VkQueryPool                queryPool        = VK_NULL_HANDLE;
+        VkAccelerationStructureKHR preCompactAs     = VK_NULL_HANDLE;
+        GpuBuffer                  preCompactBuffer = {};
     };
 
     struct RtTlasFrame
@@ -158,6 +173,10 @@ private:
                                       SceneMesh*                          sm,
                                       const render::geom::RtMeshGeometry& geo,
                                       const RenderFrameContext&           fc) noexcept;
+
+    // Finish compaction for any BLAS that has BuiltUncompacted state and
+    // a ready query result. Called at the start of each recordTraceRays.
+    void processCompactionQueue(const RenderFrameContext& fc) noexcept;
 
     void destroyRtBlasFor(SceneMesh* sm, const RenderFrameContext& fc) noexcept;
     void destroyAllRtBlas() noexcept;
