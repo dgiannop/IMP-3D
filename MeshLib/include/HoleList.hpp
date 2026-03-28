@@ -136,6 +136,7 @@ public:
 
     /// Move-insert. Called for rvalues and std::move'd lvalues.
     size_type insert(T&& element)
+        requires std::move_constructible<T>
     {
         return insert_impl(std::move(element));
     }
