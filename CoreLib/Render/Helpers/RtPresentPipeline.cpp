@@ -98,12 +98,12 @@ namespace vkrt
         // --------------------------------------------------------
         // Load shaders
         // --------------------------------------------------------
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(device, shaderDir, "RtPresent.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(device, /*shaderDir,*/ "RtPresent.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(device, shaderDir, "RtPresent.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(device, /*shaderDir,*/ "RtPresent.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {

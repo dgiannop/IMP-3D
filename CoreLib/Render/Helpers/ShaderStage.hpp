@@ -3,6 +3,15 @@
 #include <string>
 #include <vulkan/vulkan.h>
 
+inline std::filesystem::path getShaderDir()
+{
+#ifdef _WIN32
+    return std::filesystem::path(__argv[0]).parent_path() / SHADER_BIN_DIR;
+#else
+    return std::filesystem::canonical("/proc/self/exe").parent_path() / SHADER_BIN_DIR;
+#endif
+}
+
 class ShaderStage
 {
 public:

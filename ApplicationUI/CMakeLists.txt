@@ -10,7 +10,8 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 qt_standard_project_setup()
 
 qt_add_executable(ApplicationUI
-    WIN32 MACOSX_BUNDLE
+    #WIN32
+    MACOSX_BUNDLE
     main.cpp
     MainWindow.cpp
     MainWindow.hpp
@@ -70,13 +71,32 @@ qt_add_executable(ApplicationUI
 # Output filename becomes Imp3d.exe (target name remains ApplicationUI)
 set_target_properties(ApplicationUI PROPERTIES OUTPUT_NAME "Imp3d")
 
-# Copy the built exe to the root of the build directory:
-#   <build>/Imp3d.exe
+# Copy exe to build root
 add_custom_command(TARGET ApplicationUI POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:ApplicationUI>"
         "${CMAKE_BINARY_DIR}/$<TARGET_FILE_NAME:ApplicationUI>"
     COMMENT "Copying Imp3d.exe to build root"
+)
+
+# Copy shaders next to exe in ApplicationUI/
+add_custom_command(TARGET ApplicationUI POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:ApplicationUI>/Shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/CoreLib/Render/Shaders"
+        "$<TARGET_FILE_DIR:ApplicationUI>/Shaders"
+    COMMENT "Copying SPIR-V shaders next to executable"
+)
+
+# Also copy shaders next to the build root copy
+add_custom_command(TARGET ApplicationUI POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/Shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/CoreLib/Render/Shaders"
+        "${CMAKE_BINARY_DIR}/Shaders"
+    COMMENT "Copying SPIR-V shaders to build root"
 )
 
 target_include_directories(ApplicationUI PRIVATE

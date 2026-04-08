@@ -248,6 +248,16 @@ file(GLOB_RECURSE SHADER_SOURCES
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${SHADER_SOURCES})
 
+# Copy compiled .spv shaders next to the executable after build
+add_custom_command(TARGET compile_shaders POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:ApplicationUI>/Shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${SHADER_BIN_DIR}"
+        "$<TARGET_FILE_DIR:ApplicationUI>/Shaders"
+    COMMENT "Copying SPIR-V shaders next to Imp3d.exe"
+)
+
 # Define CoreLib target
 add_library(CoreLib STATIC
     ${CORELIB_HEADERS}
@@ -296,10 +306,9 @@ target_include_directories(CoreLib PUBLIC
 )
 
 
-# Define shader path macro for runtime loading
+# Define shader path macro for runtime loading (relative, resolved at runtime via getShaderDir())
 target_compile_definitions(CoreLib PUBLIC
-    # SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Render/Shaders"
-    SHADER_BIN_DIR="${CMAKE_CURRENT_BINARY_DIR}/Render/Shaders"
+    SHADER_BIN_DIR="Shaders"
 )
 
 # Find Vulkan

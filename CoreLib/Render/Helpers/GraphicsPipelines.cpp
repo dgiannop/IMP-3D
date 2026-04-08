@@ -156,12 +156,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "SolidDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "SolidDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "SolidDraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "SolidDraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -246,12 +246,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "ShadedDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "ShadedDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "ShadedDraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "ShadedDraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -341,11 +341,11 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         // Only vertex shader; no fragment shader -> depth only.
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "SolidDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "SolidDraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
 
         if (!vs.isValid())
         {
@@ -436,12 +436,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "Wireframe.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Wireframe.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -526,12 +526,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "Wireframe.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Wireframe.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -615,14 +615,14 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs = vkutil::loadStage(ctx.device,
-                                           shaderDir,
+                                           /*shaderDir,*/
                                            "WireframeDepthBias.vert.spv",
                                            VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Wireframe.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -709,11 +709,11 @@ namespace vkutil
         const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "Overlay.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Overlay.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage gs =
-            vkutil::loadStage(ctx.device, shaderDir, "Overlay.geom.spv", VK_SHADER_STAGE_GEOMETRY_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Overlay.geom.spv", VK_SHADER_STAGE_GEOMETRY_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "Overlay.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Overlay.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !gs.isValid() || !fs.isValid())
         {
@@ -798,12 +798,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "OverlayFill.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "OverlayFill.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "OverlayFill.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "OverlayFill.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -888,12 +888,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {
@@ -978,12 +978,12 @@ namespace vkutil
 
         out.m_device = ctx.device;
 
-        const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
+        // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         ShaderStage vs =
-            vkutil::loadStage(ctx.device, shaderDir, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
         ShaderStage fs =
-            vkutil::loadStage(ctx.device, shaderDir, "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+            vkutil::loadStage(ctx.device, /*shaderDir,*/ "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
         if (!vs.isValid() || !fs.isValid())
         {

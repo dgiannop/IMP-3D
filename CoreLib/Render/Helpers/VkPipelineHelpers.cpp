@@ -9,12 +9,12 @@
 namespace vkutil
 {
 
-    ShaderStage loadStage(VkDevice                     device,
-                          const std::filesystem::path& dir,
-                          const char*                  filename,
-                          VkShaderStageFlagBits        stage)
+    ShaderStage loadStage(VkDevice              device,
+                          const char*           filename,
+                          VkShaderStageFlagBits stage)
     {
-        return ShaderStage::fromSpirvFile(device, dir / filename, stage);
+        std::filesystem::path path = getShaderDir() / filename;
+        return ShaderStage::fromSpirvFile(device, path, stage);
     }
 
     void makeSolidVertexInput(VkPipelineVertexInputStateCreateInfo& vi,

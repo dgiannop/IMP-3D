@@ -2,12 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <filesystem>
 #include <iostream>
 
 #include "ShaderStage.hpp"
 #include "Viewport.hpp"
-#include "VkUtilities.hpp"
+#include "VkPipelineHelpers.hpp"
 
 namespace
 {
@@ -206,10 +205,7 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         m_filterPipeline = VK_NULL_HANDLE;
     }
     {
-        const std::filesystem::path shaderPath =
-            std::filesystem::path(SHADER_BIN_DIR) / "RtDenoiseAtrous.comp.spv";
-
-        ShaderStage comp = ShaderStage::fromSpirvFile(m_ctx.device, shaderPath, VK_SHADER_STAGE_COMPUTE_BIT);
+        ShaderStage comp = vkutil::loadStage(m_ctx.device, "RtDenoiseAtrous.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
         if (!comp.isValid())
         {
             std::cerr << "RtDenoiser: failed to load filter shader.\n";
@@ -233,10 +229,7 @@ bool RtDenoiser::initDevice(const VulkanContext& ctx, VkFormat colorFormat)
         m_copyPipeline = VK_NULL_HANDLE;
     }
     {
-        const std::filesystem::path shaderPath =
-            std::filesystem::path(SHADER_BIN_DIR) / "RtDenoiseCopy.comp.spv";
-
-        ShaderStage comp = ShaderStage::fromSpirvFile(m_ctx.device, shaderPath, VK_SHADER_STAGE_COMPUTE_BIT);
+        ShaderStage comp = vkutil::loadStage(m_ctx.device, "RtDenoiseCopy.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
         if (!comp.isValid())
         {
             std::cerr << "RtDenoiser: failed to load copy shader.\n";

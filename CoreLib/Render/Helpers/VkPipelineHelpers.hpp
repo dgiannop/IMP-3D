@@ -13,10 +13,10 @@ namespace vkutil
     // ---------------------------------------------------------
     // Shader loading
     // ---------------------------------------------------------
-    ShaderStage loadStage(VkDevice                     device,
-                          const std::filesystem::path& dir,
-                          const char*                  filename,
-                          VkShaderStageFlagBits        stage);
+    ShaderStage loadStage(VkDevice device,
+                          // const std::filesystem::path& dir,
+                          const char*           filename,
+                          VkShaderStageFlagBits stage);
 
     // ---------------------------------------------------------
     // Vertex input presets

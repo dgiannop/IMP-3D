@@ -2,14 +2,12 @@
 
 #include <cmath>   // std::abs
 #include <cstddef> // offsetof
-#include <filesystem>
 #include <glm/vec3.hpp>
 #include <iostream>
 #include <vector>
 
 #include "ShaderStage.hpp"
 #include "VkPipelineHelpers.hpp"
-#include "VkUtilities.hpp"
 
 // ---------------------------------------------------------
 // Constructor / destructor
@@ -171,13 +169,13 @@ bool GridRendererVK::createPipelines(VkRenderPass     renderPass,
 
     ShaderStage vert = vkutil::loadStage(
         device,
-        shaderDir,
+        /*shaderDir,*/
         "Grid.vert.spv",
         VK_SHADER_STAGE_VERTEX_BIT);
 
     ShaderStage frag = vkutil::loadStage(
         device,
-        shaderDir,
+        /*shaderDir,*/
         "Grid.frag.spv",
         VK_SHADER_STAGE_FRAGMENT_BIT);
 
