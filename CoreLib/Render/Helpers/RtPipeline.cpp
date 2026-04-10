@@ -96,29 +96,22 @@ namespace vkrt
         // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
 
         // Primary shaders
-        ShaderStage rgen =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtScene.rgen.spv", VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+        ShaderStage rgen = vkutil::loadStage(ctx.device, "RtScene.rgen.spv", VK_SHADER_STAGE_RAYGEN_BIT_KHR);
 
-        ShaderStage rmiss =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtScene.rmiss.spv", VK_SHADER_STAGE_MISS_BIT_KHR);
+        ShaderStage rmiss = vkutil::loadStage(ctx.device, "RtScene.rmiss.spv", VK_SHADER_STAGE_MISS_BIT_KHR);
 
-        ShaderStage rchit =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtScene.rchit.spv", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+        ShaderStage rchit = vkutil::loadStage(ctx.device, "RtScene.rchit.spv", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
 
         // NEW: primary any-hit (alpha cutouts)
-        ShaderStage rahit =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtScene.rahit.spv", VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
+        ShaderStage rahit = vkutil::loadStage(ctx.device, "RtScene.rahit.spv", VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
 
         // Shadow shaders
-        ShaderStage smiss =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtShadow.rmiss.spv", VK_SHADER_STAGE_MISS_BIT_KHR);
+        ShaderStage smiss = vkutil::loadStage(ctx.device, "RtShadow.rmiss.spv", VK_SHADER_STAGE_MISS_BIT_KHR);
 
-        ShaderStage schit =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtShadow.rchit.spv", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+        ShaderStage schit = vkutil::loadStage(ctx.device, "RtShadow.rchit.spv", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
 
         // NEW: shadow any-hit (alpha cutouts)
-        ShaderStage sahit =
-            vkutil::loadStage(ctx.device, /*shaderDir,*/ "RtShadow.rahit.spv", VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
+        ShaderStage sahit = vkutil::loadStage(ctx.device, "RtShadow.rahit.spv", VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
 
         if (!rgen.isValid() || !rmiss.isValid() || !rchit.isValid() ||
             !rahit.isValid() || !smiss.isValid() || !schit.isValid() || !sahit.isValid())

@@ -169,13 +169,11 @@ bool GridRendererVK::createPipelines(VkRenderPass     renderPass,
 
     ShaderStage vert = vkutil::loadStage(
         device,
-        /*shaderDir,*/
         "Grid.vert.spv",
         VK_SHADER_STAGE_VERTEX_BIT);
 
     ShaderStage frag = vkutil::loadStage(
         device,
-        /*shaderDir,*/
         "Grid.frag.spv",
         VK_SHADER_STAGE_FRAGMENT_BIT);
 

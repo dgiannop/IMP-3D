@@ -1290,11 +1290,9 @@ bool Renderer::createPipelines(VkRenderPass renderPass)
         return false;
     }
 
-    // const std::filesystem::path shaderDir = std::filesystem::path(SHADER_BIN_DIR);
-
-    ShaderStage selVert     = vkutil::loadStage(m_ctx.device, /*shaderDir,*/ "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    ShaderStage selFrag     = vkutil::loadStage(m_ctx.device, /*shaderDir,*/ "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-    ShaderStage selVertFrag = vkutil::loadStage(m_ctx.device, /*shaderDir,*/ "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    ShaderStage selVert     = vkutil::loadStage(m_ctx.device, "Selection.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+    ShaderStage selFrag     = vkutil::loadStage(m_ctx.device, "Selection.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    ShaderStage selVertFrag = vkutil::loadStage(m_ctx.device, "SelectionVert.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
     if (!selVert.isValid() || !selFrag.isValid() || !selVertFrag.isValid())
     {
