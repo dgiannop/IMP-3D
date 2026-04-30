@@ -36,6 +36,7 @@
 #include "SelectTool.hpp"
 #include "SphereTool.hpp"
 #include "StretchTool.hpp"
+#include "TreeGeneratorTool.hpp"
 
 namespace config
 {
@@ -59,6 +60,8 @@ namespace config
         factory.registerItem("BevelTool", factory.createItemType<BevelTool>);
         factory.registerItem("BendTool", factory.createItemType<BendTool>);
         factory.registerItem("MockTool", factory.createItemType<MockTool>);
+
+        factory.registerItem("TreeGeneratorTool", factory.createItemType<TreeGeneratorTool>);
     }
 
     void registerCommands(ItemFactory<Command>& factory)
