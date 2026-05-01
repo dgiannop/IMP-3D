@@ -1,8 +1,8 @@
 #include "PropertyWindow.hpp"
 
-#include <qmainwindow.h>
-
 #include <Core.hpp>
+#include <QLayout>
+#include <QSizePolicy>
 
 #include "PropertyItem.hpp"
 #include "SubWindows/ui_PropertyWindow.h"
@@ -11,16 +11,36 @@ PropertyWindow::PropertyWindow(QWidget* parent) : SubWindowBase(parent),
                                                   ui(new Ui::PropertyWindow)
 {
     ui->setupUi(this);
-    // resize(220, 300);
-    // setMinimumSize(200, 300);
-    // setWindowTitleAndSize("Tool Properties", 240, 350);
-    // ui->verticalLayout->setAlignment(Qt::AlignTop);
 
-    resize(220, 300);
     setWindowTitle("Tool Properties");
-    setMinimumSize(200, 300);
-    setMaximumSize(240, 350);
+
     ui->verticalLayout->setAlignment(Qt::AlignTop);
+
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+
+    if (layout())
+        layout()->setSizeConstraint(QLayout::SetMinimumSize);
+
+    setMinimumWidth(220);
+
+    resize(width(), sizeHint().height());
+}
+
+void PropertyWindow::resizeToContents()
+{
+    if (ui->verticalLayout)
+    {
+        ui->verticalLayout->invalidate();
+        ui->verticalLayout->activate();
+    }
+
+    if (layout())
+    {
+        layout()->invalidate();
+        layout()->activate();
+    }
+
+    resize(width(), sizeHint().height());
 }
 
 void PropertyWindow::idleEvent(Core* core)
@@ -30,9 +50,8 @@ void PropertyWindow::idleEvent(Core* core)
         while (QLayoutItem* item = ui->verticalLayout->takeAt(0))
         {
             if (QWidget* widget = item->widget())
-            {
                 widget->deleteLater();
-            }
+
             delete item;
         }
 
@@ -55,6 +74,8 @@ void PropertyWindow::idleEvent(Core* core)
                 ui->verticalLayout->addWidget(new AxisPropertyItem(property.get(), this));
             }
         }
+
+        resizeToContents();
     }
 
     if (core->toolPropertyValuesChanged())
@@ -70,10 +91,10 @@ void PropertyWindow::idleEvent(Core* core)
                 continue;
 
             if (PropertyItem* item = qobject_cast<PropertyItem*>(widget))
-            {
                 item->updateUiValue();
-            }
         }
+
+        resizeToContents();
     }
 }
 

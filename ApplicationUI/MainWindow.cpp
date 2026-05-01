@@ -871,7 +871,7 @@ void MainWindow::initSideMenu()
     menuStackedWidget->addButton(0, "Sphere", ButtonType::Tool, "SphereTool", QKeySequence(Qt::SHIFT | Qt::Key_S));
     menuStackedWidget->addButton(0, "Cylinder", ButtonType::Tool, "CylinderTool", QKeySequence(Qt::SHIFT | Qt::Key_C));
     menuStackedWidget->addButton(0, "Plane", ButtonType::Tool, "PlaneTool", QKeySequence(Qt::SHIFT | Qt::Key_P));
-    menuStackedWidget->addButton(0, "Tree Generator", ButtonType::Tool, "TreeGeneratorTool", QKeySequence(Qt::SHIFT | Qt::Key_T));
+    menuStackedWidget->addButton(0, "Tree", ButtonType::Tool, "TreeGeneratorTool", QKeySequence(Qt::SHIFT | Qt::Key_T));
 
     menuStackedWidget->addLabel(0, "Utilities");
     menuStackedWidget->addButton(0, "Center", ButtonType::Command, "Center");

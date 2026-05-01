@@ -22,6 +22,8 @@ public:
 private:
     Ui::PropertyWindow *ui;
     class Core* m_core;
+
+    void resizeToContents();
 };
 
 #endif // PROPERTYWINDOW_HPP
