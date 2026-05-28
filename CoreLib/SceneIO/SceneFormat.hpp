@@ -14,6 +14,7 @@ enum class SceneIOStatus
     Ok,
     FileNotFound,
     UnsupportedFormat,
+    ReadError,
     ParseError,
     WriteError,
     Cancelled,
