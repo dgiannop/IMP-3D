@@ -3,17 +3,14 @@
 #include <SysMesh.hpp>
 
 #include "CoreUtilities.hpp"
-#include "HeMeshBridge.hpp"
 #include "Ops/Bevel.hpp"
 #include "Scene.hpp"
-#include "SelectionUtils.hpp"
 #include "Viewport.hpp"
 
 BevelTool::BevelTool()
 {
     addProperty("Amount", PropertyType::FLOAT, &m_amount, 0.f, 10000.f, 0.05f);
     addProperty("Group edges", PropertyType::BOOL, &m_group);
-
     m_gizmo.setFollowAmountBase(false);
 }
 
@@ -38,31 +35,28 @@ void BevelTool::propertiesChanged(Scene* scene)
         if (!mesh)
             continue;
 
-        if (mode == SelectionMode::VERTS)
+        switch (mode)
         {
-            auto sel = mesh->selected_verts();
-            if (!sel.empty())
-                ops::sys::bevelVerts(mesh, sel, m_amount);
-
-            continue;
-        }
-
-        if (mode == SelectionMode::POLYS)
-        {
-            auto sel = mesh->selected_polys();
-            if (!sel.empty())
-                ops::sys::bevelPolys(mesh, sel, m_amount, m_group);
-
-            continue;
-        }
-
-        if (mode == SelectionMode::EDGES)
-        {
-            auto sel = mesh->selected_edges();
-            if (!sel.empty())
-                ops::he::bevelEdges(mesh, sel, m_amount);
-
-            continue;
+            case SelectionMode::VERTS: {
+                const auto& sel = mesh->selected_verts();
+                if (!sel.empty())
+                    ops::sys::bevelVerts(mesh, sel, m_amount);
+                break;
+            }
+            case SelectionMode::POLYS: {
+                const auto& sel = mesh->selected_polys();
+                if (!sel.empty())
+                    ops::sys::bevelPolys(mesh, sel, m_amount, m_group);
+                break;
+            }
+            case SelectionMode::EDGES: {
+                const auto& sel = mesh->selected_edges();
+                if (!sel.empty())
+                    ops::sys::bevelEdges(mesh, sel, m_amount);
+                break;
+            }
+            default:
+                break;
         }
     }
 }
@@ -72,9 +66,7 @@ void BevelTool::mouseDown(Viewport* vp, Scene* scene, const CoreEvent& event)
     if (!vp || !scene)
         return;
 
-    // Reset preview delta at interaction start.
     m_amount = 0.0f;
-
     m_gizmo.mouseDown(vp, scene, event);
     propertiesChanged(scene);
 }
@@ -94,10 +86,7 @@ void BevelTool::mouseUp(Viewport* vp, Scene* scene, const CoreEvent& event)
         return;
 
     m_gizmo.mouseUp(vp, scene, event);
-
     scene->commitMeshChanges();
-
-    // Reset for next interaction.
     m_amount = 0.0f;
 }
 
