@@ -28,8 +28,8 @@ SysMesh::SysMesh() : data{std::make_shared<SysMeshData>()}
     // appear in the undo stack. Every SysMesh always has these — tools can
     // rely on MESH_MAP_NORMALS (0) and MESH_MAP_UV0 (1) without map_find().
     data->history_busy = true;
-    map_create(MESH_MAP_NORMALS, /*type=*/0, /*dim=*/3); // slot 0 — per-vertex normals
-    map_create(MESH_MAP_UV0, /*type=*/1, /*dim=*/2);     // slot 1 — UV channel 0
+    map_create(MESH_MAP_NORMALS, /*type=*/0, /*dim=*/3); // slot 0: per-vertex normals
+    map_create(MESH_MAP_UV0, /*type=*/1, /*dim=*/2);     // slot 1: UV channel 0
     data->history_busy = false;
 }
 
@@ -442,8 +442,7 @@ int32_t SysMesh::create_poly(const SysPolyVerts& verts, uint32_t material_id) no
         for (int32_t i = 0; i < data->mesh_maps.slot_count(); ++i)
         {
             if (data->mesh_maps.is_valid(i) && data->mesh_maps[i])
-                data->mesh_maps[i]->polys.resize(
-                    static_cast<std::size_t>(data->polys.slot_count()));
+                data->mesh_maps[i]->polys.resize(static_cast<std::size_t>(data->polys.slot_count()));
         }
     }
 
@@ -532,8 +531,7 @@ bool SysMesh::poly_has_edge(int32_t poly_index, const IndexPair& edge) const noe
         const int32_t a = pv[i];
         const int32_t b = pv[(i + 1) % pv.size()];
 
-        if ((a == edge.first && b == edge.second) ||
-            (a == edge.second && b == edge.first))
+        if ((a == edge.first && b == edge.second) || (a == edge.second && b == edge.first))
             return true;
     }
     return false;
@@ -549,9 +547,7 @@ SysPolyEdges SysMesh::poly_edges(int32_t poly_index) const noexcept
 {
     SysPolyEdges   results;
     const SysPoly& poly = data->polys[poly_index];
-    for (int32_t prev = poly.verts.size() - 1, next = 0;
-         next < poly.verts.size();
-         prev = next++)
+    for (int32_t prev = poly.verts.size() - 1, next = 0; next < poly.verts.size(); prev = next++)
     {
         results.push_back(IndexPair(poly.verts[prev], poly.verts[next]));
     }
