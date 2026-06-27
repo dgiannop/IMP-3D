@@ -569,9 +569,9 @@ glm::vec3 SysMesh::poly_normal(int32_t poly_index) const noexcept
     {
         const glm::vec3& prev_pos = data->verts[poly.verts[prev]].pos;
         const glm::vec3& next_pos = data->verts[poly.verts[next]].pos;
-        norm[0] += (prev_pos[1] - next_pos[1]) * (prev_pos[2] + next_pos[2]);
-        norm[1] += (prev_pos[2] - next_pos[2]) * (prev_pos[0] + next_pos[0]);
-        norm[2] += (prev_pos[0] - next_pos[0]) * (prev_pos[1] + next_pos[1]);
+        norm.x += (prev_pos.y - next_pos.y) * (prev_pos.z + next_pos.z);
+        norm.y += (prev_pos.z - next_pos.z) * (prev_pos.x + next_pos.x);
+        norm.z += (prev_pos.x - next_pos.x) * (prev_pos.y + next_pos.y);
     }
 
     const float len2 = glm::dot(norm, norm);
