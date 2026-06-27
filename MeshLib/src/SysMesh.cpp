@@ -563,9 +563,7 @@ glm::vec3 SysMesh::poly_normal(int32_t poly_index) const noexcept
     assert(!data->polys[poly_index].removed && "nth polygon does not exist!");
     const SysPoly& poly = data->polys[poly_index];
     glm::vec3      norm(0.f);
-    for (int32_t prev = poly.verts.size() - 1, next = 0;
-         next < poly.verts.size();
-         prev = next++)
+    for (int32_t prev = poly.verts.size() - 1, next = 0; next < poly.verts.size(); prev = next++)
     {
         const glm::vec3& prev_pos = data->verts[poly.verts[prev]].pos;
         const glm::vec3& next_pos = data->verts[poly.verts[next]].pos;
